@@ -1,0 +1,276 @@
+@page "/"
+@implements IDisposable
+@inject ScannerState Scanner
+@inject ScannerConfiguration Configuration
+
+<PageTitle>Market Opportunity Engine</PageTitle>
+
+<section class="dashboard">
+    <header class="dashboard-header">
+        <div>
+            <p class="eyebrow">MILESTONE A · @_status.Source.ToUpperInvariant()</p>
+            <h1>Market Opportunity Scanner</h1>
+            <p class="lede">Deterministic setup analysis from replayable market events.</p>
+        </div>
+        <div class="feed-state @FeedClass">
+            <span class="status-dot"></span>
+            <div>
+                <strong>@_status.FeedStatus</strong>
+                <small>@_status.Source · @(_status.Capabilities?.Feed ?? "Unknown") · @(_status.Capabilities?.Coverage ?? MarketDataCoverage.ProviderDefined) coverage</small>
+                @if (_status.FeedStatus != MarketDataHealthStatus.Recorded)
+                {
+                    <small>Last received: @FormatUtc(_status.LatestReceivedTimeUtc) · age: @FormatAge(_status.ReceiveAge)</small>
+                }
+            </div>
+        </div>
+    </header>
+
+    @if (_results.Count == 0)
+    {
+        <div class="empty-state" role="status">
+            <h2>@(_status.Source == "Massive" ? "Waiting for live market data" : "Waiting for fixture analysis")</h2>
+            <p>@(_status.Message ?? "The recorded events are being processed and persisted.")</p>
+        </div>
+    }
+    else
+    {
+        <section class="summary-grid" aria-label="Market data status">
+            <article class="metric-card">
+                <span>ANALYSES</span>
+                <strong>@_results.Count symbol/session results</strong>
+                <small>@_status.EventsProcessed unique recorded events</small>
+            </article>
+            <article class="metric-card">
+                <span>SYMBOLS</span>
+                <strong>@_results.Select(result => result.Opportunity.Symbol).Distinct(StringComparer.Ordinal).Count()</strong>
+                <small>Each symbol is isolated by explicit session ID</small>
+            </article>
+            <article class="metric-card">
+                <span>SESSIONS</span>
+                <strong>@_results.Select(result => result.Opportunity.SessionId).Distinct(StringComparer.Ordinal).Count()</strong>
+                <small>Session values are fixture identifiers, not calendar inference</small>
+            </article>
+            <article class="metric-card">
+                <span>LATEST EVENT TIME</span>
+                <strong>@FormatUtc(_status.LatestEventTimeUtc)</strong>
+                <small>Analytical time is event time</small>
+            </article>
+        </section>
+
+        <section class="opportunity-list" aria-label="Symbol and session analyses">
+            @foreach (var result in _results.OrderBy(item => item.Opportunity.SessionId, StringComparer.Ordinal)
+                .ThenBy(item => item.Opportunity.Symbol, StringComparer.Ordinal))
+            {
+                var opportunity = result.Opportunity;
+                var features = result.Features;
+                <article class="opportunity-card" @key="opportunity.Id">
+                    <header class="opportunity-heading">
+                        <div>
+                            <p class="eyebrow">SETUP · @opportunity.SetupType</p>
+                            <h2>
+                                @opportunity.Symbol
+                                <span class="classification @ClassificationClass(opportunity.Classification)">
+                                    @ClassificationLabel(opportunity.Classification)
+                                </span>
+                            </h2>
+                            <p class="publication-state @PublicationClass(result.Publication.State)">
+                                @result.Publication.State · @result.Publication.Reason
+                            </p>
+                            <p class="bias-line">
+                                Session: @opportunity.SessionId · Bias: @opportunity.Bias ·
+                                VWAP: @FormatPrice(features.SessionVwap) ·
+                                Spread: @FormatSpread(features.SpreadBasisPoints)
+                            </p>
+                        </div>
+                        <div class="as-of">
+                            <span>AS OF</span>
+                            <strong>@FormatUtc(opportunity.AsOfUtc)</strong>
+                            <small>Expires @FormatUtc(opportunity.ValidUntilUtc, "HH:mm:ss 'UTC'")</small>
+                        </div>
+                    </header>
+
+                    <section class="summary-grid" aria-label="Analysis details">
+                        <article class="metric-card">
+                            <span>REFERENCE PRICE</span>
+                            <strong>@FormatPrice(features.ReferencePrice)</strong>
+                            <small>Rules-based setup quality: @opportunity.QualityScore / 100</small>
+                        </article>
+                        <article class="metric-card">
+                            <span>FRESHNESS</span>
+                            <strong class="@FreshnessClass(features)">@FreshnessLabel(features)</strong>
+                            <small>Quote age: @FormatAge(features.QuoteAge) · data quality: @features.DataQuality</small>
+                        </article>
+                        <article class="metric-card">
+                            <span>FEATURE SNAPSHOT</span>
+                            <strong>@features.Id.ToString("N")[..12]</strong>
+                            <small>@opportunity.FeatureSetVersion</small>
+                        </article>
+                    </section>
+
+                    <div class="evidence-grid">
+                        <section>
+                            <h3>Supporting evidence</h3>
+                            @if (opportunity.SupportingEvidence.Count == 0)
+                            {
+                                <p class="muted">No supporting evidence qualified.</p>
+                            }
+                            else
+                            {
+                                <ul class="evidence-list positive">
+                                    @foreach (var evidence in opportunity.SupportingEvidence)
+                                    {
+                                        <li><strong>@evidence.Code</strong><span>@evidence.Description</span></li>
+                                    }
+                                </ul>
+                            }
+                        </section>
+                        <section>
+                            <h3>Contradictory evidence</h3>
+                            @if (opportunity.ContradictoryEvidence.Count == 0)
+                            {
+                                <p class="muted">No contradictions recorded.</p>
+                            }
+                            else
+                            {
+                                <ul class="evidence-list contradictory">
+                                    @foreach (var evidence in opportunity.ContradictoryEvidence)
+                                    {
+                                        <li><strong>@evidence.Code</strong><span>@evidence.Description</span></li>
+                                    }
+                                </ul>
+                            }
+                        </section>
+                    </div>
+
+                    <section class="invalidation-panel">
+                        <h3>Invalidation condition</h3>
+                        <p>@opportunity.InvalidationCondition</p>
+                    </section>
+
+                    <section class="veto-panel" aria-label="Active vetoes">
+                        <h3>Vetoes · @(opportunity.ActiveVetoes.Count == 0 ? "none" : "trade rejected")</h3>
+                        @if (opportunity.ActiveVetoes.Count == 0)
+                        {
+                            <p>No active vetoes.</p>
+                        }
+                        else
+                        {
+                            <ul>
+                                @foreach (var veto in opportunity.ActiveVetoes)
+                                {
+                                    <li>@veto</li>
+                                }
+                            </ul>
+                        }
+                    </section>
+
+                    <footer class="version-row">
+                        <span>Market data: @opportunity.MarketData.Provider / @opportunity.MarketData.Feed (@opportunity.MarketData.Coverage)</span>
+                        <span>Opportunity: @opportunity.Id.ToString("N")[..12]</span>
+                        <span>Feature set: @opportunity.FeatureSetVersion</span>
+                        <span>Setup: @opportunity.SetupDefinitionVersion</span>
+                        <span>Configuration: @opportunity.ConfigurationVersion</span>
+                    </footer>
+                </article>
+            }
+        </section>
+    }
+
+    <p class="disclaimer">Development fixture only. A setup quality score is not a probability of profit or a trading recommendation.</p>
+</section>
+
+@code {
+    private ScannerStatus _status = new(
+        MarketDataHealthStatus.Connecting,
+        "Unknown",
+        0,
+        null,
+        null,
+        Capabilities: MarketDataCapabilities.Unknown);
+    private IReadOnlyList<ScannerAnalysisResult> _results = [];
+
+    private string FeedClass => _status.FeedStatus switch
+    {
+        MarketDataHealthStatus.Recorded => "feed-recorded",
+        MarketDataHealthStatus.Live => "feed-live",
+        MarketDataHealthStatus.Stale or MarketDataHealthStatus.Offline => "feed-stale",
+        MarketDataHealthStatus.Error => "feed-error",
+        _ => "feed-pending"
+    };
+
+    private static string PublicationClass(OpportunityLifecycleState state) => state switch
+    {
+        OpportunityLifecycleState.Active => "publication-active",
+        OpportunityLifecycleState.Expired or OpportunityLifecycleState.Invalidated
+            or OpportunityLifecycleState.NotQualified => "publication-inactive",
+        _ => "publication-suspended"
+    };
+
+    protected override void OnInitialized()
+    {
+        Scanner.Changed += HandleChanged;
+        ReadState();
+    }
+
+    private void HandleChanged()
+    {
+        _ = InvokeAsync(() =>
+        {
+            ReadState();
+            StateHasChanged();
+        });
+    }
+
+    private void ReadState()
+    {
+        var result = Scanner.Read();
+        _status = result.Status;
+        _results = result.Results;
+    }
+
+    private string FreshnessClass(FeatureSnapshot features) =>
+        features.DataQuality != DataQualityStatus.Good
+        || !features.IsQuoteValid
+        || !features.IsPriceDataValid
+        || features.QuoteAge is null
+        || features.QuoteAge > TimeSpan.FromSeconds(Configuration.MaximumQuoteAgeSeconds)
+            ? "stale-text"
+            : "fresh-text";
+
+    private string FreshnessLabel(FeatureSnapshot features) =>
+        features.QuoteAge is null
+        || features.QuoteAge > TimeSpan.FromSeconds(Configuration.MaximumQuoteAgeSeconds)
+            ? "Stale"
+            : features.DataQuality == DataQualityStatus.Good
+                && features.IsQuoteValid
+                && features.IsPriceDataValid
+                ? "Fresh"
+                : features.DataQuality.ToString();
+
+    private static string ClassificationLabel(OpportunityClassification classification) => classification switch
+    {
+        OpportunityClassification.ProbableLong => "PROBABLE LONG",
+        OpportunityClassification.ProbableShort => "PROBABLE SHORT",
+        OpportunityClassification.Watch => "WATCH",
+        _ => "AVOID / NO TRADE"
+    };
+
+    private static string ClassificationClass(OpportunityClassification classification) => classification switch
+    {
+        OpportunityClassification.ProbableLong => "long",
+        OpportunityClassification.ProbableShort => "short",
+        OpportunityClassification.Watch => "watch",
+        _ => "avoid"
+    };
+
+    private static string FormatPrice(decimal? price) => price?.ToString("F2") ?? "--";
+    private static string FormatSpread(decimal? spread) => spread is null ? "—" : $"{spread:F1} bps";
+    private static string FormatAge(TimeSpan? age) => age is null ? "Unavailable" : $"{age.Value.TotalSeconds:F1}s";
+    private static string FormatUtc(DateTimeOffset? value) => value is null
+        ? "--"
+        : FormatUtc(value.Value);
+    private static string FormatUtc(DateTimeOffset value, string format = "yyyy-MM-dd HH:mm:ss 'UTC'") =>
+        value.UtcDateTime.ToString(format, System.Globalization.CultureInfo.InvariantCulture);
+
+    public void Dispose() => Scanner.Changed -= HandleChanged;
+}
