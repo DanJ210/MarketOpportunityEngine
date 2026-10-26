@@ -173,6 +173,7 @@ public sealed class OpportunityPublicationGateTests
             null,
             null,
             AdxStatus.Insufficient,
+            TrendDirectionContext.Insufficient,
             null,
             null,
             null,

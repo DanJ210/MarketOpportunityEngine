@@ -47,6 +47,211 @@ public sealed class ScannerReplayTests
     }
 
     [Fact]
+    public void Trend_direction_context_resolves_agreement_neutrality_and_conflicts()
+    {
+        var bullish = CalculateTrendDirection(
+            fastEma: 101m,
+            mediumEma: 100m,
+            spread: 1m,
+            fastSlope: 1m,
+            mediumSlope: 2m,
+            vwapSlope: 1m,
+            vwapDirection: VwapSlopeDirection.Rising,
+            structure: PriceStructure.HigherHighHigherLow,
+            adx: 0m,
+            adxStatus: AdxStatus.Available);
+        var bearish = CalculateTrendDirection(
+            fastEma: 99m,
+            mediumEma: 100m,
+            spread: -1m,
+            fastSlope: -1m,
+            mediumSlope: -2m,
+            vwapSlope: -1m,
+            vwapDirection: VwapSlopeDirection.Falling,
+            structure: PriceStructure.LowerHighLowerLow,
+            adx: 100m,
+            adxStatus: AdxStatus.Available);
+        var neutral = CalculateTrendDirection(
+            fastEma: 100m,
+            mediumEma: 100m,
+            spread: 0m,
+            fastSlope: 0m,
+            mediumSlope: 0m,
+            vwapSlope: 0m,
+            vwapDirection: VwapSlopeDirection.Flat,
+            structure: PriceStructure.Flat,
+            adx: 50m,
+            adxStatus: AdxStatus.Available);
+
+        Assert.Equal(TrendDirectionContext.Bullish, bullish);
+        Assert.Equal(TrendDirectionContext.Bearish, bearish);
+        Assert.Equal(TrendDirectionContext.Neutral, neutral);
+        Assert.Equal(TrendDirectionContext.Conflicting, CalculateTrendDirection(
+            fastEma: 99m,
+            mediumEma: 100m,
+            spread: -1m,
+            fastSlope: 1m,
+            mediumSlope: 1m,
+            vwapSlope: 1m,
+            vwapDirection: VwapSlopeDirection.Rising,
+            structure: PriceStructure.HigherHighHigherLow));
+        Assert.Equal(TrendDirectionContext.Conflicting, CalculateTrendDirection(
+            fastEma: 101m,
+            mediumEma: 100m,
+            spread: 1m,
+            fastSlope: 1m,
+            mediumSlope: 1m,
+            vwapSlope: -1m,
+            vwapDirection: VwapSlopeDirection.Falling,
+            structure: PriceStructure.HigherHighHigherLow));
+        Assert.Equal(TrendDirectionContext.Conflicting, CalculateTrendDirection(
+            fastEma: 101m,
+            mediumEma: 100m,
+            spread: 1m,
+            fastSlope: 1m,
+            mediumSlope: 1m,
+            vwapSlope: 1m,
+            vwapDirection: VwapSlopeDirection.Rising,
+            structure: PriceStructure.LowerHighLowerLow));
+        Assert.Equal(TrendDirectionContext.Conflicting, CalculateTrendDirection(
+            vwapSlope: 1m,
+            vwapDirection: VwapSlopeDirection.Rising,
+            structure: PriceStructure.Mixed));
+    }
+
+    [Fact]
+    public void Trend_direction_context_distinguishes_missing_neutral_partial_and_invalid_inputs()
+    {
+        Assert.Equal(TrendDirectionContext.Insufficient, CalculateTrendDirection());
+        Assert.Equal(TrendDirectionContext.Neutral, CalculateTrendDirection(
+            vwapSlope: 0m,
+            vwapDirection: VwapSlopeDirection.Flat));
+        Assert.Equal(TrendDirectionContext.Bullish, CalculateTrendDirection(
+            fastEma: 100m,
+            fastSlope: 1m));
+        Assert.Equal(TrendDirectionContext.Invalid, CalculateTrendDirection(
+            fastEma: 100m,
+            spread: 1m));
+        Assert.Equal(TrendDirectionContext.Invalid, CalculateTrendDirection(
+            vwapSlope: 1m,
+            vwapDirection: (VwapSlopeDirection)999));
+        Assert.Equal(TrendDirectionContext.Invalid, CalculateTrendDirection(
+            structure: (PriceStructure)999));
+        Assert.Equal(TrendDirectionContext.Invalid, CalculateTrendDirection(
+            adxStatus: AdxStatus.InvalidPriceData));
+        Assert.Equal(TrendDirectionContext.Invalid, CalculateTrendDirection(
+            adx: 101m,
+            adxStatus: AdxStatus.Available));
+
+        var risingEvents = CreateSlopeState(Symbol, SessionId, [100m, 101m, 102m]).GetEventsAsOf(AsOfUtc);
+        var completeState = new SymbolEventState(Symbol, SessionId, 3);
+        var partialState = new SymbolEventState(Symbol, SessionId, 2);
+        foreach (var marketEvent in risingEvents)
+        {
+            completeState.Add(marketEvent);
+            partialState.Add(marketEvent);
+        }
+
+        var complete = _calculator.Calculate(completeState, AsOfUtc, new ScannerConfiguration());
+        var partial = _calculator.Calculate(partialState, AsOfUtc, new ScannerConfiguration());
+        Assert.True(complete.HasCompleteSessionData);
+        Assert.False(partial.HasCompleteSessionData);
+        Assert.Equal(TrendDirectionContext.Bullish, complete.SessionTrendDirection);
+        Assert.Equal(complete.SessionTrendDirection, partial.SessionTrendDirection);
+    }
+
+    [Fact]
+    public void Trend_direction_context_ignores_adx_magnitude_and_is_descriptive_only()
+    {
+        var configuration = new ScannerConfiguration();
+        var result = Replay(GoldenEvents(), configuration);
+        var baseline = JsonSerializer.Serialize(result.Opportunity);
+        foreach (var adx in new decimal?[] { null, 0m, 25m, 100m })
+        {
+            var status = adx.HasValue ? AdxStatus.Available : AdxStatus.Insufficient;
+            var direction = CalculateTrendDirection(
+                fastEma: 101m,
+                mediumEma: 100m,
+                spread: 1m,
+                fastSlope: 1m,
+                mediumSlope: 1m,
+                vwapSlope: 1m,
+                vwapDirection: VwapSlopeDirection.Rising,
+                structure: PriceStructure.HigherHighHigherLow,
+                adx: adx,
+                adxStatus: status);
+            Assert.Equal(TrendDirectionContext.Bullish, direction);
+        }
+
+        foreach (var context in Enum.GetValues<TrendDirectionContext>())
+        {
+            var changed = result.Features with { SessionTrendDirection = context };
+            Assert.Equal(baseline, JsonSerializer.Serialize(_detector.Evaluate(changed, configuration)));
+        }
+
+        var changedSources = result.Features with
+        {
+            FastEma = 101m,
+            MediumEma = 100m,
+            FastMediumEmaSpreadPercent = 1m,
+            FastEmaSlopePerMinute = 1m,
+            MediumEmaSlopePerMinute = 1m,
+            SessionVwapSlopePerMinute = -1m,
+            SessionVwapSlopeDirection = VwapSlopeDirection.Falling,
+            SessionPriceStructure = PriceStructure.Mixed,
+            SessionAdx = 100m,
+            SessionAdxStatus = AdxStatus.Available,
+            SessionTrendDirection = TrendDirectionContext.Conflicting
+        };
+        Assert.Equal(baseline, JsonSerializer.Serialize(_detector.Evaluate(changedSources, configuration)));
+    }
+
+    [Fact]
+    public void Trend_direction_context_serializes_and_round_trips_each_explicit_state()
+    {
+        var features = Replay(GoldenEvents(), new ScannerConfiguration()).Features;
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter() }
+        };
+        foreach (var context in Enum.GetValues<TrendDirectionContext>())
+        {
+            var json = JsonSerializer.Serialize(
+                features with { SessionTrendDirection = context },
+                options);
+            using var document = JsonDocument.Parse(json);
+            Assert.Equal(context.ToString(),
+                document.RootElement.GetProperty("sessionTrendDirection").GetString());
+            Assert.Equal(
+                features with { SessionTrendDirection = context },
+                JsonSerializer.Deserialize<FeatureSnapshot>(json, options));
+        }
+    }
+
+    private static TrendDirectionContext CalculateTrendDirection(
+        decimal? fastEma = null,
+        decimal? mediumEma = null,
+        decimal? spread = null,
+        decimal? fastSlope = null,
+        decimal? mediumSlope = null,
+        decimal? vwapSlope = null,
+        VwapSlopeDirection vwapDirection = VwapSlopeDirection.Insufficient,
+        PriceStructure? structure = null,
+        decimal? adx = null,
+        AdxStatus adxStatus = AdxStatus.Insufficient) =>
+        TrendDirectionContextCalculator.Calculate(
+            fastEma,
+            mediumEma,
+            spread,
+            fastSlope,
+            mediumSlope,
+            vwapSlope,
+            vwapDirection,
+            structure,
+            adx,
+            adxStatus);
+
+    [Fact]
     public void Duplicate_identity_does_not_change_golden_replay()
     {
         var input = GoldenEvents();
@@ -484,6 +689,7 @@ public sealed class ScannerReplayTests
             baseline with
             {
                 Id = Guid.Empty,
+                SessionTrendDirection = TrendDirectionContext.Insufficient,
                 FastEma = null,
                 MediumEma = null,
                 FastMediumEmaSpreadPercent = null,
@@ -493,6 +699,7 @@ public sealed class ScannerReplayTests
             changed with
             {
                 Id = Guid.Empty,
+                SessionTrendDirection = TrendDirectionContext.Insufficient,
                 FastEma = null,
                 MediumEma = null,
                 FastMediumEmaSpreadPercent = null,
@@ -505,7 +712,7 @@ public sealed class ScannerReplayTests
     public void Changed_configuration_version_creates_distinct_feature_and_opportunity_identities()
     {
         var firstConfiguration = new ScannerConfiguration();
-        var changedConfiguration = firstConfiguration with { Version = "scanner-config-v12" };
+        var changedConfiguration = firstConfiguration with { Version = "scanner-config-v13" };
         var first = Replay(GoldenEvents(), firstConfiguration);
         var changed = Replay(GoldenEvents(), changedConfiguration);
 
@@ -753,8 +960,18 @@ public sealed class ScannerReplayTests
         Assert.Equal(PriceStructure.LowerHighLowerLow, falling.SessionPriceStructure);
         Assert.NotEqual(rising.Id, falling.Id);
         Assert.Equal(
-            rising with { Id = Guid.Empty, SessionPriceStructure = null },
-            falling with { Id = Guid.Empty, SessionPriceStructure = null });
+            rising with
+            {
+                Id = Guid.Empty,
+                SessionPriceStructure = null,
+                SessionTrendDirection = TrendDirectionContext.Insufficient
+            },
+            falling with
+            {
+                Id = Guid.Empty,
+                SessionPriceStructure = null,
+                SessionTrendDirection = TrendDirectionContext.Insufficient
+            });
     }
 
     [Fact]
@@ -1361,8 +1578,8 @@ public sealed class ScannerReplayTests
         Assert.Equal(100m, document.RootElement.GetProperty("sessionLowPrice").GetDecimal());
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("sessionRangePositionPercent").ValueKind);
         Assert.Equal(features, JsonSerializer.Deserialize<FeatureSnapshot>(json, jsonOptions));
-        Assert.Equal("features-v11", features.FeatureSetVersion);
-        Assert.Equal("scanner-config-v11", configuration.Version);
+        Assert.Equal("features-v12", features.FeatureSetVersion);
+        Assert.Equal("scanner-config-v12", configuration.Version);
         Assert.Equal("momentum-continuation-v1", configuration.SetupDefinitionVersion);
 
         var values = new[]
@@ -1370,7 +1587,7 @@ public sealed class ScannerReplayTests
             Symbol, SessionId, AsOfUtc.UtcDateTime.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
             configuration.FeatureSetVersion, "100", "100", "100", "0",
             "100", "0", "Flat", "0", "0", "0", "100", "100", "100", "100",
-            "", "", "", "Insufficient", "", "", "", "", "", "0",
+            "", "", "", "Insufficient", "Neutral", "", "", "", "", "", "0",
             "True", "True", "True", "True", "Good",
             JsonSerializer.Serialize(MarketDataCapabilities.Unknown)
         };
@@ -1378,7 +1595,7 @@ public sealed class ScannerReplayTests
             string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
             string.Join("\u001f", values));
         Assert.Equal(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(identity)).AsSpan(0, 16)), features.Id);
-        foreach (var index in new[] { 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26 })
+        foreach (var index in new[] { 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27 })
         {
             foreach (var value in new[] { "101", "102" })
             {
@@ -1389,6 +1606,15 @@ public sealed class ScannerReplayTests
                     string.Join("\u001f", changedValues));
                 Assert.NotEqual(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(changedIdentity)).AsSpan(0, 16)), features.Id);
             }
+        }
+        foreach (var value in Enum.GetNames<TrendDirectionContext>().Where(value => value != "Neutral"))
+        {
+            var changedValues = values.ToArray();
+            changedValues[22] = value;
+            var changedIdentity = string.Join("\u001f", JsonSerializer.Serialize(configuration),
+                string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
+                string.Join("\u001f", changedValues));
+            Assert.NotEqual(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(changedIdentity)).AsSpan(0, 16)), features.Id);
         }
 
         var unavailable = features with { SessionHighPrice = null, SessionLowPrice = null };

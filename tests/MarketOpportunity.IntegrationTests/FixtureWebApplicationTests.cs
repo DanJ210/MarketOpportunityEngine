@@ -55,12 +55,12 @@ public sealed class FixtureWebApplicationTests
         var expectedEvents = fixtureEvents.DistinctBy(MarketEventIdentity.Create).ToArray();
         Assert.Equal(26, expectedEvents.Length);
         var expectedGroups = new Dictionary<(string Symbol, string SessionId),
-            (int Count, OpportunityClassification Classification, long Volume, decimal High, decimal Low, decimal Position, decimal? FastEma, PriceStructure? Structure, decimal? Adx, AdxStatus AdxStatus)>
+            (int Count, OpportunityClassification Classification, long Volume, decimal High, decimal Low, decimal Position, decimal? FastEma, PriceStructure? Structure, decimal? Adx, AdxStatus AdxStatus, TrendDirectionContext TrendDirection)>
         {
-            [("MOE", "fixture-2026-10-22")] = (7, OpportunityClassification.ProbableLong, 5600, 150.48m, 149.90m, 100m, 150.218m, null, null, AdxStatus.Insufficient),
-            [("MOE", "fixture-2026-10-23")] = (6, OpportunityClassification.ProbableShort, 5450, 150.50m, 149.90m, 0m, null, null, null, AdxStatus.Insufficient),
-            [("QNT", "fixture-2026-10-22")] = (6, OpportunityClassification.ProbableShort, 5050, 80.40m, 79.90m, 0m, null, null, null, AdxStatus.Insufficient),
-            [("QNT", "fixture-2026-10-23")] = (7, OpportunityClassification.ProbableLong, 5650, 80.48m, 79.80m, 100m, 80.176m, null, null, AdxStatus.Insufficient)
+            [("MOE", "fixture-2026-10-22")] = (7, OpportunityClassification.ProbableLong, 5600, 150.48m, 149.90m, 100m, 150.218m, null, null, AdxStatus.Insufficient, TrendDirectionContext.Bullish),
+            [("MOE", "fixture-2026-10-23")] = (6, OpportunityClassification.ProbableShort, 5450, 150.50m, 149.90m, 0m, null, null, null, AdxStatus.Insufficient, TrendDirectionContext.Bearish),
+            [("QNT", "fixture-2026-10-22")] = (6, OpportunityClassification.ProbableShort, 5050, 80.40m, 79.90m, 0m, null, null, null, AdxStatus.Insufficient, TrendDirectionContext.Bearish),
+            [("QNT", "fixture-2026-10-23")] = (7, OpportunityClassification.ProbableLong, 5650, 80.48m, 79.80m, 100m, 80.176m, null, null, AdxStatus.Insufficient, TrendDirectionContext.Bullish)
         };
         var groups = expectedEvents.GroupBy(item => (item.Symbol, item.SessionId)).ToArray();
         Assert.Equal(expectedGroups.Keys.OrderBy(key => key), groups.Select(group => group.Key).OrderBy(key => key));
@@ -159,10 +159,10 @@ public sealed class FixtureWebApplicationTests
             Assert.NotNull(snapshot);
             Assert.Equal(opportunity.Symbol, snapshot.Symbol);
             Assert.Equal(opportunity.SessionId, snapshot.SessionId);
-            Assert.Equal("features-v11", snapshot.FeatureSetVersion);
-            Assert.Equal("features-v11", opportunity.FeatureSetVersion);
+            Assert.Equal("features-v12", snapshot.FeatureSetVersion);
+            Assert.Equal("features-v12", opportunity.FeatureSetVersion);
             Assert.Equal("momentum-continuation-v1", opportunity.SetupDefinitionVersion);
-            Assert.Equal("scanner-config-v11", opportunity.ConfigurationVersion);
+            Assert.Equal("scanner-config-v12", opportunity.ConfigurationVersion);
             var expectedRange = expectedGroups[(opportunity.Symbol, opportunity.SessionId)];
             Assert.Equal(expectedRange.High, snapshotJson.RootElement.GetProperty("sessionHighPrice").GetDecimal());
             Assert.Equal(expectedRange.Low, snapshotJson.RootElement.GetProperty("sessionLowPrice").GetDecimal());
@@ -179,6 +179,9 @@ public sealed class FixtureWebApplicationTests
                 snapshotJson.RootElement.GetProperty("sessionAdxStatus").GetString());
             Assert.Equal(expectedRange.Adx, snapshot.SessionAdx);
             Assert.Equal(expectedRange.AdxStatus, snapshot.SessionAdxStatus);
+            Assert.Equal(expectedRange.TrendDirection, snapshot.SessionTrendDirection);
+            Assert.Equal(expectedRange.TrendDirection.ToString(),
+                snapshotJson.RootElement.GetProperty("sessionTrendDirection").GetString());
             AssertNullableDecimal(snapshotJson.RootElement, "fastEma", expectedRange.FastEma);
             AssertNullableDecimal(snapshotJson.RootElement, "mediumEma", null);
             AssertNullableDecimal(snapshotJson.RootElement, "fastMediumEmaSpreadPercent", null);
@@ -269,6 +272,8 @@ public sealed class FixtureWebApplicationTests
             AssertNullableDecimal(persistedJson.RootElement, "sessionAdx", expectedRange.Adx);
             Assert.Equal((int)expectedRange.AdxStatus,
                 persistedJson.RootElement.GetProperty("sessionAdxStatus").GetInt32());
+            Assert.Equal((int)expectedRange.TrendDirection,
+                persistedJson.RootElement.GetProperty("sessionTrendDirection").GetInt32());
             AssertNullableDecimal(persistedJson.RootElement, "fastEma", expectedRange.FastEma);
             AssertNullableDecimal(persistedJson.RootElement, "mediumEma", null);
             AssertNullableDecimal(persistedJson.RootElement, "fastMediumEmaSpreadPercent", null);

@@ -158,7 +158,6 @@ public sealed class FeatureCalculator
         decimal? fastMediumEmaSpreadPercent = fastEma.HasValue && mediumEma is > 0
             ? (fastEma.Value - mediumEma.Value) / mediumEma.Value * 100m
             : null;
-
         decimal? vwap = null;
         var totalVolume = trades.Sum(trade => trade.Size);
         long? sessionCumulativeVolume = trades.Length > 0 && trades.All(trade => trade.Size > 0)
@@ -218,6 +217,18 @@ public sealed class FeatureCalculator
                 };
             }
         }
+
+        var sessionTrendDirection = TrendDirectionContextCalculator.Calculate(
+            fastEma,
+            mediumEma,
+            fastMediumEmaSpreadPercent,
+            fastEmaSlopePerMinute,
+            mediumEmaSlopePerMinute,
+            sessionVwapSlopePerMinute,
+            sessionVwapSlopeDirection,
+            sessionPriceStructure,
+            sessionAdx,
+            sessionAdxStatus);
 
         decimal? returnPercent = null;
         if (windowTrades.Length >= 2 && windowTrades[0].Price > 0 && latestTrade is not null)
@@ -284,6 +295,7 @@ public sealed class FeatureCalculator
             sessionPriceStructure?.ToString() ?? "",
             Format(sessionAdx),
             sessionAdxStatus.ToString(),
+            sessionTrendDirection.ToString(),
             Format(fastEma),
             Format(mediumEma),
             Format(fastMediumEmaSpreadPercent),
@@ -329,6 +341,7 @@ public sealed class FeatureCalculator
             sessionPriceStructure,
             sessionAdx,
             sessionAdxStatus,
+            sessionTrendDirection,
             fastEma,
             mediumEma,
             fastMediumEmaSpreadPercent,
