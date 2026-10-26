@@ -157,6 +157,15 @@ public sealed record FeatureSnapshot(
     decimal? ShortHorizonReturnPercent,
     decimal? SecondaryHorizonReturnPercent,
     long? ShortHorizonVolume,
+    long? SessionCumulativeVolume,
+    decimal? SessionHighPrice,
+    decimal? SessionLowPrice,
+    decimal? SessionRangePositionPercent,
+    decimal? FastEma,
+    decimal? MediumEma,
+    decimal? FastMediumEmaSpreadPercent,
+    decimal? FastEmaSlopePerMinute,
+    decimal? MediumEmaSlopePerMinute,
     TimeSpan? QuoteAge,
     bool IsQuoteValid,
     bool IsPriceDataValid,
@@ -219,12 +228,14 @@ public sealed record Opportunity(
 
 public sealed record ScannerConfiguration
 {
-    public string Version { get; init; } = "scanner-config-v5";
-    public string FeatureSetVersion { get; init; } = "features-v5";
+    public string Version { get; init; } = "scanner-config-v9";
+    public string FeatureSetVersion { get; init; } = "features-v9";
     public string SetupDefinitionVersion { get; init; } = "momentum-continuation-v1";
     public int MaximumStateEvents { get; init; } = 10_000;
     public int MomentumWindowSeconds { get; init; } = 60;
     public int SecondaryMomentumWindowSeconds { get; init; } = 30;
+    public int EmaFastPeriod { get; init; } = 5;
+    public int EmaMediumPeriod { get; init; } = 20;
     public int MaximumQuoteAgeSeconds { get; init; } = 15;
     public int MaximumLiveFeedStalenessSeconds { get; init; } = 30;
     public decimal MaximumSpreadBasisPoints { get; init; } = 25m;
@@ -246,6 +257,8 @@ public sealed record ScannerConfiguration
             || MomentumWindowSeconds < 1
             || SecondaryMomentumWindowSeconds < 1
             || SecondaryMomentumWindowSeconds >= MomentumWindowSeconds
+            || EmaFastPeriod < 1
+            || EmaMediumPeriod <= EmaFastPeriod
             || MaximumQuoteAgeSeconds < 0
             || MaximumLiveFeedStalenessSeconds < 1
             || MaximumSpreadBasisPoints <= 0

@@ -13,11 +13,43 @@ Milestone A defaults to a deterministic recorded-fixture scanner and supports op
 
 The source preserves fixture arrival order, including interleaved symbols and late/out-of-order events. Every source must provide a non-empty symbol, provider, and explicit session ID; the scanner rejects events missing any of these identities rather than inferring them. The bounded state deduplicates stable identities and orders events deterministically by event time and identity before computing features. State and session VWAP are isolated by symbol and explicit session ID; no session is inferred from a UTC calendar date. The pipeline creates and persists one immutable feature/opportunity result for each of the four symbol/session pairs.
 
-The `features-v5` snapshot retains session VWAP slope over the existing `MomentumWindowSeconds` window. At each distinct trade event time, the calculator samples cumulative session VWAP; slope is the change from the first to last in-window sample divided by elapsed event-time minutes, so irregularly spaced observations are time-normalized. The snapshot reports the signed price-per-minute value and `Rising`, `Falling`, `Flat`, or `Insufficient` direction. `Flat` means exactly zero slope; fewer than two distinct in-window timestamps with a positive cumulative volume yields a null slope and `Insufficient`. This is descriptive feature output only and does not affect setup classification, scoring, publication, or vetoes.
+The `features-v9` snapshot retains session VWAP slope over the existing `MomentumWindowSeconds` window. At each distinct trade event time, the calculator samples cumulative session VWAP; slope is the change from the first to last in-window sample divided by elapsed event-time minutes, so irregularly spaced observations are time-normalized. The snapshot reports the signed price-per-minute value and `Rising`, `Falling`, `Flat`, or `Insufficient` direction. `Flat` means exactly zero slope; fewer than two distinct in-window timestamps with a positive cumulative volume yields a null slope and `Insufficient`. This is descriptive feature output only and does not affect setup classification, scoring, publication, or vetoes.
+
+`features-v9` adds fast/medium EMA values, their signed relationship, and event-time slopes as descriptive features. `Scanner:EmaFastPeriod` defaults to **5 trades** and `Scanner:EmaMediumPeriod` to **20 trades**; both must be positive integers and the fast period must be strictly smaller than the medium period. These are observation counts, not elapsed-time periods. For every retained trade in the same symbol and explicit session with `EventTimeUtc <= AsOfUtc`, in the existing canonical event order, the calculator ignores trade size and updates the EMA once per trade observation. Quotes, receive time, and wall-clock time do not contribute.
+
+For period `N`, the first EMA is the arithmetic mean of the first `N` positive eligible trade prices (SMA seed); subsequent observations use `EMA = price * (2 / (N + 1)) + prior EMA * (1 - 2 / (N + 1))`, with decimal arithmetic. Fewer than `N` eligible observations yields null for that EMA. Any eligible trade price `<= 0` makes all EMA values, relationship, and slopes null, matching the strict retained-session extrema contract; invalid trades are not discarded. `FastMediumEmaSpreadPercent` is `(FastEma - MediumEma) / MediumEma * 100m` and is null until both EMAs are available. Slopes use the existing `MomentumWindowSeconds` (default **60 seconds**) and are signed price-per-minute changes between the first and last initialized EMA samples whose timestamps are in the inclusive interval `[AsOfUtc - MomentumWindowSeconds, AsOfUtc]`. At a duplicate timestamp, all trades update the EMA in canonical order and the timestamp sample is its last ordered EMA. Fewer than two distinct in-window timestamps yields a null slope; equal endpoints yield zero. Earlier eligible trades still warm up the EMA even when they precede the slope interval.
+
+Read EMA values with `HasCompleteSessionData`: `false` means any non-null value may describe only retained partial state, and is not a complete-session indicator. A future event does not affect an earlier value/identity when retained eligible state and completeness are unchanged, but can evict eligible trades from bounded state and thereby change a later historical-as-of result. New fields are nullable JSON decimals (`fastEma`, `mediumEma`, `fastMediumEmaSpreadPercent`, `fastEmaSlopePerMinute`, `mediumEmaSlopePerMinute`) and participate explicitly in deterministic feature identity. They do not affect detector qualification, scoring, classifications, publication, vetoes, or the unchanged `momentum-continuation-v1` setup. The configuration and feature versions advance to `scanner-config-v9` and `features-v9`; prior persisted snapshots, configurations, and decisions are not rewritten.
 
 `SecondaryHorizonReturnPercent` adds a second descriptive ROC alongside the unchanged `ShortHorizonReturnPercent`. `Scanner:SecondaryMomentumWindowSeconds` defaults to **30 seconds** and must be positive and strictly less than `MomentumWindowSeconds` (default **60 seconds**). For the same symbol and explicit session, select trades in the inclusive interval `[AsOfUtc - SecondaryMomentumWindowSeconds, AsOfUtc]` and calculate `(last price - first price) / first price * 100` using decimal arithmetic. Fewer than two observations, or any non-positive price in that window, yields **null**, not zero; equal positive prices yield zero. Trades at equal timestamps remain separate observations, ordered by the existing event-time/provider/ordinal-sequence/canonical-identity ordering, so two same-time trades can produce ROC even though VWAP slope remains insufficient. Quote prices, receive time, and wall-clock time do not enter the calculation.
 
-The effective configuration endpoint exposes the added window. Serialized configuration (including both windows), the new value, and `features-v5` participate in deterministic feature identity; configuration defaults are now `scanner-config-v5`. Persisted configuration remains immutable per version: changing the window requires a new configuration version, and prior decisions are not rewritten. There is no schema migration or detector/scoring/classification/publication/veto/UI change in this slice.
+`SessionCumulativeVolume` is a nullable signed 64-bit integer: the checked sum of trade sizes across **all retained same-symbol, explicit-session trades with `EventTimeUtc <= AsOfUtc`**, including trades outside both ROC windows. It is not a rolling-window value. Quotes (including quote sizes), receive time, and wall-clock time do not contribute. Canonical duplicates retain the first observation; input ordering and equal timestamps use the existing deterministic state ordering.
+
+- No eligible trades yields **null**, never a valid-looking zero. One positive-size trade is enough for a descriptive volume; `MinimumRequiredTrades` does not apply to this field.
+- Any eligible size `<= 0` makes volume **null**, without silently removing that trade. Existing `IsPriceDataValid`, data quality, and detector veto behavior remain unchanged. Positive sizes are summed independently of price validity: a non-positive price still invalidates existing price data but does not itself make share volume unavailable.
+- The existing checked `Enumerable.Sum(long)` behavior throws `OverflowException`; totals are not wrapped or clamped. `ShortHorizonVolume` retains its original primary-window calculation and empty/invalid-input behavior.
+- Always read this field **together with `HasCompleteSessionData`**. True means no event has been evicted from this state; a non-null value is the total of the observed retained session. False means any non-null value is only a **retained partial sum**, not complete session volume. The sticky flag is conservative even if an evicted event was a quote. No retained eligible trades or any invalid retained size still yields null after eviction. This is not a guarantee of upstream feed completeness or session-start coverage.
+- Future events cannot affect an earlier value/identity while retained eligible state and completeness are unchanged. However, future arrivals can evict earlier events; subsequent historical-as-of calculations then reflect only remaining state and incomplete status. Bounded state is not unlimited historical replay; no backfill is added.
+
+`SessionHighPrice` and `SessionLowPrice` are nullable decimals: the maximum and minimum positive trade prices across **all retained same-symbol, explicit-session trades with `EventTimeUtc <= AsOfUtc`**, not either ROC window. HTTP and persisted JSON use `sessionHighPrice` and `sessionLowPrice`.
+
+- No eligible trades yields **null for both**. One positive-price trade yields its price for both; equal prices are valid. `MinimumRequiredTrades` does not apply to these descriptive values.
+- Any eligible price `<= 0` makes **both null**, including invalid observations outside both ROC windows. Invalid prices are not silently discarded.
+- Sizes do not weight or filter extrema. A positive price with zero/negative size still contributes to high/low, even though it makes `SessionCumulativeVolume` unavailable and existing `IsPriceDataValid`, data-quality and detector veto semantics still apply. Conversely, positive sizes remain summable when prices are invalid. No existing validity/veto logic changes.
+- Quotes and quote prices, receive time, and wall-clock time do not contribute. Canonical duplicates retain their first observation, including conflicting payloads; existing deterministic ordering and symbol/explicit-session isolation are preserved.
+- Read extrema **together with `HasCompleteSessionData`**: true means no state event has been evicted and the values cover the observed retained session, not proof of upstream session-start coverage. False means any non-null values are **retained partial extrema**, not complete session high/low. The flag remains sticky and conservative, including quote eviction. Empty/invalid retained prices still yield null after eviction.
+- Future trades, including extreme/invalid prices, cannot change an earlier snapshot or identity when retained eligible state and completeness remain unchanged. Future arrivals can nevertheless evict earlier trades, changing subsequent historical-as-of extrema/completeness. Bounded state is not unlimited historical replay; no backfill is added.
+
+`SessionRangePositionPercent` is a nullable decimal describing the latest eligible trade within the retained session range: `(ReferencePrice - SessionLowPrice) / (SessionHighPrice - SessionLowPrice) * 100m`. It reuses the same retained, same-symbol, explicit-session trades at/before `AsOfUtc`, extrema, and deterministic latest-trade ordering. The value is not clamped or rounded and is independent of both ROC windows and `MinimumRequiredTrades`.
+
+- Empty retained trades, unavailable/non-positive reference price, unavailable extrema, or a zero-width range yields **null**; one trade and multiple equal-price trades yield null rather than zero or 50.
+- Any eligible non-positive trade price makes both extrema and range position null, including observations outside both ROC windows. Invalid prices are not discarded.
+- Trade sizes do not weight or filter the range: positive prices with zero/negative sizes still define the extrema and latest reference. Existing price validity, quality, cumulative/rolling volume and veto behavior is unchanged.
+- Quotes, quote prices, receive time, and wall-clock time do not contribute. Canonical first-occurrence duplicate handling, including conflicting payloads, and symbol/session isolation are unchanged.
+- Always interpret this value with `HasCompleteSessionData`: false means a non-null position describes only retained partial-session state (including after quote eviction); true means no observed state event has been evicted, not proof of upstream session-start coverage. Future events do not affect the earlier result if eligible retained state and completeness are unchanged, but may evict earlier events from bounded state. No historical backfill is added.
+- HTTP and persisted JSON use `sessionRangePositionPercent`; null is serialized explicitly. The value participates explicitly in deterministic feature identity, in addition to event identities and serialized configuration.
+
+The preceding range-position slice advanced defaults from `features-v7` / `scanner-config-v7` to **`features-v8` / `scanner-config-v8`**. The current EMA slice below advances them to `features-v9` / `scanner-config-v9`. Prior persisted configurations, snapshots, and decisions remain immutable; changing analysis creates a new version/record. The setup remains `momentum-continuation-v1`. Session volume's empty/invalid-size/checked-overflow/completeness contract, rolling volume, both ROC horizons and validation, exact VWAP-slope behavior, and detector outcomes remain unchanged. No schema migration, detector/scoring/classification/publication/veto, dependency or UI change is part of either descriptive slice.
 
 ## Local run
 
@@ -30,7 +62,7 @@ dotnet run --project src\MarketOpportunity.Web --launch-profile http
 
 The `http` launch profile in `src\MarketOpportunity.Web\Properties\launchSettings.json` sets the development environment, opens the browser, and configures the app to listen at `http://localhost:5228`. You do not need to set `ASPNETCORE_URLS` yourself. Use the `https` profile instead if you want HTTPS and have the local development certificate trusted.
 
-Development startup creates the application schema with EF Core `EnsureCreated`; if an earlier schema already exists, it applies the explicit-session and opportunity-provenance migrations. Pre-migration records are labeled `legacy-unknown` rather than assigned an inferred session. The session-scoped feature contract is versioned as `features-v5`, and the effective scanner configuration as `scanner-config-v5`; prior immutable decisions are not rewritten. The development connection string targets SQL Server at `localhost,1433`. The checked-in password is only for local Docker development; override `MSSQL_SA_PASSWORD` when needed and keep credentials out of source control.
+Development startup creates the application schema with EF Core `EnsureCreated`; if an earlier schema already exists, it applies the explicit-session and opportunity-provenance migrations. Pre-migration records are labeled `legacy-unknown` rather than assigned an inferred session. The current session-scoped feature contract is versioned as `features-v9`, and the effective scanner configuration as `scanner-config-v9`; prior immutable decisions are not rewritten. The development connection string targets SQL Server at `localhost,1433`. The checked-in password is only for local Docker development; override `MSSQL_SA_PASSWORD` when needed and keep credentials out of source control.
 
 In a second PowerShell terminal, verify the running app:
 
@@ -184,11 +216,58 @@ dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj
 dotnet build MarketOpportunityEngine.sln
 ```
 
-Latest validation (2026-10-25, second ROC slice): focused replay tests passed **30/30**, then the full offline suite passed **94/94**, both exit 0. The ordered SQL sequence above then passed: hosted fixture **1 passed, 0 failed, 0 skipped** on each of two same-database runs; persistence/migrations **3 passed, 0 failed, 0 skipped**; units **94 passed, 0 failed, 0 skipped**; solution build **0 warnings, 0 errors**, all exit 0. The SQL test also verifies that changing only the secondary window under an existing configuration version is rejected and that the original persisted configuration/snapshot remain unchanged.
+### Current verification: descriptive EMA slice (2026-10-25)
+
+Focused replay **98/98 passed** and full offline units **162/162 passed**. Against the same dedicated SQL Server test database, the hosted fixture regression passed **1/1 on each of two consecutive runs** without reset; persistence/migration tests passed **3/3**. The solution build succeeded with **0 warnings and 0 errors**. All runs had 0 failures and 0 skips.
+
+The environment connection variable was absent. The already-running healthy Compose SQL Server and only its dedicated `MarketOpportunityEngine_IntegrationTests` database were reused. The catalog was checked using `SqlConnectionStringBuilder` in an isolated PowerShell 7 child and the database identity was verified with a read-only query. No SqlClient runtime was loaded in the parent process that launched `dotnet`; temporary process overrides were cleared. Fixture records were retained. No browser, live-provider, User Secrets, or Azure verification was performed.
+
+Hosted HTTP snapshot payloads and raw persisted SQL snapshot JSON independently assert these fast EMA values; the remaining nullable outputs are null because the fixture sessions contain fewer than 20 trades and fewer than two initialized fast samples in the 60-second slope interval:
+
+| Symbol/session | Ordered eligible prices | Fast EMA (5) | Medium EMA (20) | Spread % | Fast slope / price-min | Medium slope / price-min |
+|---|---|---:|---:|---:|---:|---:|
+| MOE / fixture-2026-10-22 | 149.90, 150.08, 150.23, 150.40, 150.48 | 150.218 | null | null | null | null |
+| MOE / fixture-2026-10-23 | 150.50, 150.30, 150.08, 149.90 | null | null | null | null | null |
+| QNT / fixture-2026-10-22 | 80.40, 80.20, 80.08, 79.90 | null | null | null | null | null |
+| QNT / fixture-2026-10-23 | 79.80, 80.00, 80.20, 80.40, 80.48 | 80.176 | null | null | null | null |
+
+The persistence regression confirms that later input creates a new feature snapshot and opportunity decision without rewriting the original records; the new snapshot JSON independently asserts fast EMA **102.1** and fast slope **12 price/minute**, while the original four-trade snapshot remains null for fast/medium EMA.
+
+Exact offline commands used:
+
+```powershell
+dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj --filter FullyQualifiedName~ScannerReplayTests
+dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj
+```
+
+The guarded SQL sequence was run in the order documented above (hosted fixture twice, persistence/migrations, full unit suite, solution build).
+
+**Failed attempts, not passing evidence:** The first focused build attempt exposed a nullable conditional typing error; fixed before tests ran. A dirty positional `FeatureSnapshot` test fixture needed the new nullable fields. Initial EMA assertions then exposed incorrect expected slopes/warm-up values and helper session mismatches; corrected before the passing **98/98** focused run. SQL guard attempts involving malformed encoded-runner construction and an invalid connection-string setter stopped before tests; a subsequent connection attempt using a mismatched credential failed login. These were not passing SQL evidence and did not change data. The eventual guard reused the existing healthy container, verified the dedicated database read-only, and successfully validated the catalog via the isolated builder; then the complete guarded SQL sequence passed. No database or fixture reset was performed.
+
+### Historical validation: retained-session range-position slice
+
+The range-position slice passed focused replay **83/83**, full offline units **147/147**, hosted fixture **1/1 twice**, persistence/migrations **3/3**, and a solution build with **0 warnings and 0 errors**. Fixture HTTP payloads and persisted SQL JSON asserted exact range positions alongside extrema, volume and completeness.
+
+Fixture values were independently derived from the checked-in retained trades' reference prices and extrema:
+
+| Symbol/session | ReferencePrice | SessionHighPrice | SessionLowPrice | SessionRangePositionPercent | SessionCumulativeVolume | HasCompleteSessionData |
+|---|---:|---:|---:|---:|---:|---|
+| MOE / fixture-2026-10-22 | 150.48 | 150.48 | 149.90 | 100 | 5600 | true |
+| MOE / fixture-2026-10-23 | 149.90 | 150.50 | 149.90 | 0 | 5450 | true |
+| QNT / fixture-2026-10-22 | 79.90 | 80.40 | 79.90 | 0 | 5050 | true |
+| QNT / fixture-2026-10-23 | 80.48 | 80.48 | 79.80 | 100 | 5650 | true |
+
+The SQL persistence regression retains the original snapshot at high/low/reference `103/100/103` and position **100**, then persists a new result after later input at high/low/reference `103.50/100/102.50` with the exact decimal position `(102.50 - 100) / (103.50 - 100) * 100m`. It checks the original snapshot JSON and original persisted opportunity fields/evidence remain unchanged.
+
+The SQL connection environment variable was absent. Reused only the already-running healthy Compose SQL Server and `MarketOpportunityEngine_IntegrationTests`; an isolated encoded PowerShell 7 child loaded the built Windows SQL-client assembly with `Assembly.LoadFrom`, verified the dedicated catalog through `SqlConnectionStringBuilder`, and returned no secret text. No SQL-client runtime was loaded into the parent launching `dotnet`; temporary overrides were cleared. No service/database was started, stopped, reset, or dropped, and fixture rows were retained. No browser, live-provider, User Secrets, or Azure verification is claimed.
+
+**Failed attempts, not passing evidence:** The first focused run had **80 passed / 2 failed**: one incorrect expected 25% value for a 50% midpoint and a changed-configuration test using the new default version instead of a distinct version. Both test expectations were corrected; focused and full suites then passed as reported. Initial isolated SQL guard attempts used the root assembly (unsupported on that platform), passed the DLL path as a script, or assigned an unsupported builder property; each failed before running SQL tests. The successful guard invoked an encoded PowerShell 7 child correctly, loaded the built Windows runtime assembly using `Assembly.LoadFrom`, and populated `SqlConnectionStringBuilder` through its indexer. These were guard/runner setup issues, not evidence SQL was unavailable.
+
+Historical validation (2026-10-25, prior session cumulative-volume slice): focused replay tests passed **46/46**, then the full offline suite passed **110/110**, both exit 0. The ordered SQL sequence above then passed: hosted fixture **1 passed, 0 failed, 0 skipped** on each of two same-database runs; persistence/migrations **3 passed, 0 failed, 0 skipped**; units **110 passed, 0 failed, 0 skipped**; solution build succeeded with **no warnings or errors reported**, all commands completed successfully. Hosted HTTP and raw persisted snapshot JSON assert exact volume/completeness: MOE-22 **5600**, MOE-23 **5450**, QNT-22 **5050**, QNT-23 **5650**. All prior analytical, negative-lookup, canonical-event, and SQL immutability assertions remain in place.
 
 The existing healthy Compose server was reused with this request's authorization, targeting only `MarketOpportunityEngine_IntegrationTests` (plus migration tests' unique temporary databases). The absent connection variable was supplied only in process memory and validated with `Microsoft.Data.SqlClient.SqlConnectionStringBuilder`; fixture records were retained, the configured database was not dropped, and temporary overrides were cleared. No provider User Secrets or live connectivity were used. Browser validation was not repeated because no UI changed.
 
-Earlier attempts are **not passing test evidence**: a PowerShell SQL-open preflight failed native SNI loading before tests; a subsequent wrapper returned `-2147450751` without test output. Isolating the builder guard in a child PowerShell and running the documented commands directly succeeded. The earlier VWAP-slope totals (**8 replay / 72 units**) and prior browser runs are historical, not results of this slice. Exact commands, additional diagnostic runs, and evidence boundaries are separated in [PROJECT_STATUS.md](./PROJECT_STATUS.md#20-test-status).
+Earlier attempts in this slice are **not passing SQL evidence**: the Windows PowerShell child guard could not resolve SQL-client dependencies; the terminal runner subsequently returned `program not found` before launching validation. Recovery used a temporary VS Code task, loading the SQL-client runtime with `Assembly.LoadFrom` only inside a PowerShell 7 child for the builder guard. The parent then ran the unchanged documented commands. The helpers/task were removed afterward. Prior second-ROC (**30 replay / 94 units**), VWAP-slope (**8 replay / 72 units**), native-SNI/wrapper failures, and browser runs remain historical, not results of this slice. Exact commands and evidence boundaries are separated in [PROJECT_STATUS.md](./PROJECT_STATUS.md#20-test-status).
 
 Run these offline commands first, before the guarded SQL sequence:
 
@@ -197,7 +276,22 @@ dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj
 dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj
 ```
 
-Next smallest Milestone A recommendation (not implemented): add a versioned, descriptive session cumulative-volume feature from retained same-session trades, explicitly reporting incomplete state after eviction, without changing detectors or risk/publication behavior.
+Historical validation (2026-10-25, descriptive retained-session extrema slice): the focused offline replay command above passed **72/72**, then full units **136/136**, all exit 0. The documented guarded SQL sequence passed in order: hosted fixture **1 passed, 0 failed, 0 skipped** twice against the same database without reset; persistence/migrations **3 passed, 0 failed, 0 skipped**; final units **136 passed, 0 failed, 0 skipped**; solution build **0 warnings, 0 errors**. All commands exited 0. The 26 replay cases preserve all prior volume, ROC and exact VWAP-slope assertions.
+
+Exact new values were derived from the checked-in trade fixture and asserted in hosted HTTP snapshot payloads **and raw persisted SQL snapshot JSON**, alongside the unchanged volume/completeness assertions:
+
+| Symbol/session | SessionHighPrice | SessionLowPrice | SessionCumulativeVolume | HasCompleteSessionData |
+|---|---:|---:|---:|---|
+| MOE / fixture-2026-10-22 | 150.48 | 149.90 | 5600 | true |
+| MOE / fixture-2026-10-23 | 150.50 | 149.90 | 5450 | true |
+| QNT / fixture-2026-10-22 | 80.40 | 79.90 | 5050 | true |
+| QNT / fixture-2026-10-23 | 80.48 | 79.80 | 5650 | true |
+
+The connection variable was absent. With this request's explicit authorization, validation reused only the existing healthy Compose server and `MarketOpportunityEngine_IntegrationTests` (plus migration tests' unique temporary databases). The process-only connection was guarded using `Microsoft.Data.SqlClient.SqlConnectionStringBuilder` in an isolated encoded PowerShell 7 child with `Assembly.LoadFrom`; the catalog was non-empty and contained `test`. No SQL-client runtime was loaded into the parent launching `dotnet`. Credentials/settings stayed in memory, temporary overrides were cleared, fixture records retained, and no configured database/server was dropped, reset, started or stopped. No helper/task files were needed.
+
+New failed attempt (not passing evidence): the initial focused run had **66 passed / 6 failed** because a test expected cumulative volume 130 instead of 160 (the three older sizes are 10+20+30). Only that expected constant was corrected; the successful focused/full runs above followed. No SQL/runner failures occurred in this slice. All payload, negative-lookup, canonical-event, analytical, versioning and immutability assertions remain. No SQL blocker remains; no new browser, live-provider/User Secrets or Azure checks were run or claimed. Prior failures and historical runs above are not new evidence.
+
+At the historical extrema checkpoint, the next-slice recommendation was retained-session range position; that slice is now implemented and verified above.
 
 An earlier attempt exposed that the old factory's late configuration override allowed local settings to select Massive; access was denied. The isolated environment and explicit fixture registration above fix that test-isolation defect. Successful final runs used Fixture only. No runtime/application behavior changed.
 
@@ -223,7 +317,7 @@ dotnet list MarketOpportunityEngine.sln package --vulnerable --include-transitiv
 
 Opportunity list/detail responses include the immutable analytical `Opportunity` and a separate `PublicationDecision` (`Active`, `Suspended`, `Expired`, or `NotQualified`) with a reason and evaluation time. Market-data provider/feed/coverage metadata is recorded with each analysis; a provider failure changes current publication status to suspended/error without rewriting setup evidence.
 
-Feature snapshots expose `SessionVwapSlopePerMinute` and `SessionVwapSlopeDirection`; the slope is descriptive only and is not currently used for setup scoring or qualification.
+Feature snapshots expose descriptive `SessionVwapSlopePerMinute`, `SessionVwapSlopeDirection`, `SecondaryHorizonReturnPercent`, `SessionCumulativeVolume`, `SessionHighPrice`, `SessionLowPrice`, and `SessionRangePositionPercent`. Read retained-session values with `HasCompleteSessionData` as described above; none of these descriptive additions is used for setup scoring or qualification.
 
 ## Current limits
 

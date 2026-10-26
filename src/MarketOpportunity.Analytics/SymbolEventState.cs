@@ -126,8 +126,39 @@ public sealed class FeatureCalculator
         var windowStart = asOfUtc.AddSeconds(-configuration.MomentumWindowSeconds);
         var windowTrades = trades.Where(trade => trade.EventTimeUtc >= windowStart).ToArray();
 
+        var hasValidSessionPrices = trades.Length > 0 && trades.All(trade => trade.Price > 0);
+        decimal? sessionHighPrice = hasValidSessionPrices ? trades.Max(trade => trade.Price) : null;
+        decimal? sessionLowPrice = hasValidSessionPrices ? trades.Min(trade => trade.Price) : null;
+        decimal? sessionRangePositionPercent =
+            latestTrade?.Price is > 0
+            && sessionHighPrice.HasValue
+            && sessionLowPrice.HasValue
+            && sessionHighPrice.Value > sessionLowPrice.Value
+                ? (latestTrade.Price - sessionLowPrice.Value)
+                    / (sessionHighPrice.Value - sessionLowPrice.Value)
+                    * 100m
+                : null;
+
+        var emaPricesAreValid = trades.Length > 0 && trades.All(trade => trade.Price > 0);
+        var (fastEma, fastEmaSlopePerMinute) = CalculateEma(
+            trades,
+            configuration.EmaFastPeriod,
+            asOfUtc.AddSeconds(-configuration.MomentumWindowSeconds),
+            emaPricesAreValid);
+        var (mediumEma, mediumEmaSlopePerMinute) = CalculateEma(
+            trades,
+            configuration.EmaMediumPeriod,
+            asOfUtc.AddSeconds(-configuration.MomentumWindowSeconds),
+            emaPricesAreValid);
+        decimal? fastMediumEmaSpreadPercent = fastEma.HasValue && mediumEma is > 0
+            ? (fastEma.Value - mediumEma.Value) / mediumEma.Value * 100m
+            : null;
+
         decimal? vwap = null;
         var totalVolume = trades.Sum(trade => trade.Size);
+        long? sessionCumulativeVolume = trades.Length > 0 && trades.All(trade => trade.Size > 0)
+            ? totalVolume
+            : null;
         if (totalVolume > 0)
         {
             vwap = trades.Sum(trade => trade.Price * trade.Size) / totalVolume;
@@ -241,6 +272,15 @@ public sealed class FeatureCalculator
             Format(returnPercent),
             Format(secondaryReturnPercent),
             windowTrades.Sum(trade => trade.Size).ToString(CultureInfo.InvariantCulture),
+            sessionCumulativeVolume?.ToString(CultureInfo.InvariantCulture) ?? "",
+            Format(sessionHighPrice),
+            Format(sessionLowPrice),
+            Format(sessionRangePositionPercent),
+            Format(fastEma),
+            Format(mediumEma),
+            Format(fastMediumEmaSpreadPercent),
+            Format(fastEmaSlopePerMinute),
+            Format(mediumEmaSlopePerMinute),
             quoteAge?.Ticks.ToString(CultureInfo.InvariantCulture) ?? "",
             quoteValid.ToString(),
             priceDataValid.ToString(),
@@ -274,6 +314,15 @@ public sealed class FeatureCalculator
             returnPercent,
             secondaryReturnPercent,
             windowTrades.Sum(trade => trade.Size),
+            sessionCumulativeVolume,
+            sessionHighPrice,
+            sessionLowPrice,
+            sessionRangePositionPercent,
+            fastEma,
+            mediumEma,
+            fastMediumEmaSpreadPercent,
+            fastEmaSlopePerMinute,
+            mediumEmaSlopePerMinute,
             quoteAge,
             quoteValid,
             priceDataValid,
@@ -281,6 +330,69 @@ public sealed class FeatureCalculator
             !state.HasEvictedEvents,
             quality,
             marketData);
+    }
+
+    private static (decimal? Value, decimal? SlopePerMinute) CalculateEma(
+        IReadOnlyList<TradeEvent> trades,
+        int period,
+        DateTimeOffset windowStart,
+        bool pricesAreValid)
+    {
+        if (!pricesAreValid || trades.Count < period)
+        {
+            return (null, null);
+        }
+
+        var alpha = 2m / (period + 1m);
+        decimal seedSum = 0;
+        decimal? ema = null;
+        var samples = new List<(DateTimeOffset EventTimeUtc, decimal Value)>();
+        for (var index = 0; index < trades.Count; index++)
+        {
+            var trade = trades[index];
+            if (!ema.HasValue)
+            {
+                seedSum += trade.Price;
+                if (index == period - 1)
+                {
+                    ema = seedSum / period;
+                }
+            }
+            else
+            {
+                ema = (trade.Price * alpha) + (ema.Value * (1m - alpha));
+            }
+
+            if (!ema.HasValue)
+            {
+                continue;
+            }
+
+            if (samples.Count > 0 && samples[^1].EventTimeUtc == trade.EventTimeUtc)
+            {
+                samples[^1] = (trade.EventTimeUtc, ema.Value);
+            }
+            else
+            {
+                samples.Add((trade.EventTimeUtc, ema.Value));
+            }
+        }
+
+        var windowSamples = samples
+            .Where(sample => sample.EventTimeUtc >= windowStart)
+            .ToArray();
+        if (windowSamples.Length < 2)
+        {
+            return (ema, null);
+        }
+
+        var first = windowSamples[0];
+        var last = windowSamples[^1];
+        var elapsedTicks = (last.EventTimeUtc - first.EventTimeUtc).Ticks;
+        decimal? slopePerMinute = elapsedTicks > 0
+            ? (last.Value - first.Value) * TimeSpan.TicksPerMinute / elapsedTicks
+            : null;
+        return (ema, slopePerMinute);
     }
 
     private static string Format(decimal? value) =>

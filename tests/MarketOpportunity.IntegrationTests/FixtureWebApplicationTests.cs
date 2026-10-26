@@ -54,12 +54,13 @@ public sealed class FixtureWebApplicationTests
         Assert.Equal(26, fixtureEvents.Count);
         var expectedEvents = fixtureEvents.DistinctBy(MarketEventIdentity.Create).ToArray();
         Assert.Equal(26, expectedEvents.Length);
-        var expectedGroups = new Dictionary<(string Symbol, string SessionId), (int Count, OpportunityClassification Classification)>
+        var expectedGroups = new Dictionary<(string Symbol, string SessionId),
+            (int Count, OpportunityClassification Classification, long Volume, decimal High, decimal Low, decimal Position, decimal? FastEma)>
         {
-            [("MOE", "fixture-2026-10-22")] = (7, OpportunityClassification.ProbableLong),
-            [("MOE", "fixture-2026-10-23")] = (6, OpportunityClassification.ProbableShort),
-            [("QNT", "fixture-2026-10-22")] = (6, OpportunityClassification.ProbableShort),
-            [("QNT", "fixture-2026-10-23")] = (7, OpportunityClassification.ProbableLong)
+            [("MOE", "fixture-2026-10-22")] = (7, OpportunityClassification.ProbableLong, 5600, 150.48m, 149.90m, 100m, 150.218m),
+            [("MOE", "fixture-2026-10-23")] = (6, OpportunityClassification.ProbableShort, 5450, 150.50m, 149.90m, 0m, null),
+            [("QNT", "fixture-2026-10-22")] = (6, OpportunityClassification.ProbableShort, 5050, 80.40m, 79.90m, 0m, null),
+            [("QNT", "fixture-2026-10-23")] = (7, OpportunityClassification.ProbableLong, 5650, 80.48m, 79.80m, 100m, 80.176m)
         };
         var groups = expectedEvents.GroupBy(item => (item.Symbol, item.SessionId)).ToArray();
         Assert.Equal(expectedGroups.Keys.OrderBy(key => key), groups.Select(group => group.Key).OrderBy(key => key));
@@ -102,6 +103,8 @@ public sealed class FixtureWebApplicationTests
                 await effectiveResponse.Content.ReadAsStringAsync(), JsonOptions);
             Assert.Equal(configuration, effective);
             Assert.Equal(30, effective!.SecondaryMomentumWindowSeconds);
+            Assert.Equal(5, effective.EmaFastPeriod);
+            Assert.Equal(20, effective.EmaMediumPeriod);
         }
 
         using var status = await GetJsonWithRetryAsync(
@@ -156,10 +159,32 @@ public sealed class FixtureWebApplicationTests
             Assert.NotNull(snapshot);
             Assert.Equal(opportunity.Symbol, snapshot.Symbol);
             Assert.Equal(opportunity.SessionId, snapshot.SessionId);
-            Assert.Equal("features-v5", snapshot.FeatureSetVersion);
-            Assert.Equal("features-v5", opportunity.FeatureSetVersion);
+            Assert.Equal("features-v9", snapshot.FeatureSetVersion);
+            Assert.Equal("features-v9", opportunity.FeatureSetVersion);
             Assert.Equal("momentum-continuation-v1", opportunity.SetupDefinitionVersion);
-            Assert.Equal("scanner-config-v5", opportunity.ConfigurationVersion);
+            Assert.Equal("scanner-config-v9", opportunity.ConfigurationVersion);
+            var expectedRange = expectedGroups[(opportunity.Symbol, opportunity.SessionId)];
+            Assert.Equal(expectedRange.High, snapshotJson.RootElement.GetProperty("sessionHighPrice").GetDecimal());
+            Assert.Equal(expectedRange.Low, snapshotJson.RootElement.GetProperty("sessionLowPrice").GetDecimal());
+            Assert.Equal(expectedRange.Position,
+                snapshotJson.RootElement.GetProperty("sessionRangePositionPercent").GetDecimal());
+            Assert.Equal(expectedRange.High, snapshot.SessionHighPrice);
+            Assert.Equal(expectedRange.Low, snapshot.SessionLowPrice);
+            Assert.Equal(expectedRange.Position, snapshot.SessionRangePositionPercent);
+            AssertNullableDecimal(snapshotJson.RootElement, "fastEma", expectedRange.FastEma);
+            AssertNullableDecimal(snapshotJson.RootElement, "mediumEma", null);
+            AssertNullableDecimal(snapshotJson.RootElement, "fastMediumEmaSpreadPercent", null);
+            AssertNullableDecimal(snapshotJson.RootElement, "fastEmaSlopePerMinute", null);
+            AssertNullableDecimal(snapshotJson.RootElement, "mediumEmaSlopePerMinute", null);
+            Assert.Equal(expectedRange.FastEma, snapshot.FastEma);
+            Assert.Null(snapshot.MediumEma);
+            Assert.Null(snapshot.FastMediumEmaSpreadPercent);
+            Assert.Null(snapshot.FastEmaSlopePerMinute);
+            Assert.Null(snapshot.MediumEmaSlopePerMinute);
+            var expectedVolume = expectedGroups[(opportunity.Symbol, opportunity.SessionId)].Volume;
+            Assert.Equal(expectedVolume, snapshotJson.RootElement.GetProperty("sessionCumulativeVolume").GetInt64());
+            Assert.Equal(expectedVolume, snapshot.SessionCumulativeVolume);
+            Assert.True(snapshot.HasCompleteSessionData);
             Assert.Equal(expectedSnapshots[(opportunity.Symbol, opportunity.SessionId)], snapshot);
             httpSnapshots.Add(snapshot.Id, snapshot);
         }
@@ -225,6 +250,20 @@ public sealed class FixtureWebApplicationTests
             Assert.Equal(snapshot.SessionId, persisted.SessionId);
             Assert.Equal(snapshot.AsOfUtc, persisted.AsOfUtc);
             Assert.Equal(snapshot.FeatureSetVersion, persisted.FeatureSetVersion);
+            using var persistedJson = JsonDocument.Parse(persisted.SnapshotJson);
+            var expectedRange = expectedGroups[(snapshot.Symbol, snapshot.SessionId)];
+            Assert.Equal(expectedRange.High, persistedJson.RootElement.GetProperty("sessionHighPrice").GetDecimal());
+            Assert.Equal(expectedRange.Low, persistedJson.RootElement.GetProperty("sessionLowPrice").GetDecimal());
+            Assert.Equal(expectedRange.Position,
+                persistedJson.RootElement.GetProperty("sessionRangePositionPercent").GetDecimal());
+            AssertNullableDecimal(persistedJson.RootElement, "fastEma", expectedRange.FastEma);
+            AssertNullableDecimal(persistedJson.RootElement, "mediumEma", null);
+            AssertNullableDecimal(persistedJson.RootElement, "fastMediumEmaSpreadPercent", null);
+            AssertNullableDecimal(persistedJson.RootElement, "fastEmaSlopePerMinute", null);
+            AssertNullableDecimal(persistedJson.RootElement, "mediumEmaSlopePerMinute", null);
+            Assert.Equal(expectedGroups[(snapshot.Symbol, snapshot.SessionId)].Volume,
+                persistedJson.RootElement.GetProperty("sessionCumulativeVolume").GetInt64());
+            Assert.True(persistedJson.RootElement.GetProperty("hasCompleteSessionData").GetBoolean());
             Assert.Equal(snapshot, JsonSerializer.Deserialize<FeatureSnapshot>(persisted.SnapshotJson, JsonOptions));
         }
 
@@ -261,6 +300,19 @@ public sealed class FixtureWebApplicationTests
             JsonSerializer.SerializeToElement(expected, JsonOptions),
             JsonSerializer.SerializeToElement(actual, JsonOptions)),
             $"Expected and actual {typeof(T).Name} payloads differ.");
+
+    private static void AssertNullableDecimal(JsonElement element, string propertyName, decimal? expected)
+    {
+        var value = element.GetProperty(propertyName);
+        if (expected.HasValue)
+        {
+            Assert.Equal(expected.Value, value.GetDecimal());
+        }
+        else
+        {
+            Assert.Equal(JsonValueKind.Null, value.ValueKind);
+        }
+    }
 
     private static void AssertPersistedOpportunity(Opportunity expected, OpportunityEntity actual)
     {
