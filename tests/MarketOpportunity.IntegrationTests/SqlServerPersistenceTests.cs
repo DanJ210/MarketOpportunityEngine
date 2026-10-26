@@ -123,6 +123,7 @@ public sealed class SqlServerPersistenceTests
             Assert.Equal(103m, originalJson.RootElement.GetProperty("sessionHighPrice").GetDecimal());
             Assert.Equal(100m, originalJson.RootElement.GetProperty("sessionLowPrice").GetDecimal());
             Assert.Equal(100m, originalJson.RootElement.GetProperty("sessionRangePositionPercent").GetDecimal());
+            Assert.Equal(JsonValueKind.Null, originalJson.RootElement.GetProperty("sessionPriceStructure").ValueKind);
             Assert.Equal(JsonValueKind.Null, originalJson.RootElement.GetProperty("fastEma").ValueKind);
             Assert.Equal(JsonValueKind.Null, originalJson.RootElement.GetProperty("mediumEma").ValueKind);
             var changedFeatures = Assert.Single(storedFeatures, item => item.Id == changedInput.Features.Id);
@@ -136,6 +137,7 @@ public sealed class SqlServerPersistenceTests
             Assert.Equal(102.1m, changedJson.RootElement.GetProperty("fastEma").GetDecimal());
             Assert.Equal(12m, changedJson.RootElement.GetProperty("fastEmaSlopePerMinute").GetDecimal());
             Assert.Equal(JsonValueKind.Null, changedJson.RootElement.GetProperty("mediumEma").ValueKind);
+            Assert.Equal(JsonValueKind.Null, changedJson.RootElement.GetProperty("sessionPriceStructure").ValueKind);
             Assert.Equal(first.Features, JsonSerializer.Deserialize<FeatureSnapshot>(
                 originalFeatures.SnapshotJson, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
             Assert.DoesNotContain(storedFeatures, item => item.Id == conflictingAnalysis.Features.Id);

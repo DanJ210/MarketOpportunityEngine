@@ -138,6 +138,7 @@ public sealed class FeatureCalculator
                     / (sessionHighPrice.Value - sessionLowPrice.Value)
                     * 100m
                 : null;
+        var sessionPriceStructure = CalculatePriceStructure(trades, hasValidSessionPrices);
 
         var emaPricesAreValid = trades.Length > 0 && trades.All(trade => trade.Price > 0);
         var (fastEma, fastEmaSlopePerMinute) = CalculateEma(
@@ -276,6 +277,7 @@ public sealed class FeatureCalculator
             Format(sessionHighPrice),
             Format(sessionLowPrice),
             Format(sessionRangePositionPercent),
+            sessionPriceStructure?.ToString() ?? "",
             Format(fastEma),
             Format(mediumEma),
             Format(fastMediumEmaSpreadPercent),
@@ -318,6 +320,7 @@ public sealed class FeatureCalculator
             sessionHighPrice,
             sessionLowPrice,
             sessionRangePositionPercent,
+            sessionPriceStructure,
             fastEma,
             mediumEma,
             fastMediumEmaSpreadPercent,
@@ -393,6 +396,82 @@ public sealed class FeatureCalculator
             ? (last.Value - first.Value) * TimeSpan.TicksPerMinute / elapsedTicks
             : null;
         return (ema, slopePerMinute);
+    }
+
+    private static PriceStructure? CalculatePriceStructure(
+        IReadOnlyList<TradeEvent> trades,
+        bool pricesAreValid)
+    {
+        const int pivotStrength = 2;
+        if (!pricesAreValid || trades.Count < (pivotStrength * 2) + 1)
+        {
+            return null;
+        }
+
+        List<decimal> pivotHighs = [];
+        List<decimal> pivotLows = [];
+        for (var index = pivotStrength; index < trades.Count - pivotStrength; index++)
+        {
+            var price = trades[index].Price;
+            var isHigh = true;
+            var isLow = true;
+            for (var offset = 1; offset <= pivotStrength; offset++)
+            {
+                if (price <= trades[index - offset].Price)
+                {
+                    isHigh = false;
+                }
+
+                if (price >= trades[index - offset].Price)
+                {
+                    isLow = false;
+                }
+
+                if (price < trades[index + offset].Price)
+                {
+                    isHigh = false;
+                }
+
+                if (price > trades[index + offset].Price)
+                {
+                    isLow = false;
+                }
+            }
+
+            if (isHigh)
+            {
+                pivotHighs.Add(price);
+            }
+
+            if (isLow)
+            {
+                pivotLows.Add(price);
+            }
+        }
+
+        if (pivotHighs.Count < 2 || pivotLows.Count < 2)
+        {
+            return null;
+        }
+
+        var highDirection = pivotHighs[^1].CompareTo(pivotHighs[^2]);
+        var lowDirection = pivotLows[^1].CompareTo(pivotLows[^2]);
+        if (highDirection == 0 || lowDirection == 0)
+        {
+            return PriceStructure.Flat;
+        }
+
+        if (highDirection > 0 && lowDirection > 0)
+        {
+            return PriceStructure.HigherHighHigherLow;
+        }
+
+        if (highDirection < 0 && lowDirection < 0)
+        {
+            return PriceStructure.LowerHighLowerLow;
+        }
+
+        return PriceStructure.Mixed;
     }
 
     private static string Format(decimal? value) =>

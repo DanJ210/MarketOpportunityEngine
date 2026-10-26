@@ -130,6 +130,14 @@ public enum VwapSlopeDirection
     Insufficient
 }
 
+public enum PriceStructure
+{
+    HigherHighHigherLow,
+    LowerHighLowerLow,
+    Mixed,
+    Flat
+}
+
 public enum MarketDataHealthStatus
 {
     Connecting,
@@ -161,6 +169,7 @@ public sealed record FeatureSnapshot(
     decimal? SessionHighPrice,
     decimal? SessionLowPrice,
     decimal? SessionRangePositionPercent,
+    PriceStructure? SessionPriceStructure,
     decimal? FastEma,
     decimal? MediumEma,
     decimal? FastMediumEmaSpreadPercent,
@@ -228,8 +237,8 @@ public sealed record Opportunity(
 
 public sealed record ScannerConfiguration
 {
-    public string Version { get; init; } = "scanner-config-v9";
-    public string FeatureSetVersion { get; init; } = "features-v9";
+    public string Version { get; init; } = "scanner-config-v10";
+    public string FeatureSetVersion { get; init; } = "features-v10";
     public string SetupDefinitionVersion { get; init; } = "momentum-continuation-v1";
     public int MaximumStateEvents { get; init; } = 10_000;
     public int MomentumWindowSeconds { get; init; } = 60;

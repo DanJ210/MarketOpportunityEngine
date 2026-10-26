@@ -3,6 +3,7 @@ using MarketOpportunity.Domain;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace MarketOpportunity.UnitTests;
 
@@ -504,12 +505,256 @@ public sealed class ScannerReplayTests
     public void Changed_configuration_version_creates_distinct_feature_and_opportunity_identities()
     {
         var firstConfiguration = new ScannerConfiguration();
-        var changedConfiguration = firstConfiguration with { Version = "scanner-config-v10" };
+        var changedConfiguration = firstConfiguration with { Version = "scanner-config-v11" };
         var first = Replay(GoldenEvents(), firstConfiguration);
         var changed = Replay(GoldenEvents(), changedConfiguration);
 
         Assert.NotEqual(first.Features.Id, changed.Features.Id);
         Assert.NotEqual(first.Opportunity.Id, changed.Opportunity.Id);
+    }
+
+    [Fact]
+    public void Session_structure_classifies_higher_lower_mixed_and_flat_confirmed_swings()
+    {
+        var rising = CalculateStructureFeatures(CreateStructureTrades(
+            [1.5m, 1m, 5m, 3m, 2m, 4m, 3m, 7m, 5m, 4m, 6m, 5m]));
+        var falling = CalculateStructureFeatures(CreateStructureTrades(
+            [5m, 6m, 7m, 6m, 3m, 4m, 5m, 4m, 2m, 1m, 3m, 5m]));
+        var mixed = CalculateStructureFeatures(CreateStructureTrades(
+            [5m, 6m, 7m, 5m, 4m, 6m, 5m, 8m, 4m, 3m, 1m, 4m, 3m]));
+        var flat = CalculateStructureFeatures(CreateStructureTrades(
+            [1.5m, 1m, 5m, 3m, 2m, 4m, 3m, 5m, 5m, 4m, 6m, 5m]));
+        var exactIncrease = CalculateStructureFeatures(CreateStructureTrades(
+            [1.5m, 1m, 5m, 3m, 2m, 4m, 3m, 5.0000000000000000000000000001m, 5m, 4m, 6m, 5m]));
+
+        Assert.Equal(PriceStructure.HigherHighHigherLow, rising.SessionPriceStructure);
+        Assert.Equal(PriceStructure.LowerHighLowerLow, falling.SessionPriceStructure);
+        Assert.Equal(PriceStructure.Mixed, mixed.SessionPriceStructure);
+        Assert.Equal(PriceStructure.Flat, flat.SessionPriceStructure);
+        Assert.Equal(PriceStructure.HigherHighHigherLow, exactIncrease.SessionPriceStructure);
+    }
+
+    [Fact]
+    public void Session_structure_requires_two_confirmed_pivots_and_confirms_after_two_later_trades()
+    {
+        var trades = CreateStructureTrades([1.5m, 1m, 5m, 3m, 2m, 4m, 3m, 7m, 5m, 4m, 6m, 5m]);
+        var beforeConfirmation = CalculateStructureFeatures(trades, trades[9].EventTimeUtc);
+        var afterOneConfirmationTrade = CalculateStructureFeatures(trades, trades[10].EventTimeUtc);
+        var atSecondConfirmationTrade = CalculateStructureFeatures(trades, trades[11].EventTimeUtc);
+        var justBeforeSecondConfirmationTrade =
+            CalculateStructureFeatures(trades, trades[11].EventTimeUtc.AddTicks(-1));
+
+        Assert.Null(beforeConfirmation.SessionPriceStructure);
+        Assert.Null(afterOneConfirmationTrade.SessionPriceStructure);
+        Assert.Null(justBeforeSecondConfirmationTrade.SessionPriceStructure);
+        Assert.Equal(PriceStructure.HigherHighHigherLow, atSecondConfirmationTrade.SessionPriceStructure);
+        Assert.Equal(TimeSpan.FromSeconds(20), trades[11].EventTimeUtc - trades[9].EventTimeUtc);
+
+        Assert.Null(CalculateStructureFeatures(CreateStructureTrades([100m])).SessionPriceStructure);
+        Assert.Null(CalculateStructureFeatures(CreateStructureTrades([100m, 101m, 100m, 102m]))
+            .SessionPriceStructure);
+    }
+
+    [Fact]
+    public void Session_structure_uses_inclusive_as_of_and_canonical_order_not_time_spacing_or_receive_time()
+    {
+        var prices = new[] { 1.5m, 1m, 5m, 3m, 2m, 4m, 3m, 7m, 5m, 4m, 6m, 5m };
+        var trades = CreateStructureTrades(prices, equalTimestamps: true);
+        var baseline = CalculateStructureFeatures(trades);
+        var reordered = CalculateStructureFeatures(trades
+            .Reverse()
+            .Select((trade, index) => trade with
+            {
+                ReceivedTimeUtc = AsOfUtc.AddYears(index + 1)
+            })
+            .ToArray());
+        var timeSpaced = CalculateStructureFeatures(trades
+            .Select((trade, index) => trade with
+            {
+                EventTimeUtc = AsOfUtc.AddSeconds(-((trades.Length - index) * (trades.Length - index) * 3))
+            })
+            .ToArray());
+
+        Assert.Equal(PriceStructure.HigherHighHigherLow, baseline.SessionPriceStructure);
+        Assert.Equal(baseline, reordered);
+        Assert.Equal(baseline.SessionPriceStructure, timeSpaced.SessionPriceStructure);
+
+        var state = new SymbolEventState(Symbol, SessionId, 20);
+        foreach (var trade in trades)
+        {
+            Assert.True(state.Add(trade));
+        }
+
+        Assert.False(state.Add(trades[0] with
+        {
+            Price = 900m,
+            Size = -1,
+            ReceivedTimeUtc = AsOfUtc.AddYears(2)
+        }));
+        Assert.Equal(baseline, _calculator.Calculate(state, AsOfUtc, new ScannerConfiguration()));
+    }
+
+    [Fact]
+    public void Session_structure_ignores_trade_size_and_quotes_and_isolated_states_remain_independent()
+    {
+        var prices = new[] { 1.5m, 1m, 5m, 3m, 2m, 4m, 3m, 7m, 5m, 4m, 6m, 5m };
+        var trades = CreateStructureTrades(prices);
+        var baseline = CalculateStructureFeatures(trades);
+        var changedSizes = CalculateStructureFeatures(trades
+            .Select((trade, index) => trade with { Size = index % 2 == 0 ? 0 : -100 })
+            .ToArray());
+        var quotedState = new SymbolEventState(Symbol, SessionId, 100);
+        foreach (var trade in trades)
+        {
+            quotedState.Add(trade);
+        }
+
+        quotedState.Add(new QuoteEvent(
+            Symbol, SessionId, AsOfUtc, AsOfUtc, "Fixture", "structure-extreme-quote",
+            100_000m, 100_001m, -1, 0));
+        var withQuote = _calculator.Calculate(quotedState, AsOfUtc, new ScannerConfiguration());
+        var otherSession = CalculateStructureFeatures(
+            CreateStructureTrades([5m, 6m, 7m, 6m, 3m, 4m, 5m, 4m, 2m, 1m, 3m, 5m],
+                sessionId: "structure-other-session"));
+        var otherSymbol = CalculateStructureFeatures(
+            CreateStructureTrades([5m, 6m, 7m, 5m, 4m, 6m, 5m, 8m, 4m, 3m, 1m, 4m, 3m],
+                symbol: "SILVER"));
+
+        Assert.Equal(PriceStructure.HigherHighHigherLow, baseline.SessionPriceStructure);
+        Assert.Equal(baseline.SessionPriceStructure, changedSizes.SessionPriceStructure);
+        Assert.Equal(baseline.SessionPriceStructure, withQuote.SessionPriceStructure);
+        Assert.Equal(PriceStructure.LowerHighLowerLow, otherSession.SessionPriceStructure);
+        Assert.Equal(PriceStructure.Mixed, otherSymbol.SessionPriceStructure);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Session_structure_is_null_when_any_eligible_trade_price_is_non_positive(int invalidPriceValue)
+    {
+        var invalidPrice = (decimal)invalidPriceValue;
+        var validTrades = CreateStructureTrades([1.5m, 1m, 5m, 3m, 2m, 4m, 3m, 7m, 5m, 4m, 6m, 5m]);
+        var invalid = validTrades
+            .Append(validTrades[0] with
+            {
+                SequenceId = $"invalid-structure-{invalidPrice}",
+                EventTimeUtc = AsOfUtc,
+                Price = invalidPrice
+            })
+            .ToArray();
+        var invalidFeature = CalculateStructureFeatures(invalid);
+        var futureInvalidFeature = CalculateStructureFeatures(
+            [.. validTrades, validTrades[0] with
+            {
+                SequenceId = "future-invalid-structure",
+                EventTimeUtc = AsOfUtc.AddTicks(1),
+                Price = invalidPrice
+            }]);
+
+        Assert.Null(invalidFeature.SessionPriceStructure);
+        Assert.Equal(PriceStructure.HigherHighHigherLow, futureInvalidFeature.SessionPriceStructure);
+        Assert.Equal(CalculateStructureFeatures(validTrades), futureInvalidFeature);
+    }
+
+    [Fact]
+    public void Session_structure_uses_partial_retained_trades_after_future_arrival_evicts_eligible_state()
+    {
+        var configuration = new ScannerConfiguration { MaximumStateEvents = 12 };
+        var trades = CreateStructureTrades([1.5m, 1m, 5m, 3m, 2m, 4m, 3m, 7m, 5m, 4m, 6m, 5m]);
+        var state = new SymbolEventState(Symbol, SessionId, configuration.MaximumStateEvents);
+        foreach (var trade in trades)
+        {
+            state.Add(trade);
+        }
+
+        var complete = _calculator.Calculate(state, AsOfUtc, configuration);
+        state.Add(new TradeEvent(
+            Symbol, SessionId, AsOfUtc.AddTicks(1), AsOfUtc.AddTicks(1),
+            "Fixture", "future-evicts-structure", 10_000m, 1));
+        var retainedPartial = _calculator.Calculate(state, AsOfUtc, configuration);
+
+        Assert.True(complete.HasCompleteSessionData);
+        Assert.Equal(PriceStructure.HigherHighHigherLow, complete.SessionPriceStructure);
+        Assert.False(retainedPartial.HasCompleteSessionData);
+        Assert.Null(retainedPartial.SessionPriceStructure);
+    }
+
+    [Fact]
+    public void Session_structure_json_round_trips_null_and_values_and_never_changes_opportunity_output()
+    {
+        var configuration = new ScannerConfiguration();
+        var result = Replay(GoldenEvents(), configuration);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var serializedNull = JsonSerializer.Serialize(result.Features, options);
+        var nullRoundTrip = JsonSerializer.Deserialize<FeatureSnapshot>(serializedNull, options);
+        Assert.Equal(result.Features, nullRoundTrip);
+        using (var json = JsonDocument.Parse(serializedNull))
+        {
+            Assert.Equal(JsonValueKind.Null,
+                json.RootElement.GetProperty("sessionPriceStructure").ValueKind);
+        }
+
+        var populated = result.Features with
+        {
+            SessionPriceStructure = PriceStructure.HigherHighHigherLow
+        };
+        var populatedJson = JsonSerializer.Serialize(populated, options);
+        Assert.Equal(populated, JsonSerializer.Deserialize<FeatureSnapshot>(populatedJson, options));
+        using (var json = JsonDocument.Parse(populatedJson))
+        {
+            Assert.Equal((int)PriceStructure.HigherHighHigherLow,
+                json.RootElement.GetProperty("sessionPriceStructure").GetInt32());
+        }
+        var apiOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        apiOptions.Converters.Add(new JsonStringEnumConverter());
+        var apiJson = JsonSerializer.Serialize(populated, apiOptions);
+        using (var json = JsonDocument.Parse(apiJson))
+        {
+            Assert.Equal("HigherHighHigherLow",
+                json.RootElement.GetProperty("sessionPriceStructure").GetString());
+        }
+        Assert.Equal(populated, JsonSerializer.Deserialize<FeatureSnapshot>(apiJson, apiOptions));
+
+        var baselineOpportunityJson = JsonSerializer.Serialize(result.Opportunity, options);
+        foreach (var structure in new PriceStructure?[]
+        {
+            null,
+            PriceStructure.HigherHighHigherLow,
+            PriceStructure.LowerHighLowerLow,
+            PriceStructure.Mixed,
+            PriceStructure.Flat
+        })
+        {
+            var opportunity = _detector.Evaluate(
+                result.Features with { SessionPriceStructure = structure },
+                configuration);
+            Assert.Equal(baselineOpportunityJson, JsonSerializer.Serialize(opportunity, options));
+        }
+    }
+
+    [Fact]
+    public void Session_structure_participates_explicitly_in_deterministic_feature_identity()
+    {
+        var configuration = new ScannerConfiguration
+        {
+            EmaFastPeriod = 100,
+            EmaMediumPeriod = 101
+        };
+        var risingPrices = new[] { 1.5m, 1m, 5m, 3m, 2m, 4m, 3m, 7m, 5m, 4m, 6m, 5m };
+        var fallingPrices = new[] { 5m, 6m, 7m, 6m, 3m, 4m, 5m, 4m, 2m, 1m, 3m, 5m };
+        var rising = CalculateStructureFeatures(
+            CreateStructureTrades(risingPrices, firstEventTimeUtc: AsOfUtc.AddSeconds(-120), interval: TimeSpan.FromSeconds(1), size: 0),
+            configuration: configuration);
+        var falling = CalculateStructureFeatures(
+            CreateStructureTrades(fallingPrices, firstEventTimeUtc: AsOfUtc.AddSeconds(-120), interval: TimeSpan.FromSeconds(1), size: 0),
+            configuration: configuration);
+
+        Assert.Equal(PriceStructure.HigherHighHigherLow, rising.SessionPriceStructure);
+        Assert.Equal(PriceStructure.LowerHighLowerLow, falling.SessionPriceStructure);
+        Assert.NotEqual(rising.Id, falling.Id);
+        Assert.Equal(
+            rising with { Id = Guid.Empty, SessionPriceStructure = null },
+            falling with { Id = Guid.Empty, SessionPriceStructure = null });
     }
 
     [Theory]
@@ -882,15 +1127,15 @@ public sealed class ScannerReplayTests
         Assert.Equal(100m, document.RootElement.GetProperty("sessionLowPrice").GetDecimal());
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("sessionRangePositionPercent").ValueKind);
         Assert.Equal(features, JsonSerializer.Deserialize<FeatureSnapshot>(json, jsonOptions));
-        Assert.Equal("features-v9", features.FeatureSetVersion);
-        Assert.Equal("scanner-config-v9", configuration.Version);
+        Assert.Equal("features-v10", features.FeatureSetVersion);
+        Assert.Equal("scanner-config-v10", configuration.Version);
         Assert.Equal("momentum-continuation-v1", configuration.SetupDefinitionVersion);
 
         var values = new[]
         {
             Symbol, SessionId, AsOfUtc.UtcDateTime.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
             configuration.FeatureSetVersion, "100", "100", "100", "0",
-            "100", "0", "Flat", "0", "0", "0", "100", "100", "100", "100", "", "", "", "", "", "", "0",
+            "100", "0", "Flat", "0", "0", "0", "100", "100", "100", "100", "", "", "", "", "", "", "", "0",
             "True", "True", "True", "True", "Good",
             JsonSerializer.Serialize(MarketDataCapabilities.Unknown)
         };
@@ -898,7 +1143,7 @@ public sealed class ScannerReplayTests
             string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
             string.Join("\u001f", values));
         Assert.Equal(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(identity)).AsSpan(0, 16)), features.Id);
-        foreach (var index in new[] { 15, 16, 17, 18, 19, 20, 21, 22, 23 })
+        foreach (var index in new[] { 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 })
         {
             foreach (var value in new[] { "101", "102" })
             {
@@ -1353,6 +1598,25 @@ public sealed class ScannerReplayTests
         string sessionId = "ema-session") =>
         CalculateEmaFeatures(CreateEmaTrades(prices, symbol, sessionId), configuration);
 
+    private FeatureSnapshot CalculateStructureFeatures(
+        IReadOnlyList<TradeEvent> trades,
+        DateTimeOffset? asOfUtc = null,
+        int maximumEvents = 1000,
+        ScannerConfiguration? configuration = null)
+    {
+        var firstTrade = trades.FirstOrDefault();
+        var state = new SymbolEventState(
+            firstTrade?.Symbol ?? Symbol,
+            firstTrade?.SessionId ?? SessionId,
+            maximumEvents);
+        foreach (var trade in trades)
+        {
+            state.Add(trade);
+        }
+
+        return _calculator.Calculate(state, asOfUtc ?? AsOfUtc, configuration ?? new ScannerConfiguration());
+    }
+
     private FeatureSnapshot CalculateEmaFeatures(
         IReadOnlyList<MarketEvent> events,
         ScannerConfiguration configuration)
@@ -1365,6 +1629,28 @@ public sealed class ScannerReplayTests
         }
 
         return _calculator.Calculate(state, AsOfUtc, configuration);
+    }
+
+    private static TradeEvent[] CreateStructureTrades(
+        IReadOnlyList<decimal> prices,
+        string symbol = Symbol,
+        string sessionId = SessionId,
+        bool equalTimestamps = false,
+        DateTimeOffset? firstEventTimeUtc = null,
+        TimeSpan? interval = null,
+        long size = 10)
+    {
+        var firstTime = firstEventTimeUtc ?? AsOfUtc.AddSeconds(-120);
+        var spacing = interval ?? TimeSpan.FromSeconds(10);
+        return prices.Select((price, index) => new TradeEvent(
+            symbol,
+            sessionId,
+            equalTimestamps ? AsOfUtc : firstTime.AddTicks(spacing.Ticks * index),
+            AsOfUtc.AddSeconds(index),
+            "Fixture",
+            $"structure-{index:D3}",
+            price,
+            size)).ToArray();
     }
 
     private static TradeEvent[] CreateEmaTrades(

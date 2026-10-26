@@ -175,6 +175,7 @@ public sealed class OpportunityPublicationGateTests
             null,
             null,
             null,
+            null,
             TimeSpan.Zero,
             true,
             true,
