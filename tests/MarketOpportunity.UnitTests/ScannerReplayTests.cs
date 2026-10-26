@@ -505,7 +505,7 @@ public sealed class ScannerReplayTests
     public void Changed_configuration_version_creates_distinct_feature_and_opportunity_identities()
     {
         var firstConfiguration = new ScannerConfiguration();
-        var changedConfiguration = firstConfiguration with { Version = "scanner-config-v11" };
+        var changedConfiguration = firstConfiguration with { Version = "scanner-config-v12" };
         var first = Replay(GoldenEvents(), firstConfiguration);
         var changed = Replay(GoldenEvents(), changedConfiguration);
 
@@ -755,6 +755,240 @@ public sealed class ScannerReplayTests
         Assert.Equal(
             rising with { Id = Guid.Empty, SessionPriceStructure = null },
             falling with { Id = Guid.Empty, SessionPriceStructure = null });
+    }
+
+    [Fact]
+    public void Adx_uses_exact_wilder_trade_point_initialization_and_smoothing()
+    {
+        var configuration = new ScannerConfiguration { TrendStrengthPeriod = 2 };
+        var rising = CalculateAdxFeatures([10m, 11m, 12m, 13m], configuration);
+        var falling = CalculateAdxFeatures([13m, 12m, 11m, 10m], configuration);
+        var flat = CalculateAdxFeatures([10m, 10m, 10m, 10m], configuration);
+        var alternating = CalculateAdxFeatures([10m, 12m, 10m, 12m], configuration);
+        var smoothed = CalculateAdxFeatures([10m, 12m, 10m, 12m, 14m], configuration);
+
+        Assert.Equal(100m, rising.SessionAdx);
+        Assert.Equal(AdxStatus.Available, rising.SessionAdxStatus);
+        Assert.Equal(100m, falling.SessionAdx);
+        Assert.Equal(AdxStatus.Available, falling.SessionAdxStatus);
+        Assert.Equal(0m, flat.SessionAdx);
+        Assert.Equal(25m, alternating.SessionAdx);
+        Assert.Equal(50m, smoothed.SessionAdx);
+    }
+
+    [Theory]
+    [InlineData(2, 3, 4)]
+    [InlineData(14, 27, 28)]
+    public void Adx_first_value_requires_two_periods_of_price_observations(
+        int period,
+        int insufficientCount,
+        int warmCount)
+    {
+        var configuration = new ScannerConfiguration { TrendStrengthPeriod = period };
+        var insufficient = CalculateAdxFeatures(
+            Enumerable.Repeat(100m, insufficientCount).ToArray(), configuration);
+        var warmed = CalculateAdxFeatures(
+            Enumerable.Repeat(100m, warmCount).ToArray(), configuration);
+
+        Assert.Null(insufficient.SessionAdx);
+        Assert.Equal(AdxStatus.Insufficient, insufficient.SessionAdxStatus);
+        Assert.Equal(0m, warmed.SessionAdx);
+        Assert.Equal(AdxStatus.Available, warmed.SessionAdxStatus);
+    }
+
+    [Fact]
+    public void Adx_is_session_wide_inclusive_at_as_of_and_excludes_future_trades()
+    {
+        var configuration = new ScannerConfiguration { TrendStrengthPeriod = 2 };
+        var trades = CreateAdxTrades(
+            [10m, 11m, 12m, 13m],
+            firstEventTimeUtc: AsOfUtc.AddDays(-1));
+        var state = CreateAdxState(trades);
+        state.Add(new TradeEvent(
+            Symbol, SessionId, AsOfUtc.AddTicks(1), AsOfUtc.AddDays(-1),
+            "Fixture", "after-as-of", 500m, 100));
+
+        var features = _calculator.Calculate(state, AsOfUtc, configuration);
+        var withoutFuture = CalculateAdxFeatures(trades, configuration);
+
+        Assert.Equal(100m, features.SessionAdx);
+        Assert.Equal(AdxStatus.Available, features.SessionAdxStatus);
+        Assert.Equal(withoutFuture, features);
+    }
+
+    [Fact]
+    public void Adx_uses_canonical_equal_time_order_and_ignores_receive_time_and_first_duplicate_conflicts()
+    {
+        var configuration = new ScannerConfiguration { TrendStrengthPeriod = 2 };
+        var trades = CreateAdxTrades([10m, 12m, 10m, 12m], equalTimestamps: true);
+        var baseline = CalculateAdxFeatures(trades, configuration);
+        var reordered = CalculateAdxFeatures(
+            trades.Reverse().Select(trade => trade with { ReceivedTimeUtc = AsOfUtc.AddDays(1) }).ToArray(),
+            configuration);
+        var duplicateState = CreateAdxState(trades);
+        Assert.False(duplicateState.Add(trades[1] with { Price = 500m, ReceivedTimeUtc = AsOfUtc.AddDays(2) }));
+        var withConflictingDuplicate = _calculator.Calculate(duplicateState, AsOfUtc, configuration);
+
+        Assert.Equal(25m, baseline.SessionAdx);
+        Assert.Equal(baseline, reordered);
+        Assert.Equal(baseline, withConflictingDuplicate);
+    }
+
+    [Fact]
+    public void Adx_ignores_quotes_and_trade_sizes_but_rejects_any_non_positive_eligible_price()
+    {
+        var configuration = new ScannerConfiguration { TrendStrengthPeriod = 2 };
+        var valid = CreateAdxTrades([10m, 11m, 12m, 13m])
+            .Select(trade => trade with { Size = 0 })
+            .Cast<MarketEvent>()
+            .Append(new QuoteEvent(
+                Symbol, SessionId, AsOfUtc, AsOfUtc, "Fixture", "invalid-quote",
+                -100m, 0m, -1, -1))
+            .ToArray();
+        var sizeAndQuoteFeatures = CalculateAdxFeatures(valid, configuration);
+        var withInvalidPrices = CalculateAdxFeatures(
+            [.. CreateAdxTrades([10m, 11m, 12m, 13m]),
+             CreateAdxTrades([0m], firstEventTimeUtc: AsOfUtc)[0] with { SequenceId = "invalid-zero-price" }],
+            configuration);
+        var withNegativePrice = CalculateAdxFeatures(
+            [.. CreateAdxTrades([10m, 11m, 12m, 13m]),
+             CreateAdxTrades([-1m], firstEventTimeUtc: AsOfUtc)[0] with { SequenceId = "invalid-negative-price" }],
+            configuration);
+        var empty = CalculateAdxFeatures(Array.Empty<MarketEvent>(), configuration);
+
+        Assert.Equal(100m, sizeAndQuoteFeatures.SessionAdx);
+        Assert.Equal(AdxStatus.Available, sizeAndQuoteFeatures.SessionAdxStatus);
+        Assert.Null(withInvalidPrices.SessionAdx);
+        Assert.Equal(AdxStatus.InvalidPriceData, withInvalidPrices.SessionAdxStatus);
+        Assert.Null(withNegativePrice.SessionAdx);
+        Assert.Equal(AdxStatus.InvalidPriceData, withNegativePrice.SessionAdxStatus);
+        Assert.Null(empty.SessionAdx);
+        Assert.Equal(AdxStatus.Insufficient, empty.SessionAdxStatus);
+    }
+
+    [Fact]
+    public void Adx_isolated_by_symbol_and_explicit_session()
+    {
+        var configuration = new ScannerConfiguration { TrendStrengthPeriod = 2 };
+        var rising = CalculateAdxFeatures([10m, 11m, 12m, 13m], configuration, Symbol, "rising");
+        var falling = CalculateAdxFeatures([13m, 12m, 11m, 10m], configuration, Symbol, "falling");
+        var otherSymbol = CalculateAdxFeatures([13m, 12m, 11m, 10m], configuration, "SILVER", "rising");
+
+        Assert.Equal(100m, rising.SessionAdx);
+        Assert.Equal(100m, falling.SessionAdx);
+        Assert.Equal(100m, otherSymbol.SessionAdx);
+        Assert.NotEqual(rising.Id, falling.Id);
+        Assert.NotEqual(rising.Id, otherSymbol.Id);
+    }
+
+    [Fact]
+    public void Adx_future_arrival_can_evict_eligible_history_and_make_the_historical_value_partial()
+    {
+        var configuration = new ScannerConfiguration { TrendStrengthPeriod = 2 };
+        var state = CreateAdxState(
+            CreateAdxTrades([10m, 11m, 12m, 13m]),
+            maximumEvents: 4);
+        var complete = _calculator.Calculate(state, AsOfUtc, configuration);
+        state.Add(new TradeEvent(
+            Symbol, SessionId, AsOfUtc.AddTicks(1), AsOfUtc,
+            "Fixture", "future-evicts-eligible", 14m, 1));
+        var partial = _calculator.Calculate(state, AsOfUtc, configuration);
+
+        Assert.Equal(100m, complete.SessionAdx);
+        Assert.True(complete.HasCompleteSessionData);
+        Assert.Null(partial.SessionAdx);
+        Assert.Equal(AdxStatus.Insufficient, partial.SessionAdxStatus);
+        Assert.False(partial.HasCompleteSessionData);
+        Assert.NotEqual(complete.Id, partial.Id);
+    }
+
+    [Fact]
+    public void Adx_json_round_trips_null_and_values_and_is_detector_neutral()
+    {
+        var configuration = new ScannerConfiguration();
+        var result = Replay(GoldenEvents(), configuration);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var nullJson = JsonSerializer.Serialize(result.Features, options);
+        Assert.Equal(result.Features, JsonSerializer.Deserialize<FeatureSnapshot>(nullJson, options));
+        using (var document = JsonDocument.Parse(nullJson))
+        {
+            Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("sessionAdx").ValueKind);
+            Assert.Equal((int)AdxStatus.Insufficient,
+                document.RootElement.GetProperty("sessionAdxStatus").GetInt32());
+        }
+
+        var populated = result.Features with
+        {
+            SessionAdx = 50m,
+            SessionAdxStatus = AdxStatus.Available
+        };
+        var populatedJson = JsonSerializer.Serialize(populated, options);
+        Assert.Equal(populated, JsonSerializer.Deserialize<FeatureSnapshot>(populatedJson, options));
+        using (var document = JsonDocument.Parse(populatedJson))
+        {
+            Assert.Equal(50m, document.RootElement.GetProperty("sessionAdx").GetDecimal());
+            Assert.Equal((int)AdxStatus.Available,
+                document.RootElement.GetProperty("sessionAdxStatus").GetInt32());
+        }
+
+        var apiOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        apiOptions.Converters.Add(new JsonStringEnumConverter());
+        using (var document = JsonDocument.Parse(JsonSerializer.Serialize(populated, apiOptions)))
+        {
+            Assert.Equal("Available", document.RootElement.GetProperty("sessionAdxStatus").GetString());
+        }
+
+        var baselineJson = JsonSerializer.Serialize(result.Opportunity, options);
+        foreach (var (value, status) in new (decimal?, AdxStatus)[]
+        {
+            (null, AdxStatus.Insufficient),
+            (null, AdxStatus.InvalidPriceData),
+            (25m, AdxStatus.Available),
+            (100m, AdxStatus.Available)
+        })
+        {
+            var opportunity = _detector.Evaluate(
+                result.Features with { SessionAdx = value, SessionAdxStatus = status },
+                configuration);
+            Assert.Equal(baselineJson, JsonSerializer.Serialize(opportunity, options));
+        }
+    }
+
+    [Fact]
+    public void Adx_output_and_configuration_period_participate_in_deterministic_feature_identity()
+    {
+        var configuration = new ScannerConfiguration
+        {
+            TrendStrengthPeriod = 2,
+            EmaFastPeriod = 100,
+            EmaMediumPeriod = 101
+        };
+        var first = CalculateAdxFeatures(
+            CreateAdxTrades([10m, 12m, 10m, 12m, 10m], size: 0), configuration);
+        var changed = CalculateAdxFeatures(
+            CreateAdxTrades([10m, 12m, 10m, 11m, 10m], size: 0), configuration);
+        var changedPeriod = CalculateAdxFeatures(
+            CreateAdxTrades([10m, 12m, 10m, 12m, 10m], size: 0),
+            configuration with { TrendStrengthPeriod = 3 });
+
+        Assert.Equal(25m, first.SessionAdx);
+        Assert.Equal(18.333333333333333333333333335m, changed.SessionAdx);
+        Assert.NotEqual(first.Id, changed.Id);
+        Assert.Equal(
+            first with { Id = Guid.Empty, SessionAdx = null, SessionAdxStatus = AdxStatus.Insufficient },
+            changed with { Id = Guid.Empty, SessionAdx = null, SessionAdxStatus = AdxStatus.Insufficient });
+        Assert.NotEqual(first.Id, changedPeriod.Id);
+        Assert.Equal(AdxStatus.Insufficient, changedPeriod.SessionAdxStatus);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Adx_period_must_be_positive(int period)
+    {
+        var configuration = new ScannerConfiguration { TrendStrengthPeriod = period };
+
+        Assert.Throws<InvalidOperationException>(configuration.Validate);
     }
 
     [Theory]
@@ -1127,15 +1361,16 @@ public sealed class ScannerReplayTests
         Assert.Equal(100m, document.RootElement.GetProperty("sessionLowPrice").GetDecimal());
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("sessionRangePositionPercent").ValueKind);
         Assert.Equal(features, JsonSerializer.Deserialize<FeatureSnapshot>(json, jsonOptions));
-        Assert.Equal("features-v10", features.FeatureSetVersion);
-        Assert.Equal("scanner-config-v10", configuration.Version);
+        Assert.Equal("features-v11", features.FeatureSetVersion);
+        Assert.Equal("scanner-config-v11", configuration.Version);
         Assert.Equal("momentum-continuation-v1", configuration.SetupDefinitionVersion);
 
         var values = new[]
         {
             Symbol, SessionId, AsOfUtc.UtcDateTime.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
             configuration.FeatureSetVersion, "100", "100", "100", "0",
-            "100", "0", "Flat", "0", "0", "0", "100", "100", "100", "100", "", "", "", "", "", "", "", "0",
+            "100", "0", "Flat", "0", "0", "0", "100", "100", "100", "100",
+            "", "", "", "Insufficient", "", "", "", "", "", "0",
             "True", "True", "True", "True", "Good",
             JsonSerializer.Serialize(MarketDataCapabilities.Unknown)
         };
@@ -1143,7 +1378,7 @@ public sealed class ScannerReplayTests
             string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
             string.Join("\u001f", values));
         Assert.Equal(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(identity)).AsSpan(0, 16)), features.Id);
-        foreach (var index in new[] { 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 })
+        foreach (var index in new[] { 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26 })
         {
             foreach (var value in new[] { "101", "102" })
             {
@@ -1615,6 +1850,58 @@ public sealed class ScannerReplayTests
         }
 
         return _calculator.Calculate(state, asOfUtc ?? AsOfUtc, configuration ?? new ScannerConfiguration());
+    }
+
+    private FeatureSnapshot CalculateAdxFeatures(
+        decimal[] prices,
+        ScannerConfiguration configuration,
+        string symbol = Symbol,
+        string sessionId = SessionId) =>
+        CalculateAdxFeatures(CreateAdxTrades(prices, symbol, sessionId), configuration, symbol, sessionId);
+
+    private FeatureSnapshot CalculateAdxFeatures(
+        IReadOnlyList<MarketEvent> events,
+        ScannerConfiguration configuration,
+        string symbol = Symbol,
+        string sessionId = SessionId)
+    {
+        var state = CreateAdxState(events, symbol, sessionId);
+        return _calculator.Calculate(state, AsOfUtc, configuration);
+    }
+
+    private static SymbolEventState CreateAdxState(
+        IReadOnlyList<MarketEvent> events,
+        string symbol = Symbol,
+        string sessionId = SessionId,
+        int maximumEvents = 1000)
+    {
+        var state = new SymbolEventState(symbol, sessionId, maximumEvents);
+        foreach (var marketEvent in events)
+        {
+            state.Add(marketEvent);
+        }
+
+        return state;
+    }
+
+    private static TradeEvent[] CreateAdxTrades(
+        IReadOnlyList<decimal> prices,
+        string symbol = Symbol,
+        string sessionId = SessionId,
+        bool equalTimestamps = false,
+        DateTimeOffset? firstEventTimeUtc = null,
+        long size = 10)
+    {
+        var firstTime = firstEventTimeUtc ?? AsOfUtc.AddSeconds(-10 * (prices.Count - 1));
+        return prices.Select((price, index) => new TradeEvent(
+            symbol,
+            sessionId,
+            equalTimestamps ? AsOfUtc : firstTime.AddSeconds(index * 10),
+            AsOfUtc,
+            "Fixture",
+            $"adx-{index:D3}",
+            price,
+            size)).ToArray();
     }
 
     private FeatureSnapshot CalculateEmaFeatures(

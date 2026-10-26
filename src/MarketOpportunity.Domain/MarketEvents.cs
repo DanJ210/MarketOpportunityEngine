@@ -138,6 +138,13 @@ public enum PriceStructure
     Flat
 }
 
+public enum AdxStatus
+{
+    Available,
+    Insufficient,
+    InvalidPriceData
+}
+
 public enum MarketDataHealthStatus
 {
     Connecting,
@@ -170,6 +177,8 @@ public sealed record FeatureSnapshot(
     decimal? SessionLowPrice,
     decimal? SessionRangePositionPercent,
     PriceStructure? SessionPriceStructure,
+    decimal? SessionAdx,
+    AdxStatus SessionAdxStatus,
     decimal? FastEma,
     decimal? MediumEma,
     decimal? FastMediumEmaSpreadPercent,
@@ -237,14 +246,15 @@ public sealed record Opportunity(
 
 public sealed record ScannerConfiguration
 {
-    public string Version { get; init; } = "scanner-config-v10";
-    public string FeatureSetVersion { get; init; } = "features-v10";
+    public string Version { get; init; } = "scanner-config-v11";
+    public string FeatureSetVersion { get; init; } = "features-v11";
     public string SetupDefinitionVersion { get; init; } = "momentum-continuation-v1";
     public int MaximumStateEvents { get; init; } = 10_000;
     public int MomentumWindowSeconds { get; init; } = 60;
     public int SecondaryMomentumWindowSeconds { get; init; } = 30;
     public int EmaFastPeriod { get; init; } = 5;
     public int EmaMediumPeriod { get; init; } = 20;
+    public int TrendStrengthPeriod { get; init; } = 14;
     public int MaximumQuoteAgeSeconds { get; init; } = 15;
     public int MaximumLiveFeedStalenessSeconds { get; init; } = 30;
     public decimal MaximumSpreadBasisPoints { get; init; } = 25m;
@@ -268,6 +278,7 @@ public sealed record ScannerConfiguration
             || SecondaryMomentumWindowSeconds >= MomentumWindowSeconds
             || EmaFastPeriod < 1
             || EmaMediumPeriod <= EmaFastPeriod
+            || TrendStrengthPeriod < 1
             || MaximumQuoteAgeSeconds < 0
             || MaximumLiveFeedStalenessSeconds < 1
             || MaximumSpreadBasisPoints <= 0

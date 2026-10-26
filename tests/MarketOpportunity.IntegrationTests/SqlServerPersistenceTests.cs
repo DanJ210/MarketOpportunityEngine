@@ -22,7 +22,8 @@ public sealed class SqlServerPersistenceTests
         {
             Version = $"it-config-{token}",
             FeatureSetVersion = $"it-features-{token}",
-            SetupDefinitionVersion = $"it-setup-{token}"
+            SetupDefinitionVersion = $"it-setup-{token}",
+            TrendStrengthPeriod = 2
         };
         var changedConfiguration = firstConfiguration with
         {
@@ -126,6 +127,9 @@ public sealed class SqlServerPersistenceTests
             Assert.Equal(JsonValueKind.Null, originalJson.RootElement.GetProperty("sessionPriceStructure").ValueKind);
             Assert.Equal(JsonValueKind.Null, originalJson.RootElement.GetProperty("fastEma").ValueKind);
             Assert.Equal(JsonValueKind.Null, originalJson.RootElement.GetProperty("mediumEma").ValueKind);
+            Assert.Equal(100m, originalJson.RootElement.GetProperty("sessionAdx").GetDecimal());
+            Assert.Equal((int)AdxStatus.Available,
+                originalJson.RootElement.GetProperty("sessionAdxStatus").GetInt32());
             var changedFeatures = Assert.Single(storedFeatures, item => item.Id == changedInput.Features.Id);
             using var changedJson = JsonDocument.Parse(changedFeatures.SnapshotJson);
             Assert.Equal(800, changedJson.RootElement.GetProperty("sessionCumulativeVolume").GetInt64());
@@ -138,6 +142,10 @@ public sealed class SqlServerPersistenceTests
             Assert.Equal(12m, changedJson.RootElement.GetProperty("fastEmaSlopePerMinute").GetDecimal());
             Assert.Equal(JsonValueKind.Null, changedJson.RootElement.GetProperty("mediumEma").ValueKind);
             Assert.Equal(JsonValueKind.Null, changedJson.RootElement.GetProperty("sessionPriceStructure").ValueKind);
+            Assert.Equal(57.14285714285714285714285714m,
+                changedJson.RootElement.GetProperty("sessionAdx").GetDecimal());
+            Assert.Equal((int)AdxStatus.Available,
+                changedJson.RootElement.GetProperty("sessionAdxStatus").GetInt32());
             Assert.Equal(first.Features, JsonSerializer.Deserialize<FeatureSnapshot>(
                 originalFeatures.SnapshotJson, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
             Assert.DoesNotContain(storedFeatures, item => item.Id == conflictingAnalysis.Features.Id);

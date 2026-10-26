@@ -172,6 +172,8 @@ public sealed class OpportunityPublicationGateTests
             null,
             null,
             null,
+            AdxStatus.Insufficient,
+            null,
             null,
             null,
             null,

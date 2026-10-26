@@ -139,6 +139,10 @@ public sealed class FeatureCalculator
                     * 100m
                 : null;
         var sessionPriceStructure = CalculatePriceStructure(trades, hasValidSessionPrices);
+        var (sessionAdx, sessionAdxStatus) = CalculateAdx(
+            trades,
+            configuration.TrendStrengthPeriod,
+            hasValidSessionPrices);
 
         var emaPricesAreValid = trades.Length > 0 && trades.All(trade => trade.Price > 0);
         var (fastEma, fastEmaSlopePerMinute) = CalculateEma(
@@ -278,6 +282,8 @@ public sealed class FeatureCalculator
             Format(sessionLowPrice),
             Format(sessionRangePositionPercent),
             sessionPriceStructure?.ToString() ?? "",
+            Format(sessionAdx),
+            sessionAdxStatus.ToString(),
             Format(fastEma),
             Format(mediumEma),
             Format(fastMediumEmaSpreadPercent),
@@ -321,6 +327,8 @@ public sealed class FeatureCalculator
             sessionLowPrice,
             sessionRangePositionPercent,
             sessionPriceStructure,
+            sessionAdx,
+            sessionAdxStatus,
             fastEma,
             mediumEma,
             fastMediumEmaSpreadPercent,
@@ -334,6 +342,97 @@ public sealed class FeatureCalculator
             quality,
             marketData);
     }
+
+    private static (decimal? Value, AdxStatus Status) CalculateAdx(
+        IReadOnlyList<TradeEvent> trades,
+        int period,
+        bool pricesAreValid)
+    {
+        if (trades.Count == 0)
+        {
+            return (null, AdxStatus.Insufficient);
+        }
+
+        if (!pricesAreValid)
+        {
+            return (null, AdxStatus.InvalidPriceData);
+        }
+
+        decimal? smoothedTrueRange = null;
+        decimal smoothedPositiveMovement = 0m;
+        decimal smoothedNegativeMovement = 0m;
+        decimal initialAdx = 0m;
+        decimal? adx = null;
+        var movementCount = 0;
+        var dxCount = 0;
+        var previousPrice = trades[0].Price;
+
+        for (var index = 1; index < trades.Count; index++)
+        {
+            var price = trades[index].Price;
+            var priceChange = price - previousPrice;
+            var positiveMovement = priceChange > 0m ? priceChange : 0m;
+            var negativeMovement = priceChange < 0m ? -priceChange : 0m;
+            var trueRange = Math.Abs(priceChange);
+            movementCount++;
+
+            if (movementCount <= period)
+            {
+                smoothedTrueRange = UpdateAverage(smoothedTrueRange ?? 0m, trueRange, movementCount);
+                smoothedPositiveMovement =
+                    UpdateAverage(smoothedPositiveMovement, positiveMovement, movementCount);
+                smoothedNegativeMovement =
+                    UpdateAverage(smoothedNegativeMovement, negativeMovement, movementCount);
+            }
+            else
+            {
+                smoothedTrueRange = UpdateWilderAverage(smoothedTrueRange!.Value, trueRange, period);
+                smoothedPositiveMovement =
+                    UpdateWilderAverage(smoothedPositiveMovement, positiveMovement, period);
+                smoothedNegativeMovement =
+                    UpdateWilderAverage(smoothedNegativeMovement, negativeMovement, period);
+            }
+
+            if (movementCount >= period)
+            {
+                var positiveIndex = smoothedTrueRange is > 0m
+                    ? smoothedPositiveMovement / smoothedTrueRange.Value * 100m
+                    : 0m;
+                var negativeIndex = smoothedTrueRange is > 0m
+                    ? smoothedNegativeMovement / smoothedTrueRange.Value * 100m
+                    : 0m;
+                var directionalIndexSum = positiveIndex + negativeIndex;
+                var dx = directionalIndexSum == 0m
+                    ? 0m
+                    : Math.Abs(positiveIndex - negativeIndex) / directionalIndexSum * 100m;
+                dxCount++;
+                if (adx.HasValue)
+                {
+                    adx = UpdateWilderAverage(adx.Value, dx, period);
+                }
+                else
+                {
+                    initialAdx = UpdateAverage(initialAdx, dx, dxCount);
+                    if (dxCount == period)
+                    {
+                        adx = initialAdx;
+                    }
+                }
+            }
+
+            previousPrice = price;
+        }
+
+        return adx.HasValue
+            ? (adx.Value, AdxStatus.Available)
+            : (null, AdxStatus.Insufficient);
+    }
+
+    private static decimal UpdateAverage(decimal average, decimal value, int count) =>
+        average + (value - average) / count;
+
+    private static decimal UpdateWilderAverage(decimal average, decimal value, int period) =>
+        average + (value - average) / period;
 
     private static (decimal? Value, decimal? SlopePerMinute) CalculateEma(
         IReadOnlyList<TradeEvent> trades,
