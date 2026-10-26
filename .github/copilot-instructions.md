@@ -1,6 +1,6 @@
 # MarketOpportunityEngine Copilot Instructions
 
-Treat [the master specification](../Market_Opportunity_Engine_Final_Master_Spec.md) as the product and architecture source of truth. Check the current implementation and [README](../README.md) before proposing or changing behavior; do not mistake roadmap items for permission to build them now.
+Treat [the master specification](../Market_Opportunity_Engine_Final_Master_Spec.md) as the product and architecture source of truth. Before each Milestone A slice, read [README](../README.md) and [PROJECT_STATUS](../PROJECT_STATUS.md), and inspect the current implementation. Use the status document as current-state and validation evidence, not as authorization to expand scope; do not mistake roadmap items for permission to build them now.
 
 ## Scope and technology
 
@@ -25,8 +25,10 @@ Treat [the master specification](../Market_Opportunity_Engine_Final_Master_Spec.
 ## Implementation and validation
 
 - Inspect existing patterns and tests before editing. Make focused changes, preserve unrelated work, and update directly affected documentation.
-- Add or update unit tests for analytical behavior, event ordering, duplicates, bounded state, vetoes, and future-event exclusion. Test setup logic without a web server, database, network, or Azure.
-- Use SQL Server for persistence integration tests; do not substitute an in-memory or other database provider for SQL behavior. Keep unit tests runnable without SQL Server and report clearly when database-dependent verification is unavailable.
+- For analytical slices, update affected test fixtures when snapshot or configuration shapes change, including positional constructors and identity/serialization assertions. Derive expected values independently from the canonical ordered eligible inputs, and keep test helper symbol/session/configuration identities aligned with the scenario.
+- Add or update unit tests for analytical behavior, event ordering, duplicates, bounded state, vetoes, and future-event exclusion. Test setup logic without a web server, database, network, or Azure; run focused replay tests before broader validation.
+- Use SQL Server for persistence integration tests; do not substitute an in-memory or other database provider for SQL behavior. Follow the README's guarded SQL test procedure and the current validation evidence in PROJECT_STATUS: confirm the configured connection targets a dedicated test database before running SQL tests. If setup or connection validation fails before tests execute, report SQL coverage as not run/unavailable, not as a test pass or test failure.
+- Run builds, tests, and app-host verification sequentially rather than concurrently. If output files are locked, identify the owning process and stop only processes started for the current verification before retrying; do not overwrite, kill, or clean up unrelated processes.
 - Run the smallest relevant tests, then build the solution. For end-to-end changes, verify the running ASP.NET Core/Blazor app and its persisted results, not just compilation.
 - Use the documented commands in [README](../README.md). Never commit secrets or expose provider credentials to browser code; use local-only development configuration and Azure Key Vault for deployed secrets.
 - Do not claim a strategy is profitable or present a quality score as a calibrated probability. No real-money order placement is in scope.
