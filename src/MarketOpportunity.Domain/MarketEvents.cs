@@ -145,6 +145,13 @@ public enum AdxStatus
     InvalidPriceData
 }
 
+public enum RealizedVolatilityStatus
+{
+    Available,
+    Insufficient,
+    InvalidPriceData
+}
+
 public enum TrendDirectionContext
 {
     Bullish,
@@ -189,6 +196,8 @@ public sealed record FeatureSnapshot(
     PriceStructure? SessionPriceStructure,
     decimal? SessionAdx,
     AdxStatus SessionAdxStatus,
+    decimal? SessionRealizedVolatilityPercent,
+    RealizedVolatilityStatus SessionRealizedVolatilityStatus,
     TrendDirectionContext SessionTrendDirection,
     decimal? FastEma,
     decimal? MediumEma,
@@ -257,8 +266,8 @@ public sealed record Opportunity(
 
 public sealed record ScannerConfiguration
 {
-    public string Version { get; init; } = "scanner-config-v12";
-    public string FeatureSetVersion { get; init; } = "features-v12";
+    public string Version { get; init; } = "scanner-config-v13";
+    public string FeatureSetVersion { get; init; } = "features-v13";
     public string SetupDefinitionVersion { get; init; } = "momentum-continuation-v1";
     public int MaximumStateEvents { get; init; } = 10_000;
     public int MomentumWindowSeconds { get; init; } = 60;

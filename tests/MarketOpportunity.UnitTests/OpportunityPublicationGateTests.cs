@@ -173,6 +173,8 @@ public sealed class OpportunityPublicationGateTests
             null,
             null,
             AdxStatus.Insufficient,
+            null,
+            RealizedVolatilityStatus.Insufficient,
             TrendDirectionContext.Insufficient,
             null,
             null,

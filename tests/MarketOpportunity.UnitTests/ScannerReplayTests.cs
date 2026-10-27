@@ -690,6 +690,8 @@ public sealed class ScannerReplayTests
             {
                 Id = Guid.Empty,
                 SessionTrendDirection = TrendDirectionContext.Insufficient,
+                SessionRealizedVolatilityPercent = null,
+                SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Insufficient,
                 FastEma = null,
                 MediumEma = null,
                 FastMediumEmaSpreadPercent = null,
@@ -700,6 +702,8 @@ public sealed class ScannerReplayTests
             {
                 Id = Guid.Empty,
                 SessionTrendDirection = TrendDirectionContext.Insufficient,
+                SessionRealizedVolatilityPercent = null,
+                SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Insufficient,
                 FastEma = null,
                 MediumEma = null,
                 FastMediumEmaSpreadPercent = null,
@@ -712,7 +716,7 @@ public sealed class ScannerReplayTests
     public void Changed_configuration_version_creates_distinct_feature_and_opportunity_identities()
     {
         var firstConfiguration = new ScannerConfiguration();
-        var changedConfiguration = firstConfiguration with { Version = "scanner-config-v13" };
+        var changedConfiguration = firstConfiguration with { Version = "scanner-config-v14" };
         var first = Replay(GoldenEvents(), firstConfiguration);
         var changed = Replay(GoldenEvents(), changedConfiguration);
 
@@ -964,12 +968,16 @@ public sealed class ScannerReplayTests
             {
                 Id = Guid.Empty,
                 SessionPriceStructure = null,
+                SessionRealizedVolatilityPercent = null,
+                SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Insufficient,
                 SessionTrendDirection = TrendDirectionContext.Insufficient
             },
             falling with
             {
                 Id = Guid.Empty,
                 SessionPriceStructure = null,
+                SessionRealizedVolatilityPercent = null,
+                SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Insufficient,
                 SessionTrendDirection = TrendDirectionContext.Insufficient
             });
     }
@@ -991,6 +999,159 @@ public sealed class ScannerReplayTests
         Assert.Equal(0m, flat.SessionAdx);
         Assert.Equal(25m, alternating.SessionAdx);
         Assert.Equal(50m, smoothed.SessionAdx);
+    }
+
+    [Fact]
+    public void Session_realized_volatility_uses_full_retained_trade_point_log_returns()
+    {
+        var configuration = new ScannerConfiguration();
+        var rising = CalculateAdxFeatures([100m, 110m], configuration);
+        var falling = CalculateAdxFeatures([100m, 90m], configuration);
+        var unchanged = CalculateAdxFeatures([100m, 100m, 100m], configuration);
+        var sizeAndQuoteIndependent = CalculateAdxFeatures(
+            CreateAdxTrades([100m, 110m])
+                .Select(trade => trade with { Size = 0 })
+                .Cast<MarketEvent>()
+                .Append(new QuoteEvent(
+                    Symbol, SessionId, AsOfUtc, AsOfUtc, "Fixture", "volatility-quote",
+                    1_000m, 1_001m, 0, 0))
+                .ToArray(),
+            configuration);
+
+        Assert.Equal(9.531017980m, rising.SessionRealizedVolatilityPercent);
+        Assert.Equal(RealizedVolatilityStatus.Available, rising.SessionRealizedVolatilityStatus);
+        Assert.Equal(10.536051566m, falling.SessionRealizedVolatilityPercent);
+        Assert.Equal(RealizedVolatilityStatus.Available, falling.SessionRealizedVolatilityStatus);
+        Assert.Equal(0m, unchanged.SessionRealizedVolatilityPercent);
+        Assert.Equal(RealizedVolatilityStatus.Available, unchanged.SessionRealizedVolatilityStatus);
+        Assert.Equal(rising.SessionRealizedVolatilityPercent, sizeAndQuoteIndependent.SessionRealizedVolatilityPercent);
+    }
+
+    [Fact]
+    public void Session_realized_volatility_distinguishes_empty_insufficient_and_invalid_prices()
+    {
+        var configuration = new ScannerConfiguration();
+        var empty = CalculateAdxFeatures(Array.Empty<MarketEvent>(), configuration);
+        var oneTrade = CalculateAdxFeatures([100m], configuration);
+        var zeroPrice = CalculateAdxFeatures([100m, 0m, 110m], configuration);
+        var negativePrice = CalculateAdxFeatures([100m, -1m, 110m], configuration);
+
+        Assert.Null(empty.SessionRealizedVolatilityPercent);
+        Assert.Equal(RealizedVolatilityStatus.Insufficient, empty.SessionRealizedVolatilityStatus);
+        Assert.Null(oneTrade.SessionRealizedVolatilityPercent);
+        Assert.Equal(RealizedVolatilityStatus.Insufficient, oneTrade.SessionRealizedVolatilityStatus);
+        Assert.Null(zeroPrice.SessionRealizedVolatilityPercent);
+        Assert.Equal(RealizedVolatilityStatus.InvalidPriceData, zeroPrice.SessionRealizedVolatilityStatus);
+        Assert.Null(negativePrice.SessionRealizedVolatilityPercent);
+        Assert.Equal(RealizedVolatilityStatus.InvalidPriceData, negativePrice.SessionRealizedVolatilityStatus);
+    }
+
+    [Fact]
+    public void Session_realized_volatility_uses_canonical_equal_time_order_and_ignores_duplicates_future_and_receive_time()
+    {
+        var configuration = new ScannerConfiguration();
+        var trades = CreateAdxTrades([100m, 110m, 100m], equalTimestamps: true);
+        var baseline = CalculateAdxFeatures(trades, configuration);
+        var reordered = CalculateAdxFeatures(
+            trades.Reverse().Select(trade => trade with { ReceivedTimeUtc = AsOfUtc.AddYears(1) })
+                .Cast<MarketEvent>().ToArray(),
+            configuration);
+        var state = CreateAdxState(trades);
+        Assert.False(state.Add(trades[1] with { Price = 500m, ReceivedTimeUtc = AsOfUtc.AddYears(2) }));
+        state.Add(new TradeEvent(
+            Symbol,
+            SessionId,
+            AsOfUtc.AddTicks(1),
+            AsOfUtc.AddDays(-1),
+            "Fixture",
+            "future-volatility",
+            0m,
+            10));
+        var withDuplicateAndFuture = _calculator.Calculate(state, AsOfUtc, configuration);
+
+        Assert.Equal(13.478894891m, baseline.SessionRealizedVolatilityPercent);
+        Assert.Equal(baseline, reordered);
+        Assert.Equal(baseline, withDuplicateAndFuture);
+    }
+
+    [Fact]
+    public void Session_realized_volatility_reports_retained_partial_state_after_bounded_eviction()
+    {
+        var trades = CreateAdxTrades([100m, 110m, 121m]);
+        var completeState = CreateAdxState(trades, maximumEvents: 3);
+        var partialState = CreateAdxState(trades, maximumEvents: 2);
+
+        var complete = _calculator.Calculate(completeState, AsOfUtc, new ScannerConfiguration());
+        var partial = _calculator.Calculate(partialState, AsOfUtc, new ScannerConfiguration());
+
+        Assert.Equal(13.478894891m, complete.SessionRealizedVolatilityPercent);
+        Assert.Equal(RealizedVolatilityStatus.Available, complete.SessionRealizedVolatilityStatus);
+        Assert.True(complete.HasCompleteSessionData);
+        Assert.Equal(9.531017980m, partial.SessionRealizedVolatilityPercent);
+        Assert.Equal(RealizedVolatilityStatus.Available, partial.SessionRealizedVolatilityStatus);
+        Assert.False(partial.HasCompleteSessionData);
+    }
+
+    [Fact]
+    public void Session_realized_volatility_isolated_by_symbol_and_explicit_session()
+    {
+        var firstSession = CalculateAdxFeatures([100m, 110m], new ScannerConfiguration(), Symbol, "session-one");
+        var secondSession = CalculateAdxFeatures([100m, 90m], new ScannerConfiguration(), Symbol, "session-two");
+        var otherSymbol = CalculateAdxFeatures([100m, 100m], new ScannerConfiguration(), "SILVER", "session-one");
+
+        Assert.Equal(9.531017980m, firstSession.SessionRealizedVolatilityPercent);
+        Assert.Equal(10.536051566m, secondSession.SessionRealizedVolatilityPercent);
+        Assert.Equal(0m, otherSymbol.SessionRealizedVolatilityPercent);
+        Assert.NotEqual(firstSession.Id, secondSession.Id);
+        Assert.NotEqual(firstSession.Id, otherSymbol.Id);
+    }
+
+    [Fact]
+    public void Session_realized_volatility_json_round_trips_and_does_not_change_detector_output()
+    {
+        var configuration = new ScannerConfiguration();
+        var populated = CalculateAdxFeatures([100m, 110m], configuration);
+        var empty = CalculateAdxFeatures(Array.Empty<MarketEvent>(), configuration);
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var json = JsonSerializer.Serialize(populated, jsonOptions);
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(9.531017980m,
+            document.RootElement.GetProperty("sessionRealizedVolatilityPercent").GetDecimal());
+        Assert.Equal((int)RealizedVolatilityStatus.Available,
+            document.RootElement.GetProperty("sessionRealizedVolatilityStatus").GetInt32());
+        Assert.Equal(populated, JsonSerializer.Deserialize<FeatureSnapshot>(json, jsonOptions));
+
+        var apiOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        apiOptions.Converters.Add(new JsonStringEnumConverter());
+        using var apiDocument = JsonDocument.Parse(JsonSerializer.Serialize(populated, apiOptions));
+        Assert.Equal("Available",
+            apiDocument.RootElement.GetProperty("sessionRealizedVolatilityStatus").GetString());
+        using var emptyDocument = JsonDocument.Parse(JsonSerializer.Serialize(empty, jsonOptions));
+        Assert.Equal(JsonValueKind.Null,
+            emptyDocument.RootElement.GetProperty("sessionRealizedVolatilityPercent").ValueKind);
+        Assert.Equal((int)RealizedVolatilityStatus.Insufficient,
+            emptyDocument.RootElement.GetProperty("sessionRealizedVolatilityStatus").GetInt32());
+        Assert.Equal(empty,
+            JsonSerializer.Deserialize<FeatureSnapshot>(emptyDocument.RootElement, jsonOptions));
+
+        var opportunity = Replay(GoldenEvents(), configuration);
+        var serializedOpportunity = JsonSerializer.Serialize(opportunity.Opportunity);
+        foreach (var (value, status) in new (decimal?, RealizedVolatilityStatus)[]
+        {
+            (null, RealizedVolatilityStatus.Insufficient),
+            (null, RealizedVolatilityStatus.InvalidPriceData),
+            (0m, RealizedVolatilityStatus.Available),
+            (9.531017980m, RealizedVolatilityStatus.Available)
+        })
+        {
+            var changed = opportunity.Features with
+            {
+                SessionRealizedVolatilityPercent = value,
+                SessionRealizedVolatilityStatus = status
+            };
+            Assert.Equal(serializedOpportunity,
+                JsonSerializer.Serialize(_detector.Evaluate(changed, configuration)));
+        }
     }
 
     [Theory]
@@ -1192,8 +1353,22 @@ public sealed class ScannerReplayTests
         Assert.Equal(18.333333333333333333333333335m, changed.SessionAdx);
         Assert.NotEqual(first.Id, changed.Id);
         Assert.Equal(
-            first with { Id = Guid.Empty, SessionAdx = null, SessionAdxStatus = AdxStatus.Insufficient },
-            changed with { Id = Guid.Empty, SessionAdx = null, SessionAdxStatus = AdxStatus.Insufficient });
+            first with
+            {
+                Id = Guid.Empty,
+                SessionAdx = null,
+                SessionAdxStatus = AdxStatus.Insufficient,
+                SessionRealizedVolatilityPercent = null,
+                SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Insufficient
+            },
+            changed with
+            {
+                Id = Guid.Empty,
+                SessionAdx = null,
+                SessionAdxStatus = AdxStatus.Insufficient,
+                SessionRealizedVolatilityPercent = null,
+                SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Insufficient
+            });
         Assert.NotEqual(first.Id, changedPeriod.Id);
         Assert.Equal(AdxStatus.Insufficient, changedPeriod.SessionAdxStatus);
     }
@@ -1577,9 +1752,12 @@ public sealed class ScannerReplayTests
         Assert.Equal(100m, document.RootElement.GetProperty("sessionHighPrice").GetDecimal());
         Assert.Equal(100m, document.RootElement.GetProperty("sessionLowPrice").GetDecimal());
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("sessionRangePositionPercent").ValueKind);
+        Assert.Equal(0m, document.RootElement.GetProperty("sessionRealizedVolatilityPercent").GetDecimal());
+        Assert.Equal((int)RealizedVolatilityStatus.Available,
+            document.RootElement.GetProperty("sessionRealizedVolatilityStatus").GetInt32());
         Assert.Equal(features, JsonSerializer.Deserialize<FeatureSnapshot>(json, jsonOptions));
-        Assert.Equal("features-v12", features.FeatureSetVersion);
-        Assert.Equal("scanner-config-v12", configuration.Version);
+        Assert.Equal("features-v13", features.FeatureSetVersion);
+        Assert.Equal("scanner-config-v13", configuration.Version);
         Assert.Equal("momentum-continuation-v1", configuration.SetupDefinitionVersion);
 
         var values = new[]
@@ -1587,7 +1765,7 @@ public sealed class ScannerReplayTests
             Symbol, SessionId, AsOfUtc.UtcDateTime.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
             configuration.FeatureSetVersion, "100", "100", "100", "0",
             "100", "0", "Flat", "0", "0", "0", "100", "100", "100", "100",
-            "", "", "", "Insufficient", "Neutral", "", "", "", "", "", "0",
+            "", "", "", "Insufficient", "0", "Available", "Neutral", "", "", "", "", "", "0",
             "True", "True", "True", "True", "Good",
             JsonSerializer.Serialize(MarketDataCapabilities.Unknown)
         };
@@ -1595,7 +1773,7 @@ public sealed class ScannerReplayTests
             string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
             string.Join("\u001f", values));
         Assert.Equal(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(identity)).AsSpan(0, 16)), features.Id);
-        foreach (var index in new[] { 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27 })
+        foreach (var index in new[] { 15, 16, 17, 18, 20, 22, 25, 26, 27, 28, 29 })
         {
             foreach (var value in new[] { "101", "102" })
             {
@@ -1607,10 +1785,28 @@ public sealed class ScannerReplayTests
                 Assert.NotEqual(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(changedIdentity)).AsSpan(0, 16)), features.Id);
             }
         }
-        foreach (var value in Enum.GetNames<TrendDirectionContext>().Where(value => value != "Neutral"))
+        foreach (var value in new[] { "", "1", "2" })
         {
             var changedValues = values.ToArray();
             changedValues[22] = value;
+            var changedIdentity = string.Join("\u001f", JsonSerializer.Serialize(configuration),
+                string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
+                string.Join("\u001f", changedValues));
+            Assert.NotEqual(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(changedIdentity)).AsSpan(0, 16)), features.Id);
+        }
+        foreach (var value in Enum.GetNames<RealizedVolatilityStatus>().Where(value => value != "Available"))
+        {
+            var changedValues = values.ToArray();
+            changedValues[23] = value;
+            var changedIdentity = string.Join("\u001f", JsonSerializer.Serialize(configuration),
+                string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
+                string.Join("\u001f", changedValues));
+            Assert.NotEqual(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(changedIdentity)).AsSpan(0, 16)), features.Id);
+        }
+        foreach (var value in Enum.GetNames<TrendDirectionContext>().Where(value => value != "Neutral"))
+        {
+            var changedValues = values.ToArray();
+            changedValues[24] = value;
             var changedIdentity = string.Join("\u001f", JsonSerializer.Serialize(configuration),
                 string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
                 string.Join("\u001f", changedValues));

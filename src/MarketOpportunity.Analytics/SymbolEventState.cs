@@ -143,6 +143,8 @@ public sealed class FeatureCalculator
             trades,
             configuration.TrendStrengthPeriod,
             hasValidSessionPrices);
+        var (sessionRealizedVolatilityPercent, sessionRealizedVolatilityStatus) =
+            CalculateSessionRealizedVolatility(trades, hasValidSessionPrices);
 
         var emaPricesAreValid = trades.Length > 0 && trades.All(trade => trade.Price > 0);
         var (fastEma, fastEmaSlopePerMinute) = CalculateEma(
@@ -295,6 +297,8 @@ public sealed class FeatureCalculator
             sessionPriceStructure?.ToString() ?? "",
             Format(sessionAdx),
             sessionAdxStatus.ToString(),
+            Format(sessionRealizedVolatilityPercent),
+            sessionRealizedVolatilityStatus.ToString(),
             sessionTrendDirection.ToString(),
             Format(fastEma),
             Format(mediumEma),
@@ -341,6 +345,8 @@ public sealed class FeatureCalculator
             sessionPriceStructure,
             sessionAdx,
             sessionAdxStatus,
+            sessionRealizedVolatilityPercent,
+            sessionRealizedVolatilityStatus,
             sessionTrendDirection,
             fastEma,
             mediumEma,
@@ -439,6 +445,41 @@ public sealed class FeatureCalculator
         return adx.HasValue
             ? (adx.Value, AdxStatus.Available)
             : (null, AdxStatus.Insufficient);
+    }
+
+    private static (decimal? Value, RealizedVolatilityStatus Status) CalculateSessionRealizedVolatility(
+        IReadOnlyList<TradeEvent> trades,
+        bool pricesAreValid)
+    {
+        if (trades.Count == 0)
+        {
+            return (null, RealizedVolatilityStatus.Insufficient);
+        }
+
+        if (!pricesAreValid)
+        {
+            return (null, RealizedVolatilityStatus.InvalidPriceData);
+        }
+
+        if (trades.Count < 2)
+        {
+            return (null, RealizedVolatilityStatus.Insufficient);
+        }
+
+        var sumSquaredLogReturns = 0d;
+        var previousPrice = (double)trades[0].Price;
+        for (var index = 1; index < trades.Count; index++)
+        {
+            var price = (double)trades[index].Price;
+            var logReturn = Math.Log(price / previousPrice);
+            sumSquaredLogReturns += logReturn * logReturn;
+            previousPrice = price;
+        }
+
+        var volatilityPercent = Math.Sqrt(sumSquaredLogReturns) * 100d;
+        return (
+            decimal.Round((decimal)volatilityPercent, 9, MidpointRounding.ToEven),
+            RealizedVolatilityStatus.Available);
     }
 
     private static decimal UpdateAverage(decimal average, decimal value, int count) =>
