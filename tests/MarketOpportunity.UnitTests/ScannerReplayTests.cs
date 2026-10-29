@@ -31,10 +31,14 @@ public sealed class ScannerReplayTests
         Assert.Equal(3m, first.Features.ShortHorizonReturnPercent);
         Assert.Equal(3m, first.Features.SecondaryHorizonReturnPercent);
         Assert.Equal(100, first.Features.ShortHorizonVolume);
+        Assert.Equal(10_200m, first.Features.ShortHorizonDollarVolumeUsd);
+        Assert.Equal(ShortHorizonDollarVolumeStatus.Available, first.Features.ShortHorizonDollarVolumeStatus);
         Assert.Equal(100, first.Features.SessionCumulativeVolume);
         Assert.Equal(103m, first.Features.SessionHighPrice);
         Assert.Equal(100m, first.Features.SessionLowPrice);
-        Assert.Equal(OpportunityClassification.ProbableLong, first.Opportunity.Classification);
+        Assert.Equal(OpportunityClassification.AvoidNoTrade, first.Opportunity.Classification);
+        Assert.Contains("ExcessiveRealizedVolatility", first.Opportunity.ActiveVetoes);
+        Assert.Contains("InsufficientDollarVolume", first.Opportunity.ActiveVetoes);
         Assert.Equal(100, first.Opportunity.QualityScore);
         Assert.Equal(first.Features, second.Features);
         Assert.Equal(first.Opportunity.Id, second.Opportunity.Id);
@@ -716,7 +720,7 @@ public sealed class ScannerReplayTests
     public void Changed_configuration_version_creates_distinct_feature_and_opportunity_identities()
     {
         var firstConfiguration = new ScannerConfiguration();
-        var changedConfiguration = firstConfiguration with { Version = "scanner-config-v14" };
+        var changedConfiguration = firstConfiguration with { Version = "scanner-config-v16" };
         var first = Replay(GoldenEvents(), firstConfiguration);
         var changed = Replay(GoldenEvents(), changedConfiguration);
 
@@ -1107,6 +1111,172 @@ public sealed class ScannerReplayTests
     }
 
     [Fact]
+    public void Short_horizon_dollar_volume_uses_the_inclusive_event_time_window_and_canonical_trades()
+    {
+        var configuration = new ScannerConfiguration();
+        var boundary = new TradeEvent(
+            Symbol, SessionId, AsOfUtc.AddSeconds(-configuration.MomentumWindowSeconds),
+            AsOfUtc.AddYears(1), "B", "dollar-boundary", 4m, 5);
+        var older = new TradeEvent(
+            Symbol, SessionId, AsOfUtc.AddSeconds(-configuration.MomentumWindowSeconds).AddTicks(-1),
+            AsOfUtc, "Fixture", "dollar-older", 999m, 999);
+        var firstAtAsOf = new TradeEvent(
+            Symbol, SessionId, AsOfUtc, AsOfUtc.AddYears(1), "A", "dollar-a", 1.10m, 7);
+        var secondAtAsOf = new TradeEvent(
+            Symbol, SessionId, AsOfUtc, AsOfUtc.AddYears(-1), "Z", "dollar-z", 2.25m, 3);
+        var quote = new QuoteEvent(
+            Symbol, SessionId, AsOfUtc, AsOfUtc.AddYears(1), "Fixture", "dollar-quote",
+            1_000m, 1_001m, 1_000_000, 1_000_000);
+        var future = new TradeEvent(
+            Symbol, SessionId, AsOfUtc.AddTicks(1), AsOfUtc.AddYears(-1),
+            "Fixture", "dollar-future", 999m, 999);
+        var events = new MarketEvent[] { boundary, older, secondAtAsOf, quote, firstAtAsOf, future };
+        var state = CreateAdxState(events);
+        Assert.False(state.Add(firstAtAsOf with { Price = 500m, Size = 500 }));
+        var baseline = _calculator.Calculate(state, AsOfUtc, configuration);
+        var reordered = _calculator.Calculate(
+            CreateAdxState(events.Reverse().Select(marketEvent => marketEvent switch
+            {
+                TradeEvent trade => (MarketEvent)(trade with { ReceivedTimeUtc = AsOfUtc.AddDays(2) }),
+                QuoteEvent receivedQuote => receivedQuote with { ReceivedTimeUtc = AsOfUtc.AddDays(2) },
+                _ => throw new InvalidOperationException()
+            }).ToArray()),
+            AsOfUtc,
+            configuration);
+
+        Assert.Equal(34.45m, baseline.ShortHorizonDollarVolumeUsd);
+        Assert.Equal(ShortHorizonDollarVolumeStatus.Available, baseline.ShortHorizonDollarVolumeStatus);
+        Assert.Equal(baseline.ShortHorizonDollarVolumeUsd, reordered.ShortHorizonDollarVolumeUsd);
+        Assert.Equal(baseline.Id, reordered.Id);
+    }
+
+    [Fact]
+    public void Short_horizon_dollar_volume_reports_empty_single_invalid_and_overflow_inputs()
+    {
+        var configuration = new ScannerConfiguration();
+        var empty = CalculateDollarVolumeFeatures(
+        [
+            new TradeEvent(Symbol, SessionId, AsOfUtc.AddSeconds(-61), AsOfUtc, "Fixture", "outside", 10m, 1),
+            new TradeEvent(Symbol, SessionId, AsOfUtc.AddTicks(1), AsOfUtc, "Fixture", "future", 10m, 1)
+        ], configuration);
+        var oneTrade = CalculateDollarVolumeFeatures(
+            [new TradeEvent(Symbol, SessionId, AsOfUtc, AsOfUtc, "Fixture", "single", 12.5m, 2)],
+            configuration);
+        var invalidCases = new[]
+        {
+            new TradeEvent(Symbol, SessionId, AsOfUtc, AsOfUtc, "Fixture", "zero-price", 0m, 2),
+            new TradeEvent(Symbol, SessionId, AsOfUtc, AsOfUtc, "Fixture", "negative-price", -1m, 2),
+            new TradeEvent(Symbol, SessionId, AsOfUtc, AsOfUtc, "Fixture", "zero-size", 10m, 0),
+            new TradeEvent(Symbol, SessionId, AsOfUtc, AsOfUtc, "Fixture", "negative-size", 10m, -1)
+        };
+
+        Assert.Null(empty.ShortHorizonDollarVolumeUsd);
+        Assert.Equal(ShortHorizonDollarVolumeStatus.Insufficient, empty.ShortHorizonDollarVolumeStatus);
+        Assert.Equal(25m, oneTrade.ShortHorizonDollarVolumeUsd);
+        Assert.Equal(ShortHorizonDollarVolumeStatus.Available, oneTrade.ShortHorizonDollarVolumeStatus);
+        foreach (var invalidTrade in invalidCases)
+        {
+            var result = CalculateDollarVolumeFeatures(
+                [
+                    new TradeEvent(Symbol, SessionId, AsOfUtc.AddSeconds(-1), AsOfUtc,
+                        "Fixture", "valid-trade", 10m, 1),
+                    invalidTrade
+                ], configuration);
+            Assert.Null(result.ShortHorizonDollarVolumeUsd);
+            Assert.Equal(ShortHorizonDollarVolumeStatus.InvalidTradeData, result.ShortHorizonDollarVolumeStatus);
+        }
+
+        var olderInvalid = CalculateDollarVolumeFeatures(
+        [
+            new TradeEvent(Symbol, SessionId, AsOfUtc.AddSeconds(-61), AsOfUtc, "Fixture", "old-invalid", 0m, 0),
+            new TradeEvent(Symbol, SessionId, AsOfUtc, AsOfUtc, "Fixture", "current-valid", 10m, 1)
+        ], configuration);
+        Assert.Equal(10m, olderInvalid.ShortHorizonDollarVolumeUsd);
+        Assert.Equal(ShortHorizonDollarVolumeStatus.Available, olderInvalid.ShortHorizonDollarVolumeStatus);
+
+        Assert.Throws<OverflowException>(() => CalculateDollarVolumeFeatures(
+            [new TradeEvent(Symbol, SessionId, AsOfUtc, AsOfUtc, "Fixture", "overflow", decimal.MaxValue, 2)],
+            configuration));
+    }
+
+    [Fact]
+    public void Short_horizon_dollar_volume_isolated_by_symbol_and_explicit_session()
+    {
+        var firstSession = CalculateDollarVolumeFeatures(
+            [new TradeEvent(Symbol, "dollar-session-one", AsOfUtc, AsOfUtc, "Fixture", "one", 10m, 2)],
+            new ScannerConfiguration(),
+            Symbol,
+            "dollar-session-one");
+        var secondSession = CalculateDollarVolumeFeatures(
+            [new TradeEvent(Symbol, "dollar-session-two", AsOfUtc, AsOfUtc, "Fixture", "two", 100m, 3)],
+            new ScannerConfiguration(),
+            Symbol,
+            "dollar-session-two");
+        var otherSymbol = CalculateDollarVolumeFeatures(
+            [new TradeEvent("SILVER", SessionId, AsOfUtc, AsOfUtc, "Fixture", "silver", 7m, 5)],
+            new ScannerConfiguration(),
+            "SILVER",
+            SessionId);
+
+        Assert.Equal(20m, firstSession.ShortHorizonDollarVolumeUsd);
+        Assert.Equal(300m, secondSession.ShortHorizonDollarVolumeUsd);
+        Assert.Equal(35m, otherSymbol.ShortHorizonDollarVolumeUsd);
+        Assert.NotEqual(firstSession.Id, secondSession.Id);
+        Assert.NotEqual(firstSession.Id, otherSymbol.Id);
+    }
+
+    [Fact]
+    public void Short_horizon_dollar_volume_reports_only_retained_values_after_bounded_eviction()
+    {
+        var state = new SymbolEventState(Symbol, SessionId, 2);
+        state.Add(new TradeEvent(Symbol, SessionId, AsOfUtc.AddSeconds(-30), AsOfUtc, "Fixture", "retained-1", 10m, 1));
+        state.Add(new TradeEvent(Symbol, SessionId, AsOfUtc.AddSeconds(-10), AsOfUtc, "Fixture", "retained-2", 20m, 1));
+        var complete = _calculator.Calculate(state, AsOfUtc, new ScannerConfiguration());
+        state.Add(new TradeEvent(Symbol, SessionId, AsOfUtc.AddTicks(1), AsOfUtc,
+            "Fixture", "future-evicts-dollar-volume", 30m, 1));
+        var partial = _calculator.Calculate(state, AsOfUtc, new ScannerConfiguration());
+
+        Assert.True(complete.HasCompleteSessionData);
+        Assert.Equal(30m, complete.ShortHorizonDollarVolumeUsd);
+        Assert.False(partial.HasCompleteSessionData);
+        Assert.Equal(20m, partial.ShortHorizonDollarVolumeUsd);
+        Assert.Equal(ShortHorizonDollarVolumeStatus.Available, partial.ShortHorizonDollarVolumeStatus);
+    }
+
+    [Fact]
+    public void Short_horizon_dollar_volume_json_and_identity_include_value_and_status()
+    {
+        var configuration = new ScannerConfiguration();
+        var populated = CalculateDollarVolumeFeatures(
+            [new TradeEvent(Symbol, SessionId, AsOfUtc, AsOfUtc, "Fixture", "json-dollar", 12.5m, 2)],
+            configuration);
+        var empty = CalculateDollarVolumeFeatures(Array.Empty<MarketEvent>(), configuration);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var json = JsonSerializer.Serialize(populated, options);
+        using var document = JsonDocument.Parse(json);
+
+        Assert.Equal(25m, document.RootElement.GetProperty("shortHorizonDollarVolumeUsd").GetDecimal());
+        Assert.Equal((int)ShortHorizonDollarVolumeStatus.Available,
+            document.RootElement.GetProperty("shortHorizonDollarVolumeStatus").GetInt32());
+        Assert.Equal(populated, JsonSerializer.Deserialize<FeatureSnapshot>(json, options));
+        using var emptyJson = JsonDocument.Parse(JsonSerializer.Serialize(empty, options));
+        Assert.Equal(JsonValueKind.Null,
+            emptyJson.RootElement.GetProperty("shortHorizonDollarVolumeUsd").ValueKind);
+        Assert.Equal((int)ShortHorizonDollarVolumeStatus.Insufficient,
+            emptyJson.RootElement.GetProperty("shortHorizonDollarVolumeStatus").GetInt32());
+        Assert.Equal(empty, JsonSerializer.Deserialize<FeatureSnapshot>(emptyJson.RootElement, options));
+        var changedDollarVolume = CalculateDollarVolumeFeatures(
+            [new TradeEvent(Symbol, SessionId, AsOfUtc, AsOfUtc, "Fixture", "json-dollar", 13m, 2)],
+            configuration);
+        Assert.NotEqual(populated.Id, changedDollarVolume.Id);
+        Assert.NotEqual(populated.Id, empty.Id);
+        Assert.Equal(populated.Id,
+            CalculateDollarVolumeFeatures(
+                [new TradeEvent(Symbol, SessionId, AsOfUtc, AsOfUtc, "Fixture", "json-dollar", 12.5m, 2)],
+                configuration).Id);
+    }
+
+    [Fact]
     public void Session_realized_volatility_json_round_trips_and_does_not_change_detector_output()
     {
         var configuration = new ScannerConfiguration();
@@ -1135,16 +1305,20 @@ public sealed class ScannerReplayTests
             JsonSerializer.Deserialize<FeatureSnapshot>(emptyDocument.RootElement, jsonOptions));
 
         var opportunity = Replay(GoldenEvents(), configuration);
-        var serializedOpportunity = JsonSerializer.Serialize(opportunity.Opportunity);
+        var lowVolatilityFeatures = opportunity.Features with
+        {
+            SessionRealizedVolatilityPercent = 0.5m,
+            SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Available
+        };
+        var baselineOpportunity = _detector.Evaluate(lowVolatilityFeatures, configuration);
+        var serializedOpportunity = JsonSerializer.Serialize(baselineOpportunity);
         foreach (var (value, status) in new (decimal?, RealizedVolatilityStatus)[]
         {
-            (null, RealizedVolatilityStatus.Insufficient),
-            (null, RealizedVolatilityStatus.InvalidPriceData),
             (0m, RealizedVolatilityStatus.Available),
-            (9.531017980m, RealizedVolatilityStatus.Available)
+            (0.5m, RealizedVolatilityStatus.Available)
         })
         {
-            var changed = opportunity.Features with
+            var changed = lowVolatilityFeatures with
             {
                 SessionRealizedVolatilityPercent = value,
                 SessionRealizedVolatilityStatus = status
@@ -1755,17 +1929,20 @@ public sealed class ScannerReplayTests
         Assert.Equal(0m, document.RootElement.GetProperty("sessionRealizedVolatilityPercent").GetDecimal());
         Assert.Equal((int)RealizedVolatilityStatus.Available,
             document.RootElement.GetProperty("sessionRealizedVolatilityStatus").GetInt32());
+        Assert.Equal(10_000m, document.RootElement.GetProperty("shortHorizonDollarVolumeUsd").GetDecimal());
+        Assert.Equal((int)ShortHorizonDollarVolumeStatus.Available,
+            document.RootElement.GetProperty("shortHorizonDollarVolumeStatus").GetInt32());
         Assert.Equal(features, JsonSerializer.Deserialize<FeatureSnapshot>(json, jsonOptions));
-        Assert.Equal("features-v13", features.FeatureSetVersion);
-        Assert.Equal("scanner-config-v13", configuration.Version);
+        Assert.Equal("features-v14", features.FeatureSetVersion);
+        Assert.Equal("scanner-config-v15", configuration.Version);
         Assert.Equal("momentum-continuation-v1", configuration.SetupDefinitionVersion);
 
         var values = new[]
         {
             Symbol, SessionId, AsOfUtc.UtcDateTime.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
             configuration.FeatureSetVersion, "100", "100", "100", "0",
-            "100", "0", "Flat", "0", "0", "0", "100", "100", "100", "100",
-            "", "", "", "Insufficient", "0", "Available", "Neutral", "", "", "", "", "", "0",
+            "100", "0", "Flat", "0", "0", "0", "100", "10000", "Available",
+            "100", "100", "100", "", "", "", "Insufficient", "0", "Available", "Neutral", "", "", "", "", "", "0",
             "True", "True", "True", "True", "Good",
             JsonSerializer.Serialize(MarketDataCapabilities.Unknown)
         };
@@ -1773,7 +1950,7 @@ public sealed class ScannerReplayTests
             string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
             string.Join("\u001f", values));
         Assert.Equal(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(identity)).AsSpan(0, 16)), features.Id);
-        foreach (var index in new[] { 15, 16, 17, 18, 20, 22, 25, 26, 27, 28, 29 })
+        foreach (var index in new[] { 15, 17, 18, 19, 20, 22, 24, 27, 28, 29, 30, 31 })
         {
             foreach (var value in new[] { "101", "102" })
             {
@@ -1785,10 +1962,29 @@ public sealed class ScannerReplayTests
                 Assert.NotEqual(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(changedIdentity)).AsSpan(0, 16)), features.Id);
             }
         }
+        foreach (var value in new[] { "", "10001", "10002" })
+        {
+            var changedValues = values.ToArray();
+            changedValues[15] = value;
+            var changedIdentity = string.Join("\u001f", JsonSerializer.Serialize(configuration),
+                string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
+                string.Join("\u001f", changedValues));
+            Assert.NotEqual(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(changedIdentity)).AsSpan(0, 16)), features.Id);
+        }
+        foreach (var value in Enum.GetNames<ShortHorizonDollarVolumeStatus>()
+                     .Where(value => value != "Available"))
+        {
+            var changedValues = values.ToArray();
+            changedValues[16] = value;
+            var changedIdentity = string.Join("\u001f", JsonSerializer.Serialize(configuration),
+                string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
+                string.Join("\u001f", changedValues));
+            Assert.NotEqual(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(changedIdentity)).AsSpan(0, 16)), features.Id);
+        }
         foreach (var value in new[] { "", "1", "2" })
         {
             var changedValues = values.ToArray();
-            changedValues[22] = value;
+            changedValues[24] = value;
             var changedIdentity = string.Join("\u001f", JsonSerializer.Serialize(configuration),
                 string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
                 string.Join("\u001f", changedValues));
@@ -1797,7 +1993,7 @@ public sealed class ScannerReplayTests
         foreach (var value in Enum.GetNames<RealizedVolatilityStatus>().Where(value => value != "Available"))
         {
             var changedValues = values.ToArray();
-            changedValues[23] = value;
+            changedValues[25] = value;
             var changedIdentity = string.Join("\u001f", JsonSerializer.Serialize(configuration),
                 string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
                 string.Join("\u001f", changedValues));
@@ -1806,7 +2002,7 @@ public sealed class ScannerReplayTests
         foreach (var value in Enum.GetNames<TrendDirectionContext>().Where(value => value != "Neutral"))
         {
             var changedValues = values.ToArray();
-            changedValues[24] = value;
+            changedValues[26] = value;
             var changedIdentity = string.Join("\u001f", JsonSerializer.Serialize(configuration),
                 string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
                 string.Join("\u001f", changedValues));
@@ -2288,6 +2484,22 @@ public sealed class ScannerReplayTests
         string sessionId = SessionId)
     {
         var state = CreateAdxState(events, symbol, sessionId);
+        return _calculator.Calculate(state, AsOfUtc, configuration);
+    }
+
+    private FeatureSnapshot CalculateDollarVolumeFeatures(
+        IReadOnlyCollection<MarketEvent> events,
+        ScannerConfiguration configuration,
+        string symbol = Symbol,
+        string sessionId = SessionId,
+        int maximumEvents = 1000)
+    {
+        var state = new SymbolEventState(symbol, sessionId, maximumEvents);
+        foreach (var marketEvent in events)
+        {
+            state.Add(marketEvent);
+        }
+
         return _calculator.Calculate(state, AsOfUtc, configuration);
     }
 

@@ -55,12 +55,12 @@ public sealed class FixtureWebApplicationTests
         var expectedEvents = fixtureEvents.DistinctBy(MarketEventIdentity.Create).ToArray();
         Assert.Equal(26, expectedEvents.Length);
         var expectedGroups = new Dictionary<(string Symbol, string SessionId),
-            (int Count, OpportunityClassification Classification, long Volume, decimal High, decimal Low, decimal Position, decimal? FastEma, PriceStructure? Structure, decimal? Adx, AdxStatus AdxStatus, decimal? RealizedVolatility, RealizedVolatilityStatus RealizedVolatilityStatus, TrendDirectionContext TrendDirection)>
+            (int Count, OpportunityClassification Classification, long Volume, decimal DollarVolume, decimal High, decimal Low, decimal Position, decimal? FastEma, PriceStructure? Structure, decimal? Adx, AdxStatus AdxStatus, decimal? RealizedVolatility, RealizedVolatilityStatus RealizedVolatilityStatus, TrendDirectionContext TrendDirection)>
         {
-            [("MOE", "fixture-2026-10-22")] = (7, OpportunityClassification.ProbableLong, 5600, 150.48m, 149.90m, 100m, 150.218m, null, null, AdxStatus.Insufficient, 0.199999477m, RealizedVolatilityStatus.Available, TrendDirectionContext.Bullish),
-            [("MOE", "fixture-2026-10-23")] = (6, OpportunityClassification.ProbableShort, 5450, 150.50m, 149.90m, 0m, null, null, null, AdxStatus.Insufficient, 0.231391437m, RealizedVolatilityStatus.Available, TrendDirectionContext.Bearish),
-            [("QNT", "fixture-2026-10-22")] = (6, OpportunityClassification.ProbableShort, 5050, 80.40m, 79.90m, 0m, null, null, null, AdxStatus.Insufficient, 0.367550138m, RealizedVolatilityStatus.Available, TrendDirectionContext.Bearish),
-            [("QNT", "fixture-2026-10-23")] = (7, OpportunityClassification.ProbableLong, 5650, 80.48m, 79.80m, 100m, 80.176m, null, null, AdxStatus.Insufficient, 0.443762951m, RealizedVolatilityStatus.Available, TrendDirectionContext.Bullish)
+            [("MOE", "fixture-2026-10-22")] = (7, OpportunityClassification.ProbableLong, 5600, 841258m, 150.48m, 149.90m, 100m, 150.218m, null, null, AdxStatus.Insufficient, 0.199999477m, RealizedVolatilityStatus.Available, TrendDirectionContext.Bullish),
+            [("MOE", "fixture-2026-10-23")] = (6, OpportunityClassification.ProbableShort, 5450, 818326m, 150.50m, 149.90m, 0m, null, null, null, AdxStatus.Insufficient, 0.231391437m, RealizedVolatilityStatus.Available, TrendDirectionContext.Bearish),
+            [("QNT", "fixture-2026-10-22")] = (6, OpportunityClassification.ProbableShort, 5050, 404564m, 80.40m, 79.90m, 0m, null, null, null, AdxStatus.Insufficient, 0.367550138m, RealizedVolatilityStatus.Available, TrendDirectionContext.Bearish),
+            [("QNT", "fixture-2026-10-23")] = (7, OpportunityClassification.ProbableLong, 5650, 453030m, 80.48m, 79.80m, 100m, 80.176m, null, null, AdxStatus.Insufficient, 0.443762951m, RealizedVolatilityStatus.Available, TrendDirectionContext.Bullish)
         };
         var groups = expectedEvents.GroupBy(item => (item.Symbol, item.SessionId)).ToArray();
         Assert.Equal(expectedGroups.Keys.OrderBy(key => key), groups.Select(group => group.Key).OrderBy(key => key));
@@ -103,6 +103,7 @@ public sealed class FixtureWebApplicationTests
                 await effectiveResponse.Content.ReadAsStringAsync(), JsonOptions);
             Assert.Equal(configuration, effective);
             Assert.Equal(30, effective!.SecondaryMomentumWindowSeconds);
+            Assert.Equal(100_000m, effective.MinimumShortHorizonDollarVolumeUsd);
             Assert.Equal(5, effective.EmaFastPeriod);
             Assert.Equal(20, effective.EmaMediumPeriod);
         }
@@ -159,10 +160,10 @@ public sealed class FixtureWebApplicationTests
             Assert.NotNull(snapshot);
             Assert.Equal(opportunity.Symbol, snapshot.Symbol);
             Assert.Equal(opportunity.SessionId, snapshot.SessionId);
-            Assert.Equal("features-v13", snapshot.FeatureSetVersion);
-            Assert.Equal("features-v13", opportunity.FeatureSetVersion);
+            Assert.Equal("features-v14", snapshot.FeatureSetVersion);
+            Assert.Equal("features-v14", opportunity.FeatureSetVersion);
             Assert.Equal("momentum-continuation-v1", opportunity.SetupDefinitionVersion);
-            Assert.Equal("scanner-config-v13", opportunity.ConfigurationVersion);
+            Assert.Equal("scanner-config-v15", opportunity.ConfigurationVersion);
             var expectedRange = expectedGroups[(opportunity.Symbol, opportunity.SessionId)];
             Assert.Equal(expectedRange.High, snapshotJson.RootElement.GetProperty("sessionHighPrice").GetDecimal());
             Assert.Equal(expectedRange.Low, snapshotJson.RootElement.GetProperty("sessionLowPrice").GetDecimal());
@@ -187,6 +188,12 @@ public sealed class FixtureWebApplicationTests
                 snapshotJson.RootElement.GetProperty("sessionRealizedVolatilityStatus").GetString());
             Assert.Equal(expectedRange.RealizedVolatility, snapshot.SessionRealizedVolatilityPercent);
             Assert.Equal(expectedRange.RealizedVolatilityStatus, snapshot.SessionRealizedVolatilityStatus);
+            Assert.Equal(expectedRange.DollarVolume,
+                snapshotJson.RootElement.GetProperty("shortHorizonDollarVolumeUsd").GetDecimal());
+            Assert.Equal(ShortHorizonDollarVolumeStatus.Available.ToString(),
+                snapshotJson.RootElement.GetProperty("shortHorizonDollarVolumeStatus").GetString());
+            Assert.Equal(expectedRange.DollarVolume, snapshot.ShortHorizonDollarVolumeUsd);
+            Assert.Equal(ShortHorizonDollarVolumeStatus.Available, snapshot.ShortHorizonDollarVolumeStatus);
             Assert.Equal(expectedRange.TrendDirection, snapshot.SessionTrendDirection);
             Assert.Equal(expectedRange.TrendDirection.ToString(),
                 snapshotJson.RootElement.GetProperty("sessionTrendDirection").GetString());
@@ -288,6 +295,10 @@ public sealed class FixtureWebApplicationTests
                 expectedRange.RealizedVolatility);
             Assert.Equal((int)expectedRange.RealizedVolatilityStatus,
                 persistedJson.RootElement.GetProperty("sessionRealizedVolatilityStatus").GetInt32());
+            Assert.Equal(expectedRange.DollarVolume,
+                persistedJson.RootElement.GetProperty("shortHorizonDollarVolumeUsd").GetDecimal());
+            Assert.Equal((int)ShortHorizonDollarVolumeStatus.Available,
+                persistedJson.RootElement.GetProperty("shortHorizonDollarVolumeStatus").GetInt32());
             AssertNullableDecimal(persistedJson.RootElement, "fastEma", expectedRange.FastEma);
             AssertNullableDecimal(persistedJson.RootElement, "mediumEma", null);
             AssertNullableDecimal(persistedJson.RootElement, "fastMediumEmaSpreadPercent", null);

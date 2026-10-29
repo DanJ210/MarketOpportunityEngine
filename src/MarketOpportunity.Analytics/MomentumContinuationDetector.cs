@@ -38,6 +38,52 @@ public sealed class MomentumContinuationDetector
             vetoes.Add("InsufficientRequiredFeatureData");
         }
 
+        switch (snapshot.SessionRealizedVolatilityStatus)
+        {
+            case RealizedVolatilityStatus.Available
+                when snapshot.SessionRealizedVolatilityPercent is null or < 0:
+                vetoes.Add("InvalidVolatilityData");
+                break;
+            case RealizedVolatilityStatus.Available
+                when snapshot.HasCompleteSessionData
+                    && snapshot.SessionRealizedVolatilityPercent is decimal volatilityPercent
+                    && volatilityPercent >= configuration.MaximumSessionRealizedVolatilityPercent:
+                vetoes.Add("ExcessiveRealizedVolatility");
+                break;
+            case RealizedVolatilityStatus.Available:
+                break;
+            case RealizedVolatilityStatus.Insufficient
+                when snapshot.SessionRealizedVolatilityPercent is null:
+                vetoes.Add("VolatilityUnavailable");
+                break;
+            default:
+                vetoes.Add("InvalidVolatilityData");
+                break;
+        }
+
+        switch (snapshot.ShortHorizonDollarVolumeStatus)
+        {
+            case ShortHorizonDollarVolumeStatus.Available
+                when snapshot.ShortHorizonDollarVolumeUsd is null or < 0:
+                vetoes.Add("InvalidDollarVolumeData");
+                break;
+            case ShortHorizonDollarVolumeStatus.Available
+                when snapshot.HasCompleteSessionData
+                    && snapshot.ShortHorizonDollarVolumeUsd is decimal dollarVolumeUsd
+                    && dollarVolumeUsd < configuration.MinimumShortHorizonDollarVolumeUsd:
+                vetoes.Add("InsufficientDollarVolume");
+                break;
+            case ShortHorizonDollarVolumeStatus.Available:
+                break;
+            case ShortHorizonDollarVolumeStatus.Insufficient
+                when snapshot.ShortHorizonDollarVolumeUsd is null:
+                vetoes.Add("DollarVolumeUnavailable");
+                break;
+            default:
+                vetoes.Add("InvalidDollarVolumeData");
+                break;
+        }
+
         var momentum = snapshot.ShortHorizonReturnPercent;
         var vwapPosition = snapshot.PriceVsVwapPercent;
         var direction = momentum >= configuration.MinimumDirectionalReturnPercent

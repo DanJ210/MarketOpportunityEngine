@@ -175,6 +175,12 @@ public sealed class EfScannerStore(MarketOpportunityDbContext dbContext) : IScan
         "InvalidQuoteOrPrice" => "The quote is invalid or the reference trade price is not positive.",
         "ExcessiveSpread" => "Spread exceeds the configured maximum or is unavailable.",
         "InsufficientRequiredFeatureData" => "Required features are missing or the bounded state is incomplete.",
+        "ExcessiveRealizedVolatility" => "Session realized volatility meets or exceeds the configured maximum.",
+        "VolatilityUnavailable" => "Required session realized volatility is unavailable.",
+        "InvalidVolatilityData" => "Session realized volatility has an invalid value or status.",
+        "InsufficientDollarVolume" => "Short-horizon dollar volume is below the configured USD minimum.",
+        "DollarVolumeUnavailable" => "No eligible short-horizon dollar-volume data is available.",
+        "InvalidDollarVolumeData" => "Short-horizon dollar volume has invalid trade data or an inconsistent value or status.",
         "NoDefensibleInvalidation" => "The current feature snapshot does not support a defensible directional invalidation level.",
         _ => throw new ArgumentOutOfRangeException(nameof(veto), veto, "Unknown veto code.")
     };

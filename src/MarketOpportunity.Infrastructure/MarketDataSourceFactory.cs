@@ -9,7 +9,8 @@ public static class MarketDataSourceFactory
         string provider,
         IConfiguration configuration,
         string fixturePath,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        LiveValidationDiagnostics? diagnostics = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(provider);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -24,7 +25,8 @@ public static class MarketDataSourceFactory
                 timeProvider),
             "ALPACA" => new AlpacaMarketDataSource(
                 AlpacaMarketDataOptions.FromConfiguration(configuration),
-                timeProvider),
+                timeProvider,
+                diagnostics),
             _ => throw new InvalidOperationException(
                 $"Unsupported MarketData:Provider '{provider}'. Use Fixture, Alpaca, or Massive.")
         };

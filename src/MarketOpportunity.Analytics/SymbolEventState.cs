@@ -125,6 +125,8 @@ public sealed class FeatureCalculator
         var latestTrade = trades.LastOrDefault();
         var windowStart = asOfUtc.AddSeconds(-configuration.MomentumWindowSeconds);
         var windowTrades = trades.Where(trade => trade.EventTimeUtc >= windowStart).ToArray();
+        var (shortHorizonDollarVolumeUsd, shortHorizonDollarVolumeStatus) =
+            CalculateShortHorizonDollarVolume(windowTrades);
 
         var hasValidSessionPrices = trades.Length > 0 && trades.All(trade => trade.Price > 0);
         decimal? sessionHighPrice = hasValidSessionPrices ? trades.Max(trade => trade.Price) : null;
@@ -290,6 +292,8 @@ public sealed class FeatureCalculator
             Format(returnPercent),
             Format(secondaryReturnPercent),
             windowTrades.Sum(trade => trade.Size).ToString(CultureInfo.InvariantCulture),
+            Format(shortHorizonDollarVolumeUsd),
+            shortHorizonDollarVolumeStatus.ToString(),
             sessionCumulativeVolume?.ToString(CultureInfo.InvariantCulture) ?? "",
             Format(sessionHighPrice),
             Format(sessionLowPrice),
@@ -338,6 +342,8 @@ public sealed class FeatureCalculator
             returnPercent,
             secondaryReturnPercent,
             windowTrades.Sum(trade => trade.Size),
+            shortHorizonDollarVolumeUsd,
+            shortHorizonDollarVolumeStatus,
             sessionCumulativeVolume,
             sessionHighPrice,
             sessionLowPrice,
@@ -360,6 +366,28 @@ public sealed class FeatureCalculator
             !state.HasEvictedEvents,
             quality,
             marketData);
+    }
+
+    private static (decimal? Value, ShortHorizonDollarVolumeStatus Status) CalculateShortHorizonDollarVolume(
+        IReadOnlyList<TradeEvent> trades)
+    {
+        if (trades.Count == 0)
+        {
+            return (null, ShortHorizonDollarVolumeStatus.Insufficient);
+        }
+
+        if (trades.Any(trade => trade.Price <= 0 || trade.Size <= 0))
+        {
+            return (null, ShortHorizonDollarVolumeStatus.InvalidTradeData);
+        }
+
+        decimal dollarVolume = 0m;
+        foreach (var trade in trades)
+        {
+            dollarVolume += trade.Price * trade.Size;
+        }
+
+        return (dollarVolume, ShortHorizonDollarVolumeStatus.Available);
     }
 
     private static (decimal? Value, AdxStatus Status) CalculateAdx(

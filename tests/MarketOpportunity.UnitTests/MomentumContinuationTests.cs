@@ -1,5 +1,6 @@
 using MarketOpportunity.Analytics;
 using MarketOpportunity.Domain;
+using System.Text.Json;
 
 namespace MarketOpportunity.UnitTests;
 
@@ -44,6 +45,210 @@ public sealed class MomentumContinuationTests
         Assert.Equal(AsOfUtc.AddSeconds(_configuration.OpportunityExpirationSeconds), opportunity.ValidUntilUtc);
     }
 
+    [Theory]
+    [InlineData(99_999.99, true)]
+    [InlineData(100_000, false)]
+    [InlineData(100_000.01, false)]
+    public void Applies_strict_minimum_dollar_volume_to_complete_snapshots(
+        decimal dollarVolumeUsd,
+        bool expectedLiquidityVeto)
+    {
+        var features = _calculator.Calculate(CreateState(), AsOfUtc, _configuration) with
+        {
+            ShortHorizonDollarVolumeUsd = dollarVolumeUsd,
+            ShortHorizonDollarVolumeStatus = ShortHorizonDollarVolumeStatus.Available
+        };
+
+        var opportunity = _detector.Evaluate(features, _configuration);
+
+        Assert.Equal(expectedLiquidityVeto, opportunity.ActiveVetoes.Contains("InsufficientDollarVolume"));
+        Assert.Equal(
+            expectedLiquidityVeto ? OpportunityClassification.AvoidNoTrade : OpportunityClassification.ProbableLong,
+            opportunity.Classification);
+    }
+
+    [Fact]
+    public void Skips_only_the_threshold_for_partial_available_data_and_keeps_incomplete_veto()
+    {
+        var features = _calculator.Calculate(CreateState(), AsOfUtc, _configuration) with
+        {
+            ShortHorizonDollarVolumeUsd = 1m,
+            ShortHorizonDollarVolumeStatus = ShortHorizonDollarVolumeStatus.Available,
+            HasCompleteSessionData = false
+        };
+
+        var opportunity = _detector.Evaluate(features, _configuration);
+
+        Assert.Contains("InsufficientRequiredFeatureData", opportunity.ActiveVetoes);
+        Assert.DoesNotContain("InsufficientDollarVolume", opportunity.ActiveVetoes);
+        Assert.Contains(opportunity.ContradictoryEvidence, item => item.Code == "TruncatedEventState");
+
+        var partialInsufficient = _detector.Evaluate(features with
+        {
+            ShortHorizonDollarVolumeUsd = null,
+            ShortHorizonDollarVolumeStatus = ShortHorizonDollarVolumeStatus.Insufficient
+        }, _configuration);
+        Assert.Contains("InsufficientRequiredFeatureData", partialInsufficient.ActiveVetoes);
+        Assert.Contains("DollarVolumeUnavailable", partialInsufficient.ActiveVetoes);
+
+        var partialInvalid = _detector.Evaluate(features with
+        {
+            ShortHorizonDollarVolumeUsd = null,
+            ShortHorizonDollarVolumeStatus = ShortHorizonDollarVolumeStatus.InvalidTradeData
+        }, _configuration);
+        Assert.Contains("InsufficientRequiredFeatureData", partialInvalid.ActiveVetoes);
+        Assert.Contains("InvalidDollarVolumeData", partialInvalid.ActiveVetoes);
+    }
+
+    [Fact]
+    public void Fails_closed_for_invalid_and_inconsistent_dollar_volume_states()
+    {
+        var features = _calculator.Calculate(CreateState(), AsOfUtc, _configuration);
+        var cases = new (decimal? Value, ShortHorizonDollarVolumeStatus Status, string Veto)[]
+        {
+            (null, ShortHorizonDollarVolumeStatus.Insufficient, "DollarVolumeUnavailable"),
+            (null, ShortHorizonDollarVolumeStatus.InvalidTradeData, "InvalidDollarVolumeData"),
+            (0.5m, ShortHorizonDollarVolumeStatus.Insufficient, "InvalidDollarVolumeData"),
+            (0.5m, ShortHorizonDollarVolumeStatus.InvalidTradeData, "InvalidDollarVolumeData"),
+            (null, ShortHorizonDollarVolumeStatus.Available, "InvalidDollarVolumeData"),
+            (-0.1m, ShortHorizonDollarVolumeStatus.Available, "InvalidDollarVolumeData"),
+            (0m, ShortHorizonDollarVolumeStatus.Available, "InsufficientDollarVolume"),
+            (0.5m, (ShortHorizonDollarVolumeStatus)int.MaxValue, "InvalidDollarVolumeData")
+        };
+
+        foreach (var (value, status, expectedVeto) in cases)
+        {
+            var opportunity = _detector.Evaluate(features with
+            {
+                ShortHorizonDollarVolumeUsd = value,
+                ShortHorizonDollarVolumeStatus = status
+            }, _configuration);
+
+            Assert.Contains(expectedVeto, opportunity.ActiveVetoes);
+            Assert.Equal(OpportunityClassification.AvoidNoTrade, opportunity.Classification);
+        }
+    }
+
+    [Fact]
+    public void Evaluates_dollar_volume_veto_even_when_another_veto_is_active()
+    {
+        var features = _calculator.Calculate(CreateState(quoteAge: TimeSpan.FromSeconds(30)), AsOfUtc, _configuration) with
+        {
+            ShortHorizonDollarVolumeUsd = 99_999.99m,
+            ShortHorizonDollarVolumeStatus = ShortHorizonDollarVolumeStatus.Available
+        };
+
+        var opportunity = _detector.Evaluate(features, _configuration);
+
+        Assert.Contains("StaleQuote", opportunity.ActiveVetoes);
+        Assert.Contains("InsufficientDollarVolume", opportunity.ActiveVetoes);
+        Assert.Equal(OpportunityClassification.AvoidNoTrade, opportunity.Classification);
+    }
+
+    [Fact]
+    public void Applies_inclusive_realized_volatility_threshold_to_complete_snapshots()
+    {
+        var features = _calculator.Calculate(CreateState(), AsOfUtc, _configuration);
+        foreach (var (volatilityPercent, isVetoed) in new (decimal Value, bool IsVetoed)[]
+        {
+            (0.999999m, false),
+            (1.00m, true),
+            (1.000001m, true)
+        })
+        {
+            var opportunity = _detector.Evaluate(features with
+            {
+                SessionRealizedVolatilityPercent = volatilityPercent,
+                SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Available
+            }, _configuration);
+
+            Assert.Equal(isVetoed, opportunity.ActiveVetoes.Contains("ExcessiveRealizedVolatility"));
+            Assert.Equal(
+                isVetoed ? OpportunityClassification.AvoidNoTrade : OpportunityClassification.ProbableLong,
+                opportunity.Classification);
+        }
+    }
+
+    [Fact]
+    public void Does_not_apply_the_volatility_threshold_to_partial_retained_session_values()
+    {
+        var features = _calculator.Calculate(CreateState(), AsOfUtc, _configuration) with
+        {
+            SessionRealizedVolatilityPercent = 10m,
+            SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Available,
+            HasCompleteSessionData = false
+        };
+
+        var opportunity = _detector.Evaluate(features, _configuration);
+
+        Assert.Contains("InsufficientRequiredFeatureData", opportunity.ActiveVetoes);
+        Assert.DoesNotContain("ExcessiveRealizedVolatility", opportunity.ActiveVetoes);
+        Assert.Contains(opportunity.ContradictoryEvidence, item => item.Code == "TruncatedEventState");
+        Assert.Equal(OpportunityClassification.AvoidNoTrade, opportunity.Classification);
+
+        var insufficientPartial = _detector.Evaluate(features with
+        {
+            SessionRealizedVolatilityPercent = null,
+            SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Insufficient
+        }, _configuration);
+        Assert.Contains("InsufficientRequiredFeatureData", insufficientPartial.ActiveVetoes);
+        Assert.Contains("VolatilityUnavailable", insufficientPartial.ActiveVetoes);
+        Assert.DoesNotContain("ExcessiveRealizedVolatility", insufficientPartial.ActiveVetoes);
+    }
+
+    [Fact]
+    public void Fails_closed_for_unavailable_invalid_and_inconsistent_volatility_states()
+    {
+        var features = _calculator.Calculate(CreateState(), AsOfUtc, _configuration);
+        var cases = new (decimal? Value, RealizedVolatilityStatus Status, string Veto)[]
+        {
+            (null, RealizedVolatilityStatus.Insufficient, "VolatilityUnavailable"),
+            (null, RealizedVolatilityStatus.InvalidPriceData, "InvalidVolatilityData"),
+            (0.5m, RealizedVolatilityStatus.Insufficient, "InvalidVolatilityData"),
+            (0.5m, RealizedVolatilityStatus.InvalidPriceData, "InvalidVolatilityData"),
+            (null, RealizedVolatilityStatus.Available, "InvalidVolatilityData"),
+            (-0.1m, RealizedVolatilityStatus.Available, "InvalidVolatilityData"),
+            (0.5m, (RealizedVolatilityStatus)int.MaxValue, "InvalidVolatilityData")
+        };
+
+        foreach (var (value, status, expectedVeto) in cases)
+        {
+            var opportunity = _detector.Evaluate(features with
+            {
+                SessionRealizedVolatilityPercent = value,
+                SessionRealizedVolatilityStatus = status
+            }, _configuration);
+
+            Assert.Contains(expectedVeto, opportunity.ActiveVetoes);
+            Assert.Equal(OpportunityClassification.AvoidNoTrade, opportunity.Classification);
+        }
+    }
+
+    [Fact]
+    public void Validates_and_serializes_the_versioned_volatility_threshold()
+    {
+        var configuration = new ScannerConfiguration();
+        configuration.Validate();
+
+        Assert.Equal("scanner-config-v15", configuration.Version);
+        Assert.Equal("features-v14", configuration.FeatureSetVersion);
+        Assert.Equal("momentum-continuation-v1", configuration.SetupDefinitionVersion);
+        Assert.Equal(1.00m, configuration.MaximumSessionRealizedVolatilityPercent);
+        Assert.Equal(100_000m, configuration.MinimumShortHorizonDollarVolumeUsd);
+        Assert.Equal(configuration, JsonSerializer.Deserialize<ScannerConfiguration>(
+            JsonSerializer.Serialize(configuration)));
+        Assert.Throws<InvalidOperationException>(() =>
+            (configuration with { MaximumSessionRealizedVolatilityPercent = 0m }).Validate());
+        Assert.Throws<InvalidOperationException>(() =>
+            (configuration with { MaximumSessionRealizedVolatilityPercent = -0.01m }).Validate());
+        Assert.Throws<InvalidOperationException>(() =>
+            (configuration with { MinimumShortHorizonDollarVolumeUsd = 0m }).Validate());
+        Assert.Throws<InvalidOperationException>(() =>
+            (configuration with { MinimumShortHorizonDollarVolumeUsd = -0.01m }).Validate());
+        (configuration with { MaximumSessionRealizedVolatilityPercent = decimal.MaxValue }).Validate();
+        (configuration with { MinimumShortHorizonDollarVolumeUsd = decimal.MaxValue }).Validate();
+    }
+
     [Fact]
     public void Produces_probable_short_when_momentum_and_vwap_align_downward()
     {
@@ -74,7 +279,11 @@ public sealed class MomentumContinuationTests
         state.Add(new TradeEvent("MOE", SessionId, AsOfUtc.AddSeconds(-1), AsOfUtc, "Fixture", "watch-4", 150.90m, 1000));
         state.Add(new QuoteEvent(
             "MOE", SessionId, AsOfUtc, AsOfUtc, "Fixture", "watch-quote", 150.89m, 150.91m, 500, 500));
-        var features = _calculator.Calculate(state, AsOfUtc, _configuration);
+        var features = _calculator.Calculate(state, AsOfUtc, _configuration) with
+        {
+            SessionRealizedVolatilityPercent = 0.5m,
+            SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Available
+        };
 
         var opportunity = _detector.Evaluate(features, _configuration);
 
@@ -114,13 +323,18 @@ public sealed class MomentumContinuationTests
     [Fact]
     public void Rejects_an_invalid_quote_and_reports_the_vetoes()
     {
-        var features = _calculator.Calculate(CreateState(bid: 150.60m, ask: 150.40m), AsOfUtc, _configuration);
+        var features = _calculator.Calculate(CreateState(bid: 150.60m, ask: 150.40m), AsOfUtc, _configuration) with
+        {
+            SessionRealizedVolatilityPercent = 1.00m,
+            SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Available
+        };
 
         var opportunity = _detector.Evaluate(features, _configuration);
 
         Assert.Equal(OpportunityClassification.AvoidNoTrade, opportunity.Classification);
         Assert.Contains("InvalidQuoteOrPrice", opportunity.ActiveVetoes);
         Assert.Contains("ExcessiveSpread", opportunity.ActiveVetoes);
+        Assert.Contains("ExcessiveRealizedVolatility", opportunity.ActiveVetoes);
         Assert.Equal(DataQualityStatus.Degraded, features.DataQuality);
     }
 

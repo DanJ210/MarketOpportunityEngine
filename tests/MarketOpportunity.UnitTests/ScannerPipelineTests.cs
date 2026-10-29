@@ -54,6 +54,31 @@ public sealed class ScannerPipelineTests
         });
     }
 
+    [Fact]
+    public async Task Fixture_replay_remains_deterministic_across_repeated_runs()
+    {
+        var events = CreateSession(
+            "MOE",
+            "fixture-replay",
+            new DateTimeOffset(2026, 10, 22, 14, 30, 0, TimeSpan.Zero),
+            100m);
+        var firstStore = new RecordingStore();
+        var secondStore = new RecordingStore();
+        var first = CreatePipeline(events, firstStore);
+        var second = CreatePipeline(events, secondStore);
+
+        await first.RunFixtureAsync(CancellationToken.None);
+        await second.RunFixtureAsync(CancellationToken.None);
+
+        var firstRun = Assert.Single(firstStore.Runs);
+        var secondRun = Assert.Single(secondStore.Runs);
+        Assert.Equal(firstRun.Features, secondRun.Features);
+        Assert.Equal(firstRun.Opportunity.Id, secondRun.Opportunity.Id);
+        Assert.Equal(
+            firstRun.Events.Select(MarketEventIdentity.Create),
+            secondRun.Events.Select(MarketEventIdentity.Create));
+    }
+
     [Theory]
     [InlineData("", "Provider")]
     [InlineData("   ", "Provider")]
@@ -142,6 +167,106 @@ public sealed class ScannerPipelineTests
     }
 
     [Fact]
+    public async Task Reconnect_waits_for_valid_data_and_exposes_unresolved_gap_until_shutdown()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var initialEvents = CreateSession("MOE", "manual-session", now.AddSeconds(-10), 100m);
+        var source = new ReconnectingLiveSource(initialEvents);
+        var scannerState = new ScannerState();
+        var disconnected = new TaskCompletionSource<ScannerStatus>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        scannerState.Changed += () =>
+        {
+            var status = scannerState.Read().Status;
+            if (status.FeedStatus == MarketDataHealthStatus.Offline)
+            {
+                disconnected.TrySetResult(status);
+            }
+        };
+        using var cancellation = new CancellationTokenSource();
+        var pipeline = new ScannerPipeline(
+            source,
+            new RecordingStore(),
+            scannerState,
+            new ScannerConfiguration(),
+            new FeatureCalculator(),
+            new MomentumContinuationDetector(),
+            TimeProvider.System,
+            new LiveMarketDataRecoveryOptions(ReconnectDelayMilliseconds: 100));
+
+        var run = pipeline.RunAsync(cancellation.Token);
+        try
+        {
+            var status = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await WaitUntilAsync(() => scannerState.Read().Results.Count > 0);
+
+            var result = Assert.Single(scannerState.Read().Results);
+            Assert.True(status.HasUnresolvedDataGap);
+            Assert.Contains("gap", status.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(OpportunityLifecycleState.Suspended, result.Publication.State);
+            Assert.Equal("MarketDataGapUnresolved", result.Publication.ReasonCode);
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await source.SecondAttemptStarted.WaitAsync(timeout.Token);
+            Assert.Equal(MarketDataHealthStatus.Connecting, scannerState.Read().Status.FeedStatus);
+            source.ResumeConnection();
+            await WaitUntilAsync(() =>
+                scannerState.Read().Status.FeedStatus == MarketDataHealthStatus.Live
+                && scannerState.Read().Status.EventsProcessed > initialEvents.Length);
+
+            status = scannerState.Read().Status;
+            result = Assert.Single(scannerState.Read().Results);
+            Assert.True(status.HasUnresolvedDataGap);
+            Assert.Contains("gap", status.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(OpportunityLifecycleState.Suspended, result.Publication.State);
+            Assert.Equal("MarketDataGapUnresolved", result.Publication.ReasonCode);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        var attemptsAtShutdown = source.Attempts;
+        await Task.Delay(50);
+        Assert.Equal(attemptsAtShutdown, source.Attempts);
+    }
+
+    [Fact]
+    public async Task Cancellation_interrupts_reconnect_delay_without_another_connection_attempt()
+    {
+        var source = new ReconnectingLiveSource([]);
+        var scannerState = new ScannerState();
+        using var cancellation = new CancellationTokenSource();
+        var pipeline = new ScannerPipeline(
+            source,
+            new RecordingStore(),
+            scannerState,
+            new ScannerConfiguration(),
+            new FeatureCalculator(),
+            new MomentumContinuationDetector(),
+            TimeProvider.System,
+            new LiveMarketDataRecoveryOptions(ReconnectDelayMilliseconds: 300_000));
+
+        var run = pipeline.RunAsync(cancellation.Token);
+        try
+        {
+            await WaitForStatusAsync(scannerState, MarketDataHealthStatus.Offline);
+            Assert.Equal(1, source.Attempts);
+            Assert.False(source.SecondAttemptStarted.IsCompleted);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Equal(1, source.Attempts);
+        Assert.False(source.SecondAttemptStarted.IsCompleted);
+        Assert.Equal(MarketDataHealthStatus.Offline, scannerState.Read().Status.FeedStatus);
+    }
+
+    [Fact]
     public async Task Live_feed_reports_receive_time_and_becomes_stale_without_another_event()
     {
         var receivedAt = DateTimeOffset.UtcNow;
@@ -186,7 +311,7 @@ public sealed class ScannerPipelineTests
         finally
         {
             await cancellation.CancelAsync();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
         }
     }
 
@@ -197,6 +322,28 @@ public sealed class ScannerPipelineTests
 
         Assert.Throws<InvalidOperationException>(configuration.Validate);
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(301)]
+    public void Rejects_out_of_range_graceful_shutdown_timeout(int seconds)
+    {
+        var options = new LivePipelineOptions { GracefulShutdownTimeoutSeconds = seconds };
+
+        Assert.Throws<InvalidOperationException>(options.Validate);
+    }
+
+    private static ScannerPipeline CreatePipeline(
+        IReadOnlyCollection<MarketEvent> events,
+        RecordingStore store) =>
+        new(
+            new EventSource(events),
+            store,
+            new ScannerState(),
+            new ScannerConfiguration(),
+            new FeatureCalculator(),
+            new MomentumContinuationDetector(),
+            TimeProvider.System);
 
     private static void AssertAnalysis(
         ScannerAnalysisResult result,
@@ -304,6 +451,56 @@ public sealed class ScannerPipelineTests
         }
     }
 
+    private sealed class ReconnectingLiveSource(IReadOnlyCollection<MarketEvent> events)
+        : IReconnectableMarketDataSource
+    {
+        private int _attempts;
+        private readonly TaskCompletionSource _secondAttemptStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _resumeConnection = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int Attempts => Volatile.Read(ref _attempts);
+        public Task SecondAttemptStarted => _secondAttemptStarted.Task;
+
+        public void ResumeConnection() => _resumeConnection.TrySetResult();
+
+        public MarketDataCapabilities Capabilities { get; } = new(
+            "Alpaca",
+            "test",
+            MarketDataCoverage.Synthetic,
+            true,
+            true,
+            true);
+
+        public async IAsyncEnumerable<MarketEvent> ReadEventsAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var attempt = Interlocked.Increment(ref _attempts);
+            if (attempt == 1)
+            {
+                foreach (var marketEvent in events)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    yield return marketEvent;
+                }
+
+                throw new IOException("Synthetic socket close.");
+            }
+
+            _secondAttemptStarted.TrySetResult();
+            await _resumeConnection.Task.WaitAsync(cancellationToken);
+            var lastTrade = Assert.IsType<TradeEvent>(events.OfType<TradeEvent>().Last());
+            yield return lastTrade with
+            {
+                SequenceId = "reconnected-event",
+                EventTimeUtc = lastTrade.EventTimeUtc.AddSeconds(1),
+                ReceivedTimeUtc = DateTimeOffset.UtcNow
+            };
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset nowUtc) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => nowUtc;
@@ -315,6 +512,15 @@ public sealed class ScannerPipelineTests
         while (state.Read().Status.FeedStatus != expectedStatus)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
+        }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!condition())
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
         }
     }
 

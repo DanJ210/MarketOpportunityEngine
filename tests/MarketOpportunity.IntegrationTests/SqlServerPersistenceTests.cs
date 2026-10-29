@@ -48,7 +48,10 @@ public sealed class SqlServerPersistenceTests
             await Persist(connectionString, firstConfiguration, initialEvents, first);
             await Persist(connectionString, firstConfiguration, initialEvents, first);
 
-            var conflictingConfiguration = firstConfiguration with { SecondaryMomentumWindowSeconds = 31 };
+            var conflictingConfiguration = firstConfiguration with
+            {
+                MinimumShortHorizonDollarVolumeUsd = 100_001m
+            };
             var conflictingAnalysis = Analyze(initialEvents, conflictingConfiguration);
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 Persist(connectionString, conflictingConfiguration, initialEvents, conflictingAnalysis));
@@ -136,6 +139,10 @@ public sealed class SqlServerPersistenceTests
                 originalJson.RootElement.GetProperty("sessionRealizedVolatilityPercent").GetDecimal());
             Assert.Equal((int)first.Features.SessionRealizedVolatilityStatus,
                 originalJson.RootElement.GetProperty("sessionRealizedVolatilityStatus").GetInt32());
+            Assert.Equal(first.Features.ShortHorizonDollarVolumeUsd,
+                originalJson.RootElement.GetProperty("shortHorizonDollarVolumeUsd").GetDecimal());
+            Assert.Equal((int)first.Features.ShortHorizonDollarVolumeStatus,
+                originalJson.RootElement.GetProperty("shortHorizonDollarVolumeStatus").GetInt32());
             var changedFeatures = Assert.Single(storedFeatures, item => item.Id == changedInput.Features.Id);
             using var changedJson = JsonDocument.Parse(changedFeatures.SnapshotJson);
             Assert.Equal(800, changedJson.RootElement.GetProperty("sessionCumulativeVolume").GetInt64());
@@ -158,6 +165,10 @@ public sealed class SqlServerPersistenceTests
                 changedJson.RootElement.GetProperty("sessionRealizedVolatilityPercent").GetDecimal());
             Assert.Equal((int)changedInput.Features.SessionRealizedVolatilityStatus,
                 changedJson.RootElement.GetProperty("sessionRealizedVolatilityStatus").GetInt32());
+            Assert.Equal(changedInput.Features.ShortHorizonDollarVolumeUsd,
+                changedJson.RootElement.GetProperty("shortHorizonDollarVolumeUsd").GetDecimal());
+            Assert.Equal((int)changedInput.Features.ShortHorizonDollarVolumeStatus,
+                changedJson.RootElement.GetProperty("shortHorizonDollarVolumeStatus").GetInt32());
             Assert.NotEqual(
                 originalJson.RootElement.GetProperty("sessionRealizedVolatilityPercent").GetDecimal(),
                 changedJson.RootElement.GetProperty("sessionRealizedVolatilityPercent").GetDecimal());
@@ -193,6 +204,10 @@ public sealed class SqlServerPersistenceTests
                 first.Opportunity.ActiveVetoes.OrderBy(code => code),
                 originalDecisionEvidence.Where(item => item.Kind == "Veto")
                     .Select(item => item.Code).OrderBy(code => code));
+            Assert.Contains(originalDecisionEvidence, item =>
+                item.Kind == "Veto"
+                && item.Code == "ExcessiveRealizedVolatility"
+                && item.Description == "Session realized volatility meets or exceeds the configured maximum.");
             Assert.Equal(
                 first.Opportunity.InvalidationCondition,
                 Assert.Single(originalDecisionEvidence, item => item.Kind == "Invalidation").Description);

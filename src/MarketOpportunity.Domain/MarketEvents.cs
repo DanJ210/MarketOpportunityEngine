@@ -152,6 +152,13 @@ public enum RealizedVolatilityStatus
     InvalidPriceData
 }
 
+public enum ShortHorizonDollarVolumeStatus
+{
+    Available,
+    Insufficient,
+    InvalidTradeData
+}
+
 public enum TrendDirectionContext
 {
     Bullish,
@@ -189,6 +196,8 @@ public sealed record FeatureSnapshot(
     decimal? ShortHorizonReturnPercent,
     decimal? SecondaryHorizonReturnPercent,
     long? ShortHorizonVolume,
+    decimal? ShortHorizonDollarVolumeUsd,
+    ShortHorizonDollarVolumeStatus ShortHorizonDollarVolumeStatus,
     long? SessionCumulativeVolume,
     decimal? SessionHighPrice,
     decimal? SessionLowPrice,
@@ -266,8 +275,8 @@ public sealed record Opportunity(
 
 public sealed record ScannerConfiguration
 {
-    public string Version { get; init; } = "scanner-config-v13";
-    public string FeatureSetVersion { get; init; } = "features-v13";
+    public string Version { get; init; } = "scanner-config-v15";
+    public string FeatureSetVersion { get; init; } = "features-v14";
     public string SetupDefinitionVersion { get; init; } = "momentum-continuation-v1";
     public int MaximumStateEvents { get; init; } = 10_000;
     public int MomentumWindowSeconds { get; init; } = 60;
@@ -278,6 +287,8 @@ public sealed record ScannerConfiguration
     public int MaximumQuoteAgeSeconds { get; init; } = 15;
     public int MaximumLiveFeedStalenessSeconds { get; init; } = 30;
     public decimal MaximumSpreadBasisPoints { get; init; } = 25m;
+    public decimal MaximumSessionRealizedVolatilityPercent { get; init; } = 1.00m;
+    public decimal MinimumShortHorizonDollarVolumeUsd { get; init; } = 100_000m;
     public decimal MinimumDirectionalReturnPercent { get; init; } = 0.05m;
     public int MinimumRequiredTrades { get; init; } = 3;
     public int WatchScoreThreshold { get; init; } = 35;
@@ -302,6 +313,8 @@ public sealed record ScannerConfiguration
             || MaximumQuoteAgeSeconds < 0
             || MaximumLiveFeedStalenessSeconds < 1
             || MaximumSpreadBasisPoints <= 0
+            || MaximumSessionRealizedVolatilityPercent <= 0
+            || MinimumShortHorizonDollarVolumeUsd <= 0
             || MinimumDirectionalReturnPercent <= 0
             || MinimumRequiredTrades < 2
             || OpportunityExpirationSeconds < 1

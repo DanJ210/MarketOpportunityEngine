@@ -23,6 +23,8 @@ The fixture remains the default source. The Alpaca adapter reads:
 - `MarketData:Alpaca:Symbols`
 - `MarketData:Alpaca:SessionId`
 
+The [Alpaca Market Data getting-started guide](https://docs.alpaca.markets/us/docs/getting-started-with-alpaca-market-data) directs users to generate API credentials and save them; it also says to regenerate credentials if the secret was lost. For this adapter, `ApiKey` is the key ID and `SecretKey` is required: Alpaca's [WebSocket authentication guide](https://docs.alpaca.markets/us/docs/streaming-market-data#authenticate-via-message) authenticates the test stream with both `key` and `secret`. A URL is an endpoint, not a replacement for the secret. This adapter currently constructs `wss://stream.data.alpaca.markets/v2/{Feed}` itself and does not read `MarketData:Alpaca:Url`.
+
 Set non-secret development selection values:
 
 ```powershell
@@ -70,7 +72,23 @@ Then run the app using the local SQL Server steps in the [README](../../README.m
 
 Alpaca quote sizes are passed through as reported round-lot counts; no conversion to shares is inferred. Alpaca quote messages do not expose a stable quote sequence identity in the documented schema, so their canonical `SequenceId` is null and the existing content-derived event identity applies. Invalid numeric market values are preserved for the shared data-quality rules to reject; malformed/missing required fields and unsupported event types fail explicitly.
 
-The adapter currently has no reconnect, historical warm-up, correction processing, or gap backfill. A disconnected/error source updates the application publication lifecycle so existing candidates cannot remain active. This does not implement a comprehensive recovery workflow.
+The application retries an unexpected Alpaca stream close or source failure after `MarketData:Recovery:ReconnectDelayMilliseconds` (default 5000 ms; valid range 10-300000 ms). Authentication/subscription failures are also retried with the same delay. Shutdown cancellation stops the retry loop. Failures are logged with the provider and exception type only; provider error text and credentials are not logged.
+
+Feed health becomes unhealthy immediately on disconnect, suspending current publications. It remains `Connecting` until a valid market event is received after reconnect. Since this checkpoint does not backfill or reconcile missed events, a disconnect sets an unresolved-gap flag; the dashboard displays the limitation and the publication gate keeps candidates suspended after the stream resumes. Historical warm-up, correction processing, and gap backfill are not implemented.
+
+## Opt-in final A.1 diagnostics
+
+The [instrumented launcher procedure](../../README.md#one-final-instrumented-a1-observation) enables `MarketData:Diagnostics:Enabled` for one run only. Default provider/analytics behavior is unchanged.
+
+For each complete text WebSocket message, receipt UTC and monotonic time are sampled immediately after the final `ReceiveAsync` fragment and before decoding/parsing. Each canonical event retains its original `t` and per-item `ReceivedTimeUtc`; diagnostic `ParsedTimeUtc` is sampled after canonical construction and metadata extraction. A weak-reference sidecar associates connection ID, receipt/parsed times, and provider metadata without changing record equality, serialization, canonical identity, or event ordering.
+
+The diagnostic metadata reader captures `bx`, `ax`, `c`, and `z`, including trade `c`/`z`. These fields still do not enter the canonical contract or database mappings. Bounded metadata groups and first/last zero-ask samples are exported separately; `conditionsSupplied`, `incomplete`, and omitted-attribution counters make missing/truncated evidence explicit. No field is interpreted as permission to accept a zero ask, no size is converted, and no price is filled or corrected.
+
+Each connection attempt gets a fresh diagnostic GUID and sanitized Connecting/Authenticated/Subscribed/Live/Disconnected transitions; retries additionally record ReconnectAttempt and, on their first canonical event, Reconnected. Requested symbols and acknowledgement lists remain distinct. Complete-message counts include protocol/control messages, not individual fragments; market-data-message counts and canonical production counts are separate. JSON/schema parse failures are counted and still fail/recover through the existing pipeline.
+
+Metrics use the `MarketOpportunity.LiveValidation` meter, `moe.live.*` instrument names, and a fixed `provider=Alpaca` label, never connection IDs/symbols as metric labels. Local diagnostic files/logs carry bounded connection/symbol evidence for correlation. Message-to-creation, creation-to-analysis, channel waits, and analysis/persistence durations use monotonic time; provider-to-message lag uses the two UTC clocks and can be negative. No histogram percentile should be described as exact; the local export reports quantile intervals and exact observed min/max.
+
+Complete-message receipt is an adapter observation, not a wire timestamp. If the application has stopped reading under backpressure or a host pause, socket/provider buffering can precede that observation. Clock status, connection transitions, and channel/persistence evidence must be considered together before assigning causation. See [the forensic investigation](../../LIVE_DATA_FORENSICS.md) and [final validation evidence](../../FINAL_A1_VALIDATION.md).
 
 ## Optional test-stream connectivity check
 

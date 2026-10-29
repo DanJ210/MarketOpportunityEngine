@@ -64,6 +64,20 @@ public sealed class OpportunityPublicationGateTests
     }
 
     [Fact]
+    public void Unresolved_market_data_gap_suspends_publication_even_after_feed_resumes()
+    {
+        var decision = new OpportunityPublicationGate().Evaluate(
+            Candidate(),
+            MarketDataHealthStatus.Live,
+            AsOfUtc.AddSeconds(1),
+            hasUnresolvedDataGap: true);
+
+        Assert.Equal(OpportunityLifecycleState.Suspended, decision.State);
+        Assert.Equal("MarketDataGapUnresolved", decision.ReasonCode);
+        Assert.Contains("gap", decision.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Recorded_fixture_publication_uses_event_time_and_is_deterministic()
     {
         var candidate = Candidate();
@@ -166,6 +180,8 @@ public sealed class OpportunityPublicationGateTests
             0.1m,
             null,
             100,
+            100_000m,
+            ShortHorizonDollarVolumeStatus.Available,
             100,
             100m,
             100m,

@@ -1,0 +1,7 @@
+@baseUrl = http://localhost:5292
+
+### Requires Development and MarketData:Diagnostics:Enabled=true; otherwise 404.
+GET {{baseUrl}}/api/v1/system/diagnostics
+
+### Regular scanner status; HTTP 200 alone does not establish a healthy feed.
+GET {{baseUrl}}/api/v1/system/status

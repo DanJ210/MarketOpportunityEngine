@@ -16,10 +16,19 @@
             <span class="status-dot"></span>
             <div>
                 <strong>@_status.FeedStatus</strong>
-                <small>@_status.Source · @(_status.Capabilities?.Feed ?? "Unknown") · @(_status.Capabilities?.Coverage ?? MarketDataCoverage.ProviderDefined) coverage</small>
+                <small>Provider: @_status.Source · Feed: @(_status.Capabilities?.Feed ?? "Unknown")</small>
+                <small>Coverage: @(_status.Capabilities?.Coverage ?? MarketDataCoverage.ProviderDefined) (feed capability)</small>
+                @if (_status.HasUnresolvedDataGap)
+                {
+                    <small class="stale-text">Data integrity: unresolved disconnect gap; no backfill performed.</small>
+                }
                 @if (_status.FeedStatus != MarketDataHealthStatus.Recorded)
                 {
-                    <small>Last received: @FormatUtc(_status.LatestReceivedTimeUtc) · age: @FormatAge(_status.ReceiveAge)</small>
+                    <small>Last market event: @FormatUtc(_status.LatestEventTimeUtc) · received: @FormatUtc(_status.LatestReceivedTimeUtc) · age: @FormatAge(_status.ReceiveAge)</small>
+                }
+                @if (!string.IsNullOrWhiteSpace(_status.Message))
+                {
+                    <small>@_status.Message</small>
                 }
             </div>
         </div>
@@ -28,8 +37,10 @@
     @if (_results.Count == 0)
     {
         <div class="empty-state" role="status">
-            <h2>@(_status.Source == "Massive" ? "Waiting for live market data" : "Waiting for fixture analysis")</h2>
-            <p>@(_status.Message ?? "The recorded events are being processed and persisted.")</p>
+            <h2>@(_status.Source != "Fixture" ? "Waiting for live market data" : "Waiting for fixture analysis")</h2>
+            <p>@(_status.Message ?? (_status.Source == "Fixture"
+                ? "The recorded events are being processed and persisted."
+                : "No live analysis is available yet. Waiting for valid market events; connection health is shown above."))</p>
         </div>
     }
     else
@@ -38,7 +49,7 @@
             <article class="metric-card">
                 <span>ANALYSES</span>
                 <strong>@_results.Count symbol/session results</strong>
-                <small>@_status.EventsProcessed unique recorded events</small>
+                <small>@_status.EventsProcessed unique canonical events</small>
             </article>
             <article class="metric-card">
                 <span>SYMBOLS</span>
@@ -104,6 +115,32 @@
                             <span>FEATURE SNAPSHOT</span>
                             <strong>@features.Id.ToString("N")[..12]</strong>
                             <small>@opportunity.FeatureSetVersion</small>
+                        </article>
+                    </section>
+
+                    <section class="summary-grid" aria-label="Existing momentum and volume fields">
+                        <article class="metric-card">
+                            <span>MOMENTUM</span>
+                            <strong>@FormatPercent(features.ShortHorizonReturnPercent)</strong>
+                            <small>Secondary horizon: @FormatPercent(features.SecondaryHorizonReturnPercent)</small>
+                        </article>
+                        <article class="metric-card">
+                            <span>VOLUME</span>
+                            <strong>@FormatVolume(features.ShortHorizonVolume)</strong>
+                            <small>Window dollar volume: @FormatDollars(features.ShortHorizonDollarVolumeUsd) · @features.ShortHorizonDollarVolumeStatus</small>
+                            <small>Session cumulative: @FormatVolume(features.SessionCumulativeVolume)</small>
+                        </article>
+                        <article class="metric-card">
+                            <span>TREND</span>
+                            <strong>@features.SessionTrendDirection</strong>
+                            <small>VWAP slope: @features.SessionVwapSlopeDirection · EMA fast/medium: @FormatPrice(features.FastEma) / @FormatPrice(features.MediumEma)</small>
+                            <small>Price structure: @(features.SessionPriceStructure?.ToString() ?? "Insufficient") · ADX: @FormatPrice(features.SessionAdx) (@features.SessionAdxStatus)</small>
+                        </article>
+                        <article class="metric-card">
+                            <span>QUALITY / RANGE</span>
+                            <strong>@opportunity.QualityScore / 100</strong>
+                            <small>Range position: @FormatPercent(features.SessionRangePositionPercent) · realized volatility: @FormatPercent(features.SessionRealizedVolatilityPercent)</small>
+                            <small>Data quality: @features.DataQuality · complete session: @features.HasCompleteSessionData</small>
                         </article>
                     </section>
 
@@ -176,7 +213,7 @@
         </section>
     }
 
-    <p class="disclaimer">Development fixture only. A setup quality score is not a probability of profit or a trading recommendation.</p>
+    <p class="disclaimer">Read-only market-data analysis. A setup quality score is not a probability of profit or a trading recommendation.</p>
 </section>
 
 @code {
@@ -264,6 +301,9 @@
     };
 
     private static string FormatPrice(decimal? price) => price?.ToString("F2") ?? "--";
+    private static string FormatPercent(decimal? value) => value is null ? "--" : $"{value.Value:F2}%";
+    private static string FormatVolume(long? volume) => volume?.ToString("N0") ?? "--";
+    private static string FormatDollars(decimal? value) => value is null ? "--" : $"${value.Value:N0}";
     private static string FormatSpread(decimal? spread) => spread is null ? "—" : $"{spread:F1} bps";
     private static string FormatAge(TimeSpan? age) => age is null ? "Unavailable" : $"{age.Value.TotalSeconds:F1}s";
     private static string FormatUtc(DateTimeOffset? value) => value is null

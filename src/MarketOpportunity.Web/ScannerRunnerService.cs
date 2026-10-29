@@ -26,7 +26,7 @@ public sealed class ScannerRunnerService(
             scannerState.SetStatus(currentStatus with
             {
                 FeedStatus = MarketDataHealthStatus.Error,
-                Message = "Market-data processing stopped unexpectedly."
+                Message = currentStatus.Message ?? "Market-data processing stopped unexpectedly."
             });
             logger.LogError(exception, "Market-data processing stopped unexpectedly.");
             throw;
