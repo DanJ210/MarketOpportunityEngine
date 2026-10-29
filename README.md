@@ -180,13 +180,12 @@ The launcher builds the Web project and verifies `DB_NAME()` with SQL Server bef
 **Connect to actual exchange data:**
 
 ```powershell
-$sessionId = 'a1-iex-' + [DateTimeOffset]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
-pwsh -NoProfile -File .\scripts\Start-AlpacaValidation.ps1 -Feed iex -SessionId $sessionId
+pwsh -NoProfile -File .\scripts\Start-AlpacaValidation.ps1 -Feed iex
 ```
 
 `-Feed iex` selects **`wss://stream.data.alpaca.markets/v2/iex`**, with `Alpaca / iex / Limited` provenance. It reads only the existing `MarketData:Massive:Symbols` universe from Web-project User Secrets and passes its non-empty, distinct symbols as a one-run Alpaca subscription setting. It does not print unrelated secrets, require re-entry, save another symbol list, connect to Massive, or couple analytics to that configuration key. Configured-entry and distinct-symbol counts are printed; these are **not** subscription acknowledgements or proof of activity. Not every symbol must produce events.
 
-Run during a normal **09:30-16:00 America/New_York** equity session, excluding holidays and accounting for early closes. The launcher does not enforce an exchange calendar or delay execution until open. Observe a bounded **5-10 minute** initial run; this is operational validation, not a full-session soak or a profitability test.
+Run during a normal **09:30-16:00 America/New_York** equity session, excluding holidays and accounting for early closes. The launcher does not enforce an exchange calendar or delay execution until open. IEX defaults to an instrumented **600-second (10-minute)** final validation run; this is operational validation, not a full-session soak or a profitability test.
 
 **Synthetic alternative (not Milestone A.1 exchange evidence):**
 
@@ -194,7 +193,7 @@ Run during a normal **09:30-16:00 America/New_York** equity session, excluding h
 pwsh -NoProfile -File .\scripts\Start-AlpacaValidation.ps1 -Feed test
 ```
 
-`-Feed test` selects **`wss://stream.data.alpaca.markets/v2/test`**, subscribes `FAKEPACA`, and reports `Alpaca / test / Synthetic`. It uses the same dedicated validation database but a new session ID. Stop one run before starting the other; the port and provider connection allowance may already be in use.
+`-Feed test` selects **`wss://stream.data.alpaca.markets/v2/test`**, subscribes `FAKEPACA`, and reports `Alpaca / test / Synthetic`. It defaults to an instrumented **30-second** run and accepts the same duration override. It uses the same dedicated validation database but a new session ID. Stop one run before starting the other; the port and provider connection allowance may already be in use.
 
 **Observe the running app in a second terminal:**
 
@@ -208,7 +207,7 @@ $before, $after | Format-List
 Invoke-RestMethod http://localhost:5291/api/v1/opportunities | ConvertTo-Json -Depth 20
 ```
 
-Check increasing **unique canonical** event counts, event/receive timestamps, truthful feed health and gap state, and existing feature/opportunity/publication results. In the browser, confirm values change **without refreshing** and provenance is `Alpaca / iex / Limited`. `Avoid / No Trade` is acceptable; do not change thresholds to force a candidate. `/health` HTTP 200 alone does not prove a healthy feed. Normal mode does not expose message/parser/reconnect counters. The opt-in instrumentation below records complete messages (not transport frames), subscription acknowledgement symbol lists, and connection lifecycle; symbol-specific provider rejection details are still not retained.
+Check increasing **unique canonical** event counts, event/receive timestamps, truthful feed health and gap state, and existing feature/opportunity/publication results. In the browser, confirm values change **without refreshing** and provenance is `Alpaca / iex / Limited`. `Avoid / No Trade` is acceptable; do not change thresholds to force a candidate. `/health` HTTP 200 alone does not prove a healthy feed. Normal app launches do not expose message/parser/reconnect counters. Validation-launcher instrumentation records complete messages (not transport frames), subscription acknowledgement symbol lists, and connection lifecycle; symbol-specific provider rejection details are still not retained.
 
 **Read exact-session persistence before and after normal shutdown:**
 
@@ -226,25 +225,30 @@ Record final status (`Invoke-RestMethod .../api/v1/system/status`), persisted co
 
 #### One final instrumented A.1 observation
 
-See [final checkpoint evidence and decision](./FINAL_A1_VALIDATION.md) and [the shutdown correction report](./A1_SHUTDOWN_FIX.md). Instrumentation does not authorize analytical changes. Run only during market availability; an after-hours empty connection or the synthetic test feed does not replace the required IEX observation.
+See the [consolidated A.1 validation history](./VALIDATION_HISTORY.md#consolidated-a1-validation-record-2026-10-29) for prior evidence, limitations, and shutdown behavior. Instrumentation does not authorize analytical changes. Run only during market availability; an after-hours empty connection or the synthetic test feed does not replace the required IEX observation.
 
 ```powershell
-$sessionId = 'a1-final-iex-' + [DateTimeOffset]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
-$evidence = Join-Path $env:LOCALAPPDATA "MarketOpportunityEngine\Validation\$sessionId"
-$artifacts = Join-Path $env:LOCALAPPDATA 'MarketOpportunityEngine\ValidationBuild'
-pwsh -NoProfile -File .\scripts\Start-AlpacaValidation.ps1 `
-    -Feed iex -SessionId $sessionId -Instrument -DurationSeconds 300 `
-    -DiagnosticsDirectory $evidence -ArtifactsPath $artifacts -Port 5292
+pwsh -NoProfile -File .\scripts\Start-AlpacaValidation.ps1 -Feed iex
 ```
 
-The alternate port/output path avoids overwriting a running development host; it does **not** make a second Alpaca connection safe if the existing host already uses the account's feed allowance. Coordinate ownership before starting; never stop an unrelated process. The existing `MarketData:Massive:Symbols` universe remains the launcher input. Moving it to `Scanner:Universe:Symbols` is explicitly post-A.1 housekeeping.
+This is the canonical command; **no `-Instrument` switch is needed**. Every validation-launcher run enables diagnostics, including IEX and test-feed runs; the legacy switch remains accepted but cannot disable instrumentation. The default evidence directory is repository-local `artifacts\alpaca-validation\<SessionId>`, ignored by Git. The generated session ID scopes the clock and app diagnostic artifacts. Copy the printed session ID and diagnostics directory when collecting evidence.
 
-`-Instrument` is off by default. It sets only one-run diagnostic options, writes a sanitized `<session>.clock.json` before startup, and uses the same dedicated SQL guard. `w32tm /query /status /verbose` is read-only, time-bounded, and does not synchronize the clock or request elevation. Missing/failed clock status is explicit; time-service status alone is not an authoritative UTC offset/error bound. The app requests normal host shutdown after the bounded duration (five-second timer granularity); the scanner then applies the configured graceful-drain budget.
+Optional overrides are `-DurationSeconds` (5-3600; IEX default 600, test default 30), `-Port` (default 5291), `-DiagnosticsRoot` (a parent directory, with SessionId appended), `-SessionId`, and `-ArtifactsPath` (alternate build output). `-DiagnosticsDirectory` remains available for an exact evidence directory instead of a session-scoped root; it takes precedence over `-DiagnosticsRoot`. Explicitly empty diagnostic paths are rejected. Alternate port/build output avoids overwriting a running development host; it does **not** make a second Alpaca connection safe if the existing host already uses the account's feed allowance. Coordinate ownership before starting; never stop an unrelated process. The existing `MarketData:Massive:Symbols` universe remains the launcher input. Moving it to `Scanner:Universe:Symbols` is explicitly post-A.1 housekeeping.
+
+Before any app/provider startup, preflight requires a successful current build, the verified dedicated validation database, enabled diagnostics, a created/writable evidence directory, a saved `<session>.clock.json`, explicit `Development` environment, and an available localhost port (IPv4 and IPv6 when supported). The startup summary prints feed, session, duration, port, database name, distinct symbol count, evidence directory, and instrumentation/environment state, never credentials. `-PreflightOnly` performs these same checks and creates clock evidence, but never starts the app or opens an Alpaca connection. Environment overrides are restored on exit.
+
+The launcher sets only one-run diagnostic options. `w32tm /query /status /verbose` is read-only, time-bounded, and does not synchronize the clock or request elevation. Missing/failed clock status is explicit in the saved artifact; time-service status alone is not an authoritative UTC offset/error bound. Failure to create/write diagnostic evidence aborts preflight. The app requests normal host shutdown after the bounded duration (five-second timer granularity); the scanner then applies the configured graceful-drain budget. Ctrl+C in the app terminal still requests normal graceful shutdown.
+
+Offline launcher regression tests (SQL/build/app invocation intercepted; no provider connection):
+
+```powershell
+pwsh -NoProfile -File .\scripts\Test-AlpacaValidation.ps1
+```
 
 During the run:
 
 ```powershell
-Invoke-RestMethod http://localhost:5292/api/v1/system/diagnostics |
+Invoke-RestMethod http://localhost:5291/api/v1/system/diagnostics |
     ConvertTo-Json -Depth 20
 ```
 

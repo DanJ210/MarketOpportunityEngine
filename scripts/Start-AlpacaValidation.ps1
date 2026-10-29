@@ -10,12 +10,15 @@ param(
 
     [switch] $PreflightOnly,
 
+    # Retained for compatibility; validation always enables instrumentation.
     [switch] $Instrument,
 
     [ValidateRange(5, 3600)]
-    [int] $DurationSeconds = 300,
+    [int] $DurationSeconds = 600,
 
     [string] $DiagnosticsDirectory,
+
+    [string] $DiagnosticsRoot,
 
     [ValidateRange(1024, 65535)]
     [int] $Port = 5291,
@@ -27,6 +30,72 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
 $project = Join-Path $repositoryRoot 'src\MarketOpportunity.Web\MarketOpportunity.Web.csproj'
 $database = 'MarketOpportunityEngine_LiveValidationTests'
+$Instrument = $true
+if (-not $PSBoundParameters.ContainsKey('DurationSeconds') -and $Feed -eq 'test') {
+    $DurationSeconds = 30
+}
+
+function Get-ValidationConnectionString {
+    param([string] $WebOutput, [string] $Database)
+
+    $sqlClientPath = Join-Path $WebOutput 'runtimes\win\lib\net9.0\Microsoft.Data.SqlClient.dll'
+    $architecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
+    $sniPath = Join-Path $WebOutput "runtimes\win-$architecture\native\Microsoft.Data.SqlClient.SNI.dll"
+    [void] [System.Runtime.InteropServices.NativeLibrary]::Load($sniPath)
+    Add-Type -LiteralPath $sqlClientPath
+    $connection = [Microsoft.Data.SqlClient.SqlConnectionStringBuilder]::new()
+    if (-not [string]::IsNullOrWhiteSpace($env:MARKETOPPORTUNITY_SQL_TEST_CONNECTION)) {
+        try {
+            $connection.set_ConnectionString($env:MARKETOPPORTUNITY_SQL_TEST_CONNECTION)
+        }
+        catch {
+            throw 'MARKETOPPORTUNITY_SQL_TEST_CONNECTION is not a valid SQL Server connection string.'
+        }
+        if ($connection['Initial Catalog'] -ne $Database -or $connection['Data Source'] -ne 'localhost,1433') {
+            throw "The supplied SQL test connection must target localhost,1433 and $Database; it was not replaced."
+        }
+    }
+    else {
+        $password = docker compose exec -T sqlserver printenv MSSQL_SA_PASSWORD
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($password)) {
+            throw 'Cannot read the running local SQL container credential; start the Compose SQL service first.'
+        }
+        $connection['Data Source'] = 'localhost,1433'
+        $connection['Initial Catalog'] = $Database
+        $connection['User ID'] = 'sa'
+        $connection['Password'] = [string] $password
+        $connection['Encrypt'] = 'True'
+        $connection['Trust Server Certificate'] = $true
+        $password = $null
+    }
+
+    $sql = [Microsoft.Data.SqlClient.SqlConnection]::new($connection.get_ConnectionString())
+    try {
+        $sql.Open()
+        $command = $sql.CreateCommand()
+        try {
+            $command.CommandText = 'SELECT DB_NAME()'
+            if ($command.ExecuteScalar() -ne $Database) {
+                throw 'Unexpected validation database.'
+            }
+        }
+        finally {
+            $command.Dispose()
+        }
+    }
+    catch {
+        $cause = $_.Exception
+        while ($null -ne $cause.InnerException) {
+            $cause = $cause.InnerException
+        }
+        throw "Dedicated SQL database verification failed. Run the Compose validation initializer and verify local SQL access. No app was started. Error type: $($cause.GetType().Name)"
+    }
+    finally {
+        $sql.Dispose()
+    }
+    return $connection.get_ConnectionString()
+}
+
 $environmentNames = @(
     'ConnectionStrings__MarketOpportunity',
     'DOTNET_ENVIRONMENT',
@@ -39,6 +108,8 @@ foreach ($name in $environmentNames) {
 
 Push-Location $repositoryRoot
 try {
+    $env:DOTNET_ENVIRONMENT = 'Development'
+    $env:ASPNETCORE_ENVIRONMENT = 'Development'
     $configuredCount = 1
     $symbols = @('FAKEPACA')
     if ($Feed -eq 'iex') {
@@ -78,77 +149,37 @@ try {
         throw 'Web project build failed; the validation app was not started.'
     }
 
-    $sqlClientPath = Join-Path $webOutput 'runtimes\win\lib\net9.0\Microsoft.Data.SqlClient.dll'
-    $architecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
-    $sniPath = Join-Path $webOutput "runtimes\win-$architecture\native\Microsoft.Data.SqlClient.SNI.dll"
-    [void] [System.Runtime.InteropServices.NativeLibrary]::Load($sniPath)
-    Add-Type -LiteralPath $sqlClientPath
-    $connection = [Microsoft.Data.SqlClient.SqlConnectionStringBuilder]::new()
-    if (-not [string]::IsNullOrWhiteSpace($env:MARKETOPPORTUNITY_SQL_TEST_CONNECTION)) {
-        try {
-            $connection.set_ConnectionString($env:MARKETOPPORTUNITY_SQL_TEST_CONNECTION)
-        }
-        catch {
-            throw 'MARKETOPPORTUNITY_SQL_TEST_CONNECTION is not a valid SQL Server connection string.'
-        }
-        if ($connection['Initial Catalog'] -ne $database -or $connection['Data Source'] -ne 'localhost,1433') {
-            throw "The supplied SQL test connection must target localhost,1433 and $database; it was not replaced."
-        }
-    }
-    else {
-        $password = docker compose exec -T sqlserver printenv MSSQL_SA_PASSWORD
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($password)) {
-            throw 'Cannot read the running local SQL container credential; start the Compose SQL service first.'
-        }
-        $connection['Data Source'] = 'localhost,1433'
-        $connection['Initial Catalog'] = $database
-        $connection['User ID'] = 'sa'
-        $connection['Password'] = [string] $password
-        $connection['Encrypt'] = 'True'
-        $connection['Trust Server Certificate'] = $true
-        $password = $null
-    }
-
-    $sql = [Microsoft.Data.SqlClient.SqlConnection]::new($connection.get_ConnectionString())
-    try {
-        $sql.Open()
-        $command = $sql.CreateCommand()
-        try {
-            $command.CommandText = 'SELECT DB_NAME()'
-            if ($command.ExecuteScalar() -ne $database) {
-                throw 'Unexpected validation database.'
-            }
-        }
-        finally {
-            $command.Dispose()
-        }
-    }
-    catch {
-        $cause = $_.Exception
-        while ($null -ne $cause.InnerException) {
-            $cause = $cause.InnerException
-        }
-        throw "Dedicated SQL database verification failed. Run the Compose validation initializer and verify local SQL access. No app was started. Error type: $($cause.GetType().Name)"
-    }
-    finally {
-        $sql.Dispose()
-    }
-
-    Write-Host "Provider=Alpaca Feed=$Feed Database=$database"
-    Write-Host "SessionId=$SessionId ConfiguredEntries=$configuredCount DistinctSymbols=$($symbols.Count)"
-    Write-Host 'This is a requested universe, not proof of subscription or activity.'
-    if ($PreflightOnly) {
-        Write-Host 'Preflight passed. No market-data connection was opened; schema creation waits for app startup.'
-        return
-    }
+    $connectionString = Get-ValidationConnectionString -WebOutput $webOutput -Database $database
 
     $diagnosticArguments = @()
     if ($Instrument) {
         if ([string]::IsNullOrWhiteSpace($DiagnosticsDirectory)) {
-            throw '-Instrument requires an explicit local -DiagnosticsDirectory for sanitized evidence.'
+            if ($PSBoundParameters.ContainsKey('DiagnosticsDirectory')) {
+                throw '-DiagnosticsDirectory must not be empty.'
+            }
+            if ([string]::IsNullOrWhiteSpace($DiagnosticsRoot)) {
+                if ($PSBoundParameters.ContainsKey('DiagnosticsRoot')) {
+                    throw '-DiagnosticsRoot must not be empty.'
+                }
+                $DiagnosticsRoot = Join-Path $repositoryRoot 'artifacts\alpaca-validation'
+            }
+            $DiagnosticsDirectory = Join-Path $DiagnosticsRoot $SessionId
         }
         $DiagnosticsDirectory = [IO.Path]::GetFullPath($DiagnosticsDirectory)
         [void] [IO.Directory]::CreateDirectory($DiagnosticsDirectory)
+        $probePath = Join-Path $DiagnosticsDirectory "$([Guid]::NewGuid().ToString('N')).write-test"
+        $probe = $null
+        try {
+            $probe = [IO.File]::Open($probePath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            $probe.WriteByte(0)
+            $probe.Flush($true)
+        }
+        finally {
+            if ($null -ne $probe) {
+                $probe.Dispose()
+                [IO.File]::Delete($probePath)
+            }
+        }
         $clock = [ordered] @{
             CapturedUtc = [DateTimeOffset]::UtcNow.ToString('O')
             Clock = 'TimeProvider.System / host OS UTC'
@@ -200,14 +231,52 @@ try {
         else {
             $clock.Status = @('Windows time-service diagnostics unavailable on this host; synchronization state is UNKNOWN.')
         }
+        $clockPath = Join-Path $DiagnosticsDirectory "$SessionId.clock.json"
         $clock | ConvertTo-Json -Depth 4 |
-            Set-Content -LiteralPath (Join-Path $DiagnosticsDirectory "$SessionId.clock.json") -Encoding utf8
+            Set-Content -LiteralPath $clockPath -Encoding utf8
+        if (-not (Test-Path -LiteralPath $clockPath -PathType Leaf)) {
+            throw 'Clock diagnostic was not created; the validation app was not started.'
+        }
         Write-Host "Host clock diagnostics saved. $($clock.AuthoritativeOffsetOrErrorBound)"
         $diagnosticArguments = @(
             '--MarketData:Diagnostics:Enabled', 'true',
             '--MarketData:Diagnostics:DurationSeconds', [string] $DurationSeconds,
             '--MarketData:Diagnostics:Directory', $DiagnosticsDirectory
         )
+    }
+
+    if (-not $Instrument -or $diagnosticArguments.Count -eq 0) {
+        throw 'Validation requires diagnostics; the validation app was not started.'
+    }
+    $listeners = @()
+    try {
+        $addresses = @([Net.IPAddress]::Loopback)
+        if ([Net.Sockets.Socket]::OSSupportsIPv6) {
+            $addresses += [Net.IPAddress]::IPv6Loopback
+        }
+        foreach ($address in $addresses) {
+            $listener = [Net.Sockets.TcpListener]::new($address, $Port)
+            $listeners += $listener
+            $listener.ExclusiveAddressUse = $true
+            $listener.Start()
+        }
+    }
+    catch [Net.Sockets.SocketException] {
+        throw "Port $Port is unavailable on localhost; the validation app was not started."
+    }
+    finally {
+        foreach ($listener in $listeners) {
+            $listener.Stop()
+        }
+    }
+
+    Write-Host "Feed=$Feed SessionId=$SessionId DurationSeconds=$DurationSeconds Port=$Port"
+    Write-Host "Environment=Development Database=$database DistinctSymbols=$($symbols.Count) ConfiguredEntries=$configuredCount"
+    Write-Host "DiagnosticsDirectory=$DiagnosticsDirectory InstrumentationEnabled=$Instrument"
+    Write-Host 'This is a requested universe, not proof of subscription or activity.'
+    if ($PreflightOnly) {
+        Write-Host 'Preflight passed. No market-data connection was opened; schema creation waits for app startup.'
+        return
     }
 
     if ($Feed -eq 'iex') {
@@ -217,9 +286,7 @@ try {
         Write-Host 'FAKEPACA is synthetic data, not exchange data and not evidence of Milestone A.1 completion.'
     }
 
-    $env:ConnectionStrings__MarketOpportunity = $connection.get_ConnectionString()
-    $env:DOTNET_ENVIRONMENT = 'Development'
-    $env:ASPNETCORE_ENVIRONMENT = 'Development'
+    $env:ConnectionStrings__MarketOpportunity = $connectionString
     Write-Host "Open http://localhost:$Port/ and use Ctrl+C in this terminal for normal shutdown."
     dotnet run --project $project --no-build --no-launch-profile @buildArguments -- `
         --urls "http://localhost:$Port" `

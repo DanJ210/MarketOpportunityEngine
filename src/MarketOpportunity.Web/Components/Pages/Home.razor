@@ -1,7 +1,8 @@
 @page "/"
-@implements IDisposable
+@implements IAsyncDisposable
 @inject ScannerState Scanner
 @inject ScannerConfiguration Configuration
+@inject IJSRuntime JS
 
 <PageTitle>Market Opportunity Engine</PageTitle>
 
@@ -24,7 +25,7 @@
                 }
                 @if (_status.FeedStatus != MarketDataHealthStatus.Recorded)
                 {
-                    <small>Last market event: @FormatUtc(_status.LatestEventTimeUtc) · received: @FormatUtc(_status.LatestReceivedTimeUtc) · age: @FormatAge(_status.ReceiveAge)</small>
+                    <small>Last market event: <time class="local-time" data-local-time datetime="@ToUtcIso(_status.LatestEventTimeUtc)">@FormatUtc(_status.LatestEventTimeUtc)</time> · received: <time class="local-time" data-local-time datetime="@ToUtcIso(_status.LatestReceivedTimeUtc)">@FormatUtc(_status.LatestReceivedTimeUtc)</time> · age: @FormatAge(_status.ReceiveAge)</small>
                 }
                 @if (!string.IsNullOrWhiteSpace(_status.Message))
                 {
@@ -62,9 +63,9 @@
                 <small>Session values are fixture identifiers, not calendar inference</small>
             </article>
             <article class="metric-card">
-                <span>LATEST EVENT TIME</span>
-                <strong>@FormatUtc(_status.LatestEventTimeUtc)</strong>
-                <small>Analytical time is event time</small>
+                <span>LATEST EVENT TIME · LOCAL</span>
+                <strong><time class="local-time" data-local-time datetime="@ToUtcIso(_status.LatestEventTimeUtc)">@FormatUtc(_status.LatestEventTimeUtc)</time></strong>
+                <small>Displayed in your browser's local time zone · analytical time remains event time</small>
             </article>
         </section>
 
@@ -95,8 +96,8 @@
                         </div>
                         <div class="as-of">
                             <span>AS OF</span>
-                            <strong>@FormatUtc(opportunity.AsOfUtc)</strong>
-                            <small>Expires @FormatUtc(opportunity.ValidUntilUtc, "HH:mm:ss 'UTC'")</small>
+                            <strong><time class="local-time" data-local-time datetime="@ToUtcIso(opportunity.AsOfUtc)">@FormatUtc(opportunity.AsOfUtc)</time></strong>
+                            <small>Expires <time class="local-time" data-local-time datetime="@ToUtcIso(opportunity.ValidUntilUtc)">@FormatUtc(opportunity.ValidUntilUtc)</time></small>
                         </div>
                     </header>
 
@@ -225,6 +226,7 @@
         null,
         Capabilities: MarketDataCapabilities.Unknown);
     private IReadOnlyList<ScannerAnalysisResult> _results = [];
+    private IJSObjectReference? _localTimeModule;
 
     private string FeedClass => _status.FeedStatus switch
     {
@@ -247,6 +249,19 @@
     {
         Scanner.Changed += HandleChanged;
         ReadState();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _localTimeModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/local-time.js");
+        }
+
+        if (_localTimeModule is not null)
+        {
+            await _localTimeModule.InvokeVoidAsync("formatLocalTimes");
+        }
     }
 
     private void HandleChanged()
@@ -306,11 +321,21 @@
     private static string FormatDollars(decimal? value) => value is null ? "--" : $"${value.Value:N0}";
     private static string FormatSpread(decimal? spread) => spread is null ? "—" : $"{spread:F1} bps";
     private static string FormatAge(TimeSpan? age) => age is null ? "Unavailable" : $"{age.Value.TotalSeconds:F1}s";
+    private static string? ToUtcIso(DateTimeOffset? value) =>
+        value?.ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture);
     private static string FormatUtc(DateTimeOffset? value) => value is null
         ? "--"
         : FormatUtc(value.Value);
     private static string FormatUtc(DateTimeOffset value, string format = "yyyy-MM-dd HH:mm:ss 'UTC'") =>
         value.UtcDateTime.ToString(format, System.Globalization.CultureInfo.InvariantCulture);
 
-    public void Dispose() => Scanner.Changed -= HandleChanged;
+    public async ValueTask DisposeAsync()
+    {
+        Scanner.Changed -= HandleChanged;
+
+        if (_localTimeModule is not null)
+        {
+            await _localTimeModule.DisposeAsync();
+        }
+    }
 }

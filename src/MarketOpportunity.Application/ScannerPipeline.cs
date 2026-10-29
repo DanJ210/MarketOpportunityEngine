@@ -429,6 +429,7 @@ public sealed class ScannerPipeline(
 
                 var diagnosticsDrainCompleted = diagnostics?.ShutdownDrainCompleted() ?? true;
                 if (acceptedEvents != dequeuedEvents
+                    || analyzedEvents != acceptedEvents - duplicateEvents
                     || acceptedEvents != duplicateEvents + persistenceAcknowledgedEvents
                     || persistenceFailures != 0
                     || processingFailures != 0

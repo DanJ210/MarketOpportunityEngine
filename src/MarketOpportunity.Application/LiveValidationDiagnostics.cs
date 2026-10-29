@@ -378,6 +378,8 @@ public sealed class LiveValidationDiagnostics : IDisposable
         lock (_sync)
         {
             if (Value("accepted_events") != Value("dequeued_events")
+                || Value("events_analyzed")
+                    != Value("accepted_events") - Value("duplicate_events")
                 || Value("accepted_events") != Value("duplicate_events")
                 + Value("persistence_acknowledged_events")
                 || Value("persistence_failures") != 0
@@ -385,7 +387,7 @@ public sealed class LiveValidationDiagnostics : IDisposable
             {
                 _shutdownDrainStatus = "Failed";
                 _shutdownDrainFailure =
-                    "Accepted work did not reconcile with duplicate inputs and persistence acknowledgements.";
+                    "Accepted work did not reconcile with dequeue, duplicate, analysis, and persistence accounting.";
                 return false;
             }
 

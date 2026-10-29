@@ -9,4 +9,5 @@ TestResults/
 coverage/
 *.coverage
 *.coveragexml
+artifacts/
 appsettings.*.local.json

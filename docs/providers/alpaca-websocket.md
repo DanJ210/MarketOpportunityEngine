@@ -88,7 +88,7 @@ Each connection attempt gets a fresh diagnostic GUID and sanitized Connecting/Au
 
 Metrics use the `MarketOpportunity.LiveValidation` meter, `moe.live.*` instrument names, and a fixed `provider=Alpaca` label, never connection IDs/symbols as metric labels. Local diagnostic files/logs carry bounded connection/symbol evidence for correlation. Message-to-creation, creation-to-analysis, channel waits, and analysis/persistence durations use monotonic time; provider-to-message lag uses the two UTC clocks and can be negative. No histogram percentile should be described as exact; the local export reports quantile intervals and exact observed min/max.
 
-Complete-message receipt is an adapter observation, not a wire timestamp. If the application has stopped reading under backpressure or a host pause, socket/provider buffering can precede that observation. Clock status, connection transitions, and channel/persistence evidence must be considered together before assigning causation. See [the forensic investigation](../../LIVE_DATA_FORENSICS.md) and [final validation evidence](../../FINAL_A1_VALIDATION.md).
+Complete-message receipt is an adapter observation, not a wire timestamp. If the application has stopped reading under backpressure or a host pause, socket/provider buffering can precede that observation. Clock status, connection transitions, and channel/persistence evidence must be considered together before assigning causation. See the [consolidated A.1 validation history](../../VALIDATION_HISTORY.md#consolidated-a1-validation-record-2026-10-29).
 
 ## Optional test-stream connectivity check
 

@@ -408,6 +408,21 @@ public sealed class LiveValidationDiagnosticsTests
         Assert.Equal("Completed", snapshot.ShutdownDrainStatus);
     }
 
+    [Fact]
+    public void Drain_does_not_complete_when_accepted_work_was_not_analyzed()
+    {
+        using var diagnostics = new LiveValidationDiagnostics(TimeProvider.System);
+        diagnostics.Accepted(0);
+        diagnostics.Dequeued(0, duplicate: false);
+        diagnostics.PersistenceCompleted(0, 0, events: 1);
+        diagnostics.ShutdownDrainStarted();
+
+        Assert.False(diagnostics.ShutdownDrainCompleted());
+        var snapshot = diagnostics.Snapshot();
+        Assert.Equal("Failed", snapshot.ShutdownDrainStatus);
+        Assert.Contains("analysis", snapshot.ShutdownDrainFailure, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static async Task Until(Func<bool> condition)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
