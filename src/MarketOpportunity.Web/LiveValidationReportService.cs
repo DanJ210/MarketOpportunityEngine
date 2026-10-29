@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using MarketOpportunity.Application;
 
@@ -10,6 +11,33 @@ public sealed class LiveValidationReportService(
     IHostApplicationLifetime lifetime,
     ILogger<LiveValidationReportService> logger) : BackgroundService
 {
+    private readonly List<IDisposable> _registrations = [];
+
+    public override Task StartAsync(CancellationToken cancellationToken)
+    {
+        _registrations.Add(lifetime.ApplicationStopping.Register(diagnostics.ShutdownRequested));
+        foreach (var signal in new[] { PosixSignal.SIGINT, PosixSignal.SIGQUIT })
+        {
+            try
+            {
+                _registrations.Add(PosixSignalRegistration.Create(signal, context => OnSignal(diagnostics, context.Signal)));
+            }
+            catch (PlatformNotSupportedException)
+            {
+            }
+        }
+        return base.StartAsync(cancellationToken);
+    }
+
+    // Console Ctrl+C maps to SIGINT and Ctrl+Break to SIGQUIT; the host's console lifetime still performs the stop.
+    public static void OnSignal(LiveValidationDiagnostics diagnostics, PosixSignal signal)
+    {
+        if (signal is PosixSignal.SIGINT or PosixSignal.SIGQUIT)
+        {
+            diagnostics.RecordShutdownTrigger(ShutdownTrigger.OperatorCancellation);
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var duration = configuration.GetValue<int>("MarketData:Diagnostics:DurationSeconds");
@@ -22,6 +50,7 @@ public sealed class LiveValidationReportService(
                 await SaveAsync(stoppingToken);
                 if (duration > 0 && clock.GetElapsedTime(started).TotalSeconds >= duration)
                 {
+                    diagnostics.RecordShutdownTrigger(ShutdownTrigger.DurationElapsed);
                     logger.LogInformation("Bounded live validation reached its duration; requesting normal host shutdown.");
                     lifetime.StopApplication();
                     return;
@@ -39,6 +68,13 @@ public sealed class LiveValidationReportService(
         await SaveAsync(cancellationToken);
     }
 
+    public override void Dispose()
+    {
+        foreach (var registration in _registrations) { registration.Dispose(); }
+        _registrations.Clear();
+        base.Dispose();
+    }
+
     private async Task SaveAsync(CancellationToken cancellationToken)
     {
         var snapshot = diagnostics.Snapshot();
@@ -50,14 +86,15 @@ public sealed class LiveValidationReportService(
             snapshot.PersistenceFailedEvents, snapshot.CancelledWrites, snapshot.ChannelDepth,
             snapshot.RemainingEvents, snapshot.ShutdownDrainStatus, snapshot.ShutdownDrainFailure,
             snapshot.MaximumSampledChannelDepth, snapshot.LongestChannelWaitMs);
+        if (snapshot.ShutdownRequestedUtc is not null)
+        {
+            logger.LogInformation(
+                "Live validation shutdown: trigger={ShutdownTrigger}, requestedUtc={ShutdownRequestedUtc:O}, configuredDurationSeconds={ConfiguredDurationSeconds}",
+                snapshot.ShutdownTrigger, snapshot.ShutdownRequestedUtc, snapshot.ConfiguredDurationSeconds);
+        }
         var directory = configuration["MarketData:Diagnostics:Directory"];
         if (string.IsNullOrWhiteSpace(directory)) { return; }
-        var session = configuration["MarketData:Alpaca:SessionId"]
-            ?? throw new InvalidOperationException("Diagnostic export requires a session ID.");
-        if (session.Length > 64 || session.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '-' && character != '_'))
-        {
-            throw new InvalidOperationException("Diagnostic export requires a filename-safe session ID.");
-        }
+        var session = LiveValidationSession.ValidateSessionId(configuration["MarketData:Alpaca:SessionId"]);
         Directory.CreateDirectory(directory);
         var target = Path.Combine(directory, session + ".diagnostics.json");
         var temporary = target + ".tmp";

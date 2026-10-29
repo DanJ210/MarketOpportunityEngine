@@ -155,6 +155,80 @@ public sealed class LiveValidationDiagnosticsTests
     }
 
     [Fact]
+    public void Timing_summaries_report_exact_counts_above_latency_thresholds()
+    {
+        var clock = new ManualClock();
+        using var diagnostics = new LiveValidationDiagnostics(clock);
+        foreach (var milliseconds in new[] { 500, 1000, 1001, 5001, 10001, 15000, 15001 })
+        {
+            var start = clock.GetTimestamp();
+            clock.Advance(TimeSpan.FromMilliseconds(milliseconds));
+            diagnostics.PersistenceCompleted(start, start, 1);
+        }
+        var summary = diagnostics.Snapshot().Timings["persistence_batch"];
+        Assert.Equal(7, summary.Count);
+        Assert.Equal(500, summary.MinimumMs);
+        Assert.Equal(15001, summary.MaximumMs);
+        Assert.NotNull(summary.MedianUpperBoundMs);
+        Assert.NotNull(summary.P95UpperBoundMs);
+        Assert.Equal(5, summary.CountAbove1000Ms);
+        Assert.Equal(4, summary.CountAbove5000Ms);
+        Assert.Equal(3, summary.CountAbove10000Ms);
+        Assert.Equal(1, summary.CountAbove15000Ms);
+        Assert.Equal(0, diagnostics.Snapshot().Timings["channel_write_wait"].CountAbove1000Ms);
+    }
+
+    [Fact]
+    public void Shutdown_trigger_is_unknown_until_recorded_and_keeps_the_first_requested_cause()
+    {
+        var clock = new ManualClock();
+        using var diagnostics = new LiveValidationDiagnostics(clock);
+        diagnostics.ConfigureRun(600, "C:\\evidence\\s.app.log");
+        var initial = diagnostics.Snapshot();
+        Assert.Equal("Unknown", initial.ShutdownTrigger);
+        Assert.Null(initial.ShutdownRequestedUtc);
+        Assert.Equal(600, initial.ConfiguredDurationSeconds);
+        Assert.Equal("C:\\evidence\\s.app.log", initial.ApplicationLogPath);
+
+        clock.Advance(TimeSpan.FromSeconds(600));
+        var requested = clock.GetUtcNow();
+        diagnostics.RecordShutdownTrigger(ShutdownTrigger.DurationElapsed);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        diagnostics.ShutdownRequested();
+        diagnostics.RecordShutdownTrigger(ShutdownTrigger.OperatorCancellation);
+        var snapshot = diagnostics.Snapshot();
+        Assert.Equal("DurationElapsed", snapshot.ShutdownTrigger);
+        Assert.Equal(requested, snapshot.ShutdownRequestedUtc);
+        Assert.Equal(new[] { "DurationElapsed", "OperatorCancellation" },
+            snapshot.ShutdownTriggerEvents.Select(item => item.Trigger));
+    }
+
+    [Fact]
+    public void Abnormal_shutdown_outcomes_supersede_a_requested_trigger_and_remain_in_history()
+    {
+        using var diagnostics = new LiveValidationDiagnostics(new ManualClock());
+        diagnostics.RecordShutdownTrigger(ShutdownTrigger.OperatorCancellation);
+        diagnostics.ShutdownDrainTimedOut();
+        diagnostics.RecordShutdownTrigger(ShutdownTrigger.ApplicationFailure);
+        var snapshot = diagnostics.Snapshot();
+        Assert.Equal("GracefulDrainTimeout", snapshot.ShutdownTrigger);
+        Assert.Equal(new[] { "OperatorCancellation", "GracefulDrainTimeout", "ApplicationFailure" },
+            snapshot.ShutdownTriggerEvents.Select(item => item.Trigger));
+
+        using var failed = new LiveValidationDiagnostics(new ManualClock());
+        failed.ShutdownRequested();
+        failed.ShutdownDrainFailed("reconciliation failed");
+        Assert.Equal("ApplicationFailure", failed.Snapshot().ShutdownTrigger);
+
+        using var unknown = new LiveValidationDiagnostics(new ManualClock());
+        unknown.ShutdownRequested();
+        unknown.RecordShutdownTrigger(ShutdownTrigger.Unknown);
+        Assert.Equal("Unknown", unknown.Snapshot().ShutdownTrigger);
+        Assert.NotNull(unknown.Snapshot().ShutdownRequestedUtc);
+        Assert.Empty(unknown.Snapshot().ShutdownTriggerEvents);
+    }
+
+    [Fact]
     public void Connection_attempts_successful_sockets_and_subscription_acknowledgements_are_distinct()
     {
         using var diagnostics = new LiveValidationDiagnostics(new ManualClock());

@@ -51,7 +51,22 @@ public sealed record TimingSummary(
     double? MedianLowerBoundMs,
     double? MedianUpperBoundMs,
     double? P95LowerBoundMs,
-    double? P95UpperBoundMs);
+    double? P95UpperBoundMs,
+    long CountAbove1000Ms = 0,
+    long CountAbove5000Ms = 0,
+    long CountAbove10000Ms = 0,
+    long CountAbove15000Ms = 0);
+
+public enum ShutdownTrigger
+{
+    Unknown,
+    DurationElapsed,
+    OperatorCancellation,
+    ApplicationFailure,
+    GracefulDrainTimeout
+}
+
+public sealed record ShutdownTriggerEvent(string Trigger, DateTimeOffset Utc);
 
 public sealed record LiveValidationSnapshot(
     DateTimeOffset StartedTimeUtc,
@@ -93,7 +108,12 @@ public sealed record LiveValidationSnapshot(
     long RemainingEvents,
     IReadOnlyDictionary<string, TimingSummary> Timings,
     IReadOnlyList<DiagnosticTransition> Transitions,
-    IReadOnlyList<MetadataSummary> ProviderMetadata);
+    IReadOnlyList<MetadataSummary> ProviderMetadata,
+    int? ConfiguredDurationSeconds,
+    string ShutdownTrigger,
+    DateTimeOffset? ShutdownRequestedUtc,
+    IReadOnlyList<ShutdownTriggerEvent> ShutdownTriggerEvents,
+    string? ApplicationLogPath);
 
 // Sidecar state deliberately never participates in MarketEvent equality, serialization, or identity.
 public sealed class LiveValidationDiagnostics : IDisposable
@@ -123,6 +143,12 @@ public sealed class LiveValidationDiagnostics : IDisposable
     private int _maxDepth;
     private double _longestWait;
     private string _shutdownDrainStatus = "NotStarted";
+    private const int MaximumShutdownEvents = 16;
+    private readonly List<ShutdownTriggerEvent> _shutdownEvents = [];
+    private ShutdownTrigger? _shutdownTrigger;
+    private DateTimeOffset? _shutdownRequestedUtc;
+    private int? _configuredDurationSeconds;
+    private string? _applicationLogPath;
     private string? _shutdownDrainFailure;
     private readonly ObservableGauge<int> _depthGauge;
 
@@ -404,6 +430,7 @@ public sealed class LiveValidationDiagnostics : IDisposable
         {
             _shutdownDrainStatus = "Failed";
             _shutdownDrainFailure = reason;
+            RecordShutdownTriggerLocked(ShutdownTrigger.ApplicationFailure);
         }
     }
 
@@ -414,6 +441,47 @@ public sealed class LiveValidationDiagnostics : IDisposable
             _shutdownDrainStatus = "TimedOut";
             _shutdownDrainFailure =
                 "The graceful shutdown timeout expired before accepted work completed.";
+            RecordShutdownTriggerLocked(ShutdownTrigger.GracefulDrainTimeout);
+        }
+    }
+
+    public void ConfigureRun(int configuredDurationSeconds, string? applicationLogPath)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(configuredDurationSeconds);
+        lock (_sync)
+        {
+            _configuredDurationSeconds = configuredDurationSeconds;
+            _applicationLogPath = applicationLogPath;
+        }
+    }
+
+    // Records the cause at the moment it is observed; the trigger is never inferred from runtime.
+    // A requested stop (duration or operator) is kept unless a later abnormal outcome
+    // (drain timeout or failure) supersedes it; every recorded cause stays in the event history.
+    public void RecordShutdownTrigger(ShutdownTrigger trigger)
+    {
+        lock (_sync) { RecordShutdownTriggerLocked(trigger); }
+    }
+
+    public void ShutdownRequested()
+    {
+        lock (_sync) { _shutdownRequestedUtc ??= _clock.GetUtcNow(); }
+    }
+
+    private void RecordShutdownTriggerLocked(ShutdownTrigger trigger)
+    {
+        if (trigger == ShutdownTrigger.Unknown) { return; }
+        var now = _clock.GetUtcNow();
+        _shutdownRequestedUtc ??= now;
+        if (_shutdownEvents.Count < MaximumShutdownEvents)
+        {
+            _shutdownEvents.Add(new(trigger.ToString(), now));
+        }
+        static bool Abnormal(ShutdownTrigger? value) =>
+            value is ShutdownTrigger.ApplicationFailure or ShutdownTrigger.GracefulDrainTimeout;
+        if (_shutdownTrigger is null || (Abnormal(trigger) && !Abnormal(_shutdownTrigger)))
+        {
+            _shutdownTrigger = trigger;
         }
     }
 
@@ -443,7 +511,9 @@ public sealed class LiveValidationDiagnostics : IDisposable
                 Math.Max(0, Value("accepted_events") - Value("duplicate_events")
                     - Value("persistence_acknowledged_events")),
                 _timings.ToDictionary(pair => pair.Key, pair => pair.Value.Distribution.Summary()),
-                _transitions.ToArray(), _metadata.Values.ToArray());
+                _transitions.ToArray(), _metadata.Values.ToArray(),
+                _configuredDurationSeconds, (_shutdownTrigger ?? ShutdownTrigger.Unknown).ToString(),
+                _shutdownRequestedUtc, _shutdownEvents.ToArray(), _applicationLogPath);
         }
     }
 
@@ -506,6 +576,10 @@ public sealed class LiveValidationDiagnostics : IDisposable
             .Reverse().Select(value => -value).Concat(PositiveBounds).ToArray();
         private readonly long[] _buckets = new long[Bounds.Length + 1];
         private long _count;
+        private long _above1000;
+        private long _above5000;
+        private long _above10000;
+        private long _above15000;
         private double _min = double.PositiveInfinity;
         private double _max = double.NegativeInfinity;
 
@@ -514,6 +588,10 @@ public sealed class LiveValidationDiagnostics : IDisposable
             var index = Array.BinarySearch(Bounds, value);
             _buckets[index < 0 ? ~index : index]++;
             _count++;
+            if (value > 1000) { _above1000++; }
+            if (value > 5000) { _above5000++; }
+            if (value > 10000) { _above10000++; }
+            if (value > 15000) { _above15000++; }
             _min = Math.Min(_min, value);
             _max = Math.Max(_max, value);
         }
@@ -523,7 +601,8 @@ public sealed class LiveValidationDiagnostics : IDisposable
             if (_count == 0) { return new(0, null, null, null, null, null, null); }
             var median = Quantile(.5);
             var p95 = Quantile(.95);
-            return new(_count, _min, _max, median.Lower, median.Upper, p95.Lower, p95.Upper);
+            return new(_count, _min, _max, median.Lower, median.Upper, p95.Lower, p95.Upper,
+                _above1000, _above5000, _above10000, _above15000);
         }
 
         private (double Lower, double Upper) Quantile(double percentile)

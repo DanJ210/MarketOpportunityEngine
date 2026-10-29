@@ -146,6 +146,19 @@ try {
         Assert-True ($summary.Contains($field)) "Missing summary field $field."
     }
     Assert-True (-not $summary.Contains('Integrated Security') -and -not $summary.Contains('previous-connection')) 'Summary leaked connection details.'
+    $resultPath = Join-Path $expectedDirectory 'offline-iex.launcher-result.json'
+    Assert-True (Test-Path -LiteralPath $resultPath -PathType Leaf) 'Launcher result artifact missing.'
+    $resultText = Get-Content -LiteralPath $resultPath -Raw
+    $result = $resultText | ConvertFrom-Json
+    $clockData = Get-Content -LiteralPath (Join-Path $expectedDirectory 'offline-iex.clock.json') -Raw | ConvertFrom-Json
+    Assert-True ($result.SessionId -eq 'offline-iex' -and $clockData.SessionId -eq 'offline-iex') 'Session artifacts disagree on SessionId.'
+    Assert-True ($result.ProcessExitCode -eq 0 -and $result.ProcessExitCodeCaptured) 'Launcher result did not capture exit code 0.'
+    Assert-True ($result.ConfiguredDurationSeconds -eq 600) 'Launcher result omitted configured duration.'
+    Assert-True ([DateTimeOffset]::Parse($result.ProcessExitedUtc) -ge [DateTimeOffset]::Parse($result.ProcessStartedUtc)) 'Launcher exit time precedes start.'
+    foreach ($path in @($result.DiagnosticsPath, $result.ClockPath, $result.ApplicationLogPath)) {
+        Assert-True ((Split-Path $path -Leaf).StartsWith('offline-iex.')) "Artifact $path is not session scoped."
+    }
+    Assert-True (-not $resultText.Contains('Integrated Security') -and -not $resultText.Contains('Database=')) 'Launcher result leaked connection details.'
 
     $custom = $base.Clone()
     $custom.DurationSeconds = 123
@@ -232,6 +245,12 @@ try {
     $testState.DatabaseFailure = $false
     $testState.RunExitCode = 1
     Invoke-LauncherCase 'App failure restores environment' $base 'exited with code 1'
+    $failedResult = Get-Content -LiteralPath (Join-Path $expectedDirectory 'offline-iex.launcher-result.json') -Raw | ConvertFrom-Json
+    Assert-True ($failedResult.ProcessExitCode -eq 1 -and $failedResult.SessionId -eq 'offline-iex') 'Launcher result did not record child exit code 1.'
+    $testState.RunExitCode = 3
+    Invoke-LauncherCase 'Nonzero child exit code is recorded before failing' $base 'exited with code 3'
+    $failedResult = Get-Content -LiteralPath (Join-Path $expectedDirectory 'offline-iex.launcher-result.json') -Raw | ConvertFrom-Json
+    Assert-True ($failedResult.ProcessExitCode -eq 3 -and $failedResult.ProcessExitCodeCaptured) 'Launcher result did not record child exit code 3.'
     Write-Host "$($testState.Passed) offline launcher interception tests passed. No app, SQL, Docker, or provider connection was started."
 }
 finally {

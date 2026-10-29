@@ -2,7 +2,45 @@
 
 ## Consolidated A.1 validation record (2026-10-29)
 
-This section preserves durable evidence from the live IEX, forensic, instrumentation, and shutdown work. It summarizes observations; it is not a completed final instrumented run. The current checkpoint and required next step are in [PROJECT_STATUS.md](./PROJECT_STATUS.md), and the operator procedure is in [README.md](./README.md#one-final-instrumented-a1-observation).
+This section preserves durable evidence from the live IEX, forensic, instrumentation, and shutdown work. The completed instrumented observation and its evidence limits are recorded below; A.1 remains blocked on missing session-specific logs and browser/circuit evidence. The current checkpoint is in [PROJECT_STATUS.md](./PROJECT_STATUS.md), and the operator procedure is in [README.md](./README.md#one-final-instrumented-a1-observation).
+
+### Completed instrumented IEX observation (2026-10-29)
+
+Session `alpaca-iex-20261029T171641938Z` ran Alpaca IEX / Limited for the requested universe `AAPL, MSFT, SPY, NOK, GOOGL, AMZN, TSLA`; all seven symbols were confirmed for both trades and quotes. The diagnostic runtime was **601.892 seconds**, from `13:17:10.086 EDT` to its final capture at `13:27:11.978 EDT`. The current launcher defaults to 600 seconds, port 5291, Development, and `MarketOpportunityEngine_LiveValidationTests`; the exact invocation was not retained, so those launch settings are inferred from the source/defaults and observed runtime. The diagnostic JSON embeds this SessionId; the colocated clock filename matches it, although the clock JSON itself has no SessionId field. The clock file was captured at `17:17:03.940Z`; the diagnostic was first created at `17:17:15.273Z`, captured its final snapshot at `17:27:11.978Z`, and was last written at `17:27:11.995Z`.
+
+The export records one connection (`003537b4-ad00-4f13-88fc-8a2195b7a3f2`), one successful socket, authentication and subscription acknowledgements, then Live; it ended as `Disconnected / CancellationRequested` at `13:27:10.312 EDT`, with no reconnect. There were **23,722** complete WebSocket messages, **23,719** market-data messages, **57,758** canonical events (**2,511 trades / 55,247 quotes**), and no parser failures. No separate malformed/unsupported-message count is exposed. All diagnostic metadata groups were complete (30 groups; no unattributed metadata events or dropped transitions). The export does not record a final data-gap state.
+
+Exact-session, read-only SQL verification against `MarketOpportunityEngine_LiveValidationTests` found **57,758** canonical rows and distinct identities, **766** feature snapshots, **766** Momentum Continuation evaluations, and **3,458** evidence rows. Provenance was Alpaca / iex / Limited / realtime, with trade and quote support. Event time ranged from `17:17:10.8306486Z` to `17:27:10.2851874Z`; receive time ranged from `17:17:10.7518025Z` to `17:27:10.1749248Z`.
+
+| Symbol | Events | Snapshots / evaluations | Avoid / Long / Short / Watch |
+|---|---:|---:|---:|
+| AAPL | 9,998 | 114 | 107 / 6 / 1 / 0 |
+| AMZN | 6,589 | 114 | 83 / 26 / 1 / 4 |
+| GOOGL | 3,468 | 113 | 66 / 12 / 30 / 5 |
+| MSFT | 338 | 86 | 80 / 6 / 0 / 0 |
+| NOK | 2,317 | 112 | 77 / 26 / 8 / 1 |
+| SPY | 32,116 | 115 | 115 / 0 / 0 / 0 |
+| TSLA | 2,932 | 112 | 106 / 5 / 0 / 1 |
+| **Total** | **57,758** | **766** | **634 / 81 / 40 / 11** |
+
+Pipeline accounting reconciled: accepted = dequeued = analyzed = persistence-acknowledged = **57,758**; duplicates, processing failures, persistence failures, cancelled writes, remaining work, and final channel depth were all **0**. Drain status was **Completed**; sampled channel high-water was **1,320**, with **0** asynchronous write waits and longest wait **0 ms**. Persistence acknowledgement is not an INSERT count; SQL independently verified the persisted rows and identities.
+
+| Timing stage (ms) | Samples | Min / max | Median bucket | p95 bucket |
+|---|---:|---:|---:|---:|
+| Provider event -> complete message receipt | 57,758 | -115.549 / 102.519 | [-115.549, -100] | [-100, -50] |
+| Message receipt -> canonical creation | 57,758 | 0.004 / 33.724 | [0.1, 0.25] | [2, 5] |
+| Canonical creation -> analysis start | 57,758 | 0.372 / 19,069.470 | [2,000, 5,000] | [5,000, 10,000] |
+| Analysis start -> persistence completion | 766 | 96.433 / 10,644.304 | [200, 500] | [1,000, 2,000] |
+| Persistence-call duration | 766 | 95.901 / 10,641.400 | [200, 500] | [1,000, 2,000] |
+| Asynchronous channel-write wait | 0 | not sampled | n/a | n/a |
+
+Percentiles are histogram intervals, not exact values. Counts above the 1/5/10/15-second thresholds were not exported for this run and cannot be reconstructed from its aggregate summary; later runs export them per stage. The largest observed delays were after message receipt, principally between creation and analysis and during persistence. Histograms are aggregate-only, so the bursts cannot be correlated to individual symbols or event types. There were no measured blocked writes despite the sampled queue high-water.
+
+The host-clock snapshot reported source `time.windows.com,0x9`, last successful sync `10/29/2026 9:16:07 AM` (timezone not stated), phase offset `1.5863064 s`, root delay `0.0339603 s`, root dispersion `9.3564537 s`, `Leap Indicator 3 (not synchronized)`, stratum 0, last sync error 1, and 7,952.066 seconds since last good sync. The returned last-sync time and elapsed-since-sync fields do not reconcile with the capture time under either UTC or EDT interpretation. No authoritative contemporaneous UTC error bound exists; the clock evidence therefore does not establish the cause of the negative event-to-message lags.
+
+There were **0 zero-ask quotes**, so there are no affected symbols, percentages, or zero-ask-to-positive-ask sequences. Quote metadata captured bid/ask exchange `V`; tape was `C` for AAPL, AMZN, GOOGL, MSFT, TSLA, `A` for NOK, and `B` for SPY. Quote condition `R` was recorded throughout, with `?` additionally on AMZN, GOOGL, and TSLA. This run does not establish zero-ask semantics.
+
+`ShutdownDrainStatus=Completed` and the reconciled counters establish that accepted non-duplicate work reached analysis and successful persistence before the final diagnostic export. The configured drain budget is 20 seconds by the current default; actual drain duration is not separately timed. The observed cancellation at approximately 600 seconds is consistent with the launcher's 600-second duration timer, but the exact trigger cannot be distinguished from operator cancellation without the actual launcher arguments/logs. No session-specific sanitized launcher/application logs or browser/circuit evidence were retained in the reviewed evidence. Consequently the process exit code, fatal-log absence, and Blazor behavior are **UNKNOWN**; A.1 remains blocked on that evidence gap, not on an observed ingestion or pipeline failure. No resource-pressure measurements were captured.
 
 ### Live IEX validation
 
@@ -14,7 +52,7 @@ Three separate Alpaca IEX sessions on 2026-10-28 persisted **1,571,489 canonical
 | `alpaca-iex-20261028T141628627Z` | 243,079 | 7,010 | 236,069 | 1,664 |
 | `alpaca-iex-20261028T184942408Z` | 1,286,992 | 35,162 | 1,251,830 | 2,616 |
 
-Persisted provenance was Alpaca / IEX / Limited / realtime, with trade and quote support, across seven symbols. The sessions also persisted feature calculations and Momentum Continuation evaluations. These are separate sessions, not one continuous runtime; database timestamp ranges do not establish process uptime. Blazor live behavior has been observed previously, but must be checked again during the final instrumented run.
+Persisted provenance was Alpaca / IEX / Limited / realtime, with trade and quote support, across seven symbols. The sessions also persisted feature calculations and Momentum Continuation evaluations. These are separate sessions, not one continuous runtime; database timestamp ranges do not establish process uptime. Blazor live behavior has been observed previously, but no browser/circuit evidence was retained for the completed instrumented run documented above.
 
 ### Timestamp and quote forensics
 
@@ -26,7 +64,7 @@ Persisted provenance was Alpaca / IEX / Limited / realtime, with trade and quote
 
 ### Instrumentation and unresolved measurement limits
 
-Opt-in instrumentation was added to measure complete-message receipt, per-event creation, analysis, persistence, asynchronous channel waits, connection lifecycle, and bounded provider metadata. It exports sanitized timing and accounting evidence, including clock diagnostics. Complete-message receipt is an application receive-call boundary, not a wire-arrival timestamp. Historical uninstrumented sessions cannot supply the missing boundaries or contemporaneous clock accuracy. The final instrumented IEX session has not yet been run, so actual live metadata, timing, backpressure, browser updates, and shutdown reconciliation remain unverified.
+Opt-in instrumentation measures complete-message receipt, per-event creation, analysis, persistence, asynchronous channel waits, connection lifecycle, and bounded provider metadata. It exports sanitized timing and accounting evidence, including clock diagnostics. Complete-message receipt is an application receive-call boundary, not a wire-arrival timestamp. The 2026-10-29 run documented above supplies these measurements and a live drain reconciliation; it does not supply browser/circuit evidence or an authoritative contemporaneous clock error bound. Historical uninstrumented sessions cannot supply those missing boundaries.
 
 Other evidence limits include absent raw market-data payloads, unpersisted subscription/rejection details in the earlier runs, and no persisted historical publication/health-transition timeline. Provider semantics for zero asks and the source of historical lag bursts remain unresolved.
 
@@ -38,9 +76,9 @@ The correction stops producer acceptance, completes the channel, drains queued i
 
 ### Verification and limits
 
-After the shutdown correction, focused shutdown/pipeline/publication/fixture-determinism tests passed (**41/41**), the full offline unit suite passed (**231/231**), hosted fixture integration passed on two runs, guarded SQL persistence/migration integration passed (**3/3**), hosted diagnostic checks passed (**2/2**), and the solution build succeeded with **0 warnings and 0 errors**. SQL tests targeted guarded dedicated test catalogs. These results validate implementation and offline/integration behavior, not the missing final live-session measurements.
+After the shutdown correction, focused shutdown/pipeline/publication/fixture-determinism tests passed (**41/41**), the full offline unit suite passed (**231/231**), hosted fixture integration passed on two runs, guarded SQL persistence/migration integration passed (**3/3**), hosted diagnostic checks passed (**2/2**), and the solution build succeeded with **0 warnings and 0 errors**. SQL tests targeted guarded dedicated test catalogs. These results validate implementation and offline/integration behavior; the completed live-session measurements are recorded above, with browser/circuit and host-log evidence still missing.
 
-No analytical formulas, quote rules, event identity/order, scoring, classifications, analytical settings, provider timestamps/parsing/selection, channel capacity, or persistence schema changed during instrumentation or shutdown correction. No live-session graceful-shutdown reconciliation is yet available.
+No analytical formulas, quote rules, event identity/order, scoring, classifications, analytical settings, provider timestamps/parsing/selection, channel capacity, or persistence schema changed during instrumentation or shutdown correction. The 2026-10-29 completed session provides live graceful-shutdown accounting; earlier live sessions do not.
 
 ## Milestone A.1 command and database preparation (2026-10-28 UTC)
 

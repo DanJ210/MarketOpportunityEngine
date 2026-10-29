@@ -181,6 +181,7 @@ try {
             }
         }
         $clock = [ordered] @{
+            SessionId = $SessionId
             CapturedUtc = [DateTimeOffset]::UtcNow.ToString('O')
             Clock = 'TimeProvider.System / host OS UTC'
             AuthoritativeOffsetOrErrorBound = 'UNAVAILABLE: w32tm status is not an independent UTC offset/error-bound measurement.'
@@ -288,14 +289,46 @@ try {
 
     $env:ConnectionStrings__MarketOpportunity = $connectionString
     Write-Host "Open http://localhost:$Port/ and use Ctrl+C in this terminal for normal shutdown."
-    dotnet run --project $project --no-build --no-launch-profile @buildArguments -- `
-        --urls "http://localhost:$Port" `
-        --MarketData:Provider Alpaca `
-        --MarketData:Alpaca:Feed $Feed `
-        --MarketData:Alpaca:Symbols ($symbols -join ',') `
-        --MarketData:Alpaca:SessionId $SessionId @diagnosticArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "The validation application exited with code $LASTEXITCODE. Inspect its sanitized logs."
+    $launcherResultPath = Join-Path $DiagnosticsDirectory "$SessionId.launcher-result.json"
+    $processStartedUtc = [DateTimeOffset]::UtcNow
+    $processExitCode = $null
+    $global:LASTEXITCODE = $null
+    try {
+        dotnet run --project $project --no-build --no-launch-profile @buildArguments -- `
+            --urls "http://localhost:$Port" `
+            --MarketData:Provider Alpaca `
+            --MarketData:Alpaca:Feed $Feed `
+            --MarketData:Alpaca:Symbols ($symbols -join ',') `
+            --MarketData:Alpaca:SessionId $SessionId @diagnosticArguments
+        $processExitCode = $LASTEXITCODE
+    }
+    finally {
+        # Also runs when Ctrl+C stops this script after the child exits.
+        if ($null -eq $processExitCode -and $LASTEXITCODE -is [int]) {
+            $processExitCode = $LASTEXITCODE
+        }
+        $processExitedUtc = [DateTimeOffset]::UtcNow
+        $launcherResult = [ordered] @{
+            SessionId = $SessionId
+            Feed = $Feed
+            ConfiguredDurationSeconds = $DurationSeconds
+            ProcessStartedUtc = $processStartedUtc.ToString('O')
+            ProcessExitedUtc = $processExitedUtc.ToString('O')
+            ProcessExitCode = $processExitCode
+            ProcessExitCodeCaptured = $null -ne $processExitCode
+            DiagnosticsPath = Join-Path $DiagnosticsDirectory "$SessionId.diagnostics.json"
+            ClockPath = Join-Path $DiagnosticsDirectory "$SessionId.clock.json"
+            ApplicationLogPath = Join-Path $DiagnosticsDirectory "$SessionId.app.log"
+        }
+        $launcherResult | ConvertTo-Json -Depth 3 |
+            Set-Content -LiteralPath $launcherResultPath -Encoding utf8
+        Write-Host "Launcher result saved: $launcherResultPath ProcessExitCode=$processExitCode"
+    }
+    if ($null -eq $processExitCode) {
+        throw 'The validation application exit code was not captured. Inspect its sanitized session log.'
+    }
+    if ($processExitCode -ne 0) {
+        throw "The validation application exited with code $processExitCode. Inspect its sanitized session log."
     }
 }
 finally {

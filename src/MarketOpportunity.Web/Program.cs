@@ -62,11 +62,25 @@ if (diagnosticEnabled)
     {
         throw new InvalidOperationException("Diagnostic duration must be between 0 and 3600 seconds.");
     }
+    string? applicationLogPath = null;
+    var diagnosticDirectory = builder.Configuration["MarketData:Diagnostics:Directory"];
+    if (!string.IsNullOrWhiteSpace(diagnosticDirectory))
+    {
+        applicationLogPath = LiveValidationSession.ApplicationLogPath(
+            diagnosticDirectory, builder.Configuration["MarketData:Alpaca:SessionId"]);
+        var sessionLogPath = applicationLogPath;
+        var redactor = LogRedactor.FromConfiguration(builder.Configuration);
+        builder.Services.AddSingleton<ILoggerProvider>(serviceProvider => new SessionFileLoggerProvider(
+            sessionLogPath, redactor, serviceProvider.GetRequiredService<TimeProvider>()));
+        builder.Logging.AddFilter<SessionFileLoggerProvider>("Microsoft.EntityFrameworkCore", LogLevel.Warning);
+    }
     builder.Services.AddSingleton(serviceProvider =>
     {
         var logger = serviceProvider.GetRequiredService<ILogger<LiveValidationDiagnostics>>();
-        return new LiveValidationDiagnostics(serviceProvider.GetRequiredService<TimeProvider>(),
+        var diagnostics = new LiveValidationDiagnostics(serviceProvider.GetRequiredService<TimeProvider>(),
             diagnostic => logger.LogInformation("Live validation transition/anomaly {Diagnostic}", diagnostic));
+        diagnostics.ConfigureRun(duration, applicationLogPath);
+        return diagnostics;
     });
     // Registered before the scanner so final export follows scanner shutdown.
     builder.Services.AddHostedService<LiveValidationReportService>();

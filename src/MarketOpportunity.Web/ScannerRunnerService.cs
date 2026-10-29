@@ -21,6 +21,8 @@ public sealed class ScannerRunnerService(
         }
         catch (Exception exception)
         {
+            scope.ServiceProvider.GetService<LiveValidationDiagnostics>()
+                ?.RecordShutdownTrigger(ShutdownTrigger.ApplicationFailure);
             var scannerState = scope.ServiceProvider.GetRequiredService<ScannerState>();
             var currentStatus = scannerState.Read().Status;
             scannerState.SetStatus(currentStatus with

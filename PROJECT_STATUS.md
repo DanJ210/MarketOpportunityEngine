@@ -5,7 +5,9 @@
 
 ## Current status
 
-The final instrumented market-hours IEX run remains outstanding.
+The completed instrumented IEX observation is recorded in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#completed-instrumented-iex-observation-2026-10-29). It verifies live IEX ingestion, exact-session SQL persistence, pipeline accounting, and scanner drain.
+
+**Milestone A.1 is blocked by one evidence gap:** session-specific sanitized launcher/application logs and browser/circuit evidence are not present in the reviewed artifacts. The exact shutdown trigger and process exit code, absence of fatal host logs, and live Blazor behavior therefore remain unverified. No application or provider was restarted during the analysis.
 
 ## Current proven capabilities
 
@@ -17,17 +19,11 @@ The final instrumented market-hours IEX run remains outstanding.
 - Graceful shutdown drains accepted in-process work within a bounded timeout; deterministic and integration tests verify the drain and its accounting.
 - No analytical or trading behavior changed during instrumentation or shutdown fixes.
 
-## Remaining A.1 requirement
+## Remaining A.1 blocker
 
-Complete one final instrumented IEX run during market hours to validate:
+Recover the missing sanitized logs and browser/circuit evidence for the completed session, or otherwise leave the dashboard and host-exit criteria unverified. Do not infer either from backend diagnostics. See the [consolidated validation history](./VALIDATION_HISTORY.md#completed-instrumented-iex-observation-2026-10-29).
 
-- timing instrumentation;
-- provider metadata on actual events;
-- pipeline/backpressure behavior;
-- Blazor live updates; and
-- graceful-shutdown accounting against actual live data.
-
-The fixture remains the offline default. Do not treat synthetic feed evidence or earlier uninstrumented IEX sessions as a substitute for this run. See the [operational procedure](./README.md#one-final-instrumented-a1-observation) and [consolidated validation history](./VALIDATION_HISTORY.md#consolidated-a1-validation-record-2026-10-29).
+The launcher and app now record self-describing session evidence for any final run: a sanitized `<SessionId>.app.log`, the recorded `shutdownTrigger`/`shutdownRequestedUtc`/`configuredDurationSeconds`, per-stage latency counts above 1/5/10/15 s, and a `<SessionId>.launcher-result.json` with the child exit code and exit time. This is verified by offline tests only; no provider connection was made. Follow the README [final integrated-browser validation workflow](./README.md#final-integrated-browser-validation-workflow). Ingestion, channel capacity, analysis interval, persistence, formulas, thresholds, scoring, classifications, and quote handling are unchanged.
 
 ## Post-A.1 housekeeping
 

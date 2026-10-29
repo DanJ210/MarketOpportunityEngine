@@ -256,14 +256,55 @@ This development-only endpoint and the atomically replaced `<session>.diagnostic
 
 - Complete WebSocket messages including control messages, market-data-bearing messages, canonical trades/quotes produced, parser failures, connection attempts/reconnects, lifecycle transitions, and acknowledged trade/quote subscription lists. A connection attempt may fail before opening a socket; `Live`/`Reconnected` means a canonical event was produced, not that its prices passed analytical quote validity.
 - Accepted channel writes, dequeued/duplicate events, newly pending inputs presented to analysis, events acknowledged by successful persistence calls, persistence failures/batches, asynchronously waiting channel writes, cancelled writes, sampled depth/high-water mark, and longest observed wait. Acknowledged event count is **not a SQL INSERT count**; use the exact-session SQL query independently. Analyzed inputs can include events subsequently outside the retained/as-of calculation.
-- Timing count/min/max and **bounded-histogram median/p95 intervals**, not fabricated exact percentiles: provider event -> complete-message receipt; receipt -> canonical/metadata creation; creation -> analysis start; analysis start -> persistence completion; persistence batch duration; asynchronous channel-write wait. Units are milliseconds. Provider lag is signed UTC-clock difference; within-process stages use monotonic `TimeProvider` timestamps. Empty histograms have null statistics.
+- Timing count/min/max and **bounded-histogram median/p95 intervals**, not fabricated exact percentiles: provider event -> complete-message receipt; receipt -> canonical/metadata creation; creation -> analysis start; analysis start -> persistence completion; persistence batch duration; asynchronous channel-write wait. Units are milliseconds. Provider lag is signed UTC-clock difference; within-process stages use monotonic `TimeProvider` timestamps. Empty histograms have null statistics. Each stage also reports exact counts strictly above 1, 5, 10, and 15 seconds (`countAbove1000Ms`, `countAbove5000Ms`, `countAbove10000Ms`, `countAbove15000Ms`).
+- Run identity and shutdown evidence: `configuredDurationSeconds`, `shutdownTrigger`, `shutdownRequestedUtc`, a bounded `shutdownTriggerEvents` history, and `applicationLogPath`. See [session evidence](#session-evidence-artifacts).
 - Connection-scoped metadata groups for quote bid/ask exchange, condition array (including whether supplied), tape, event counts, zero-ask counts, and first/last zero-ask samples with canonical identity and all three UTC timestamps. Trade conditions/tape are captured too. This is diagnostic sidecar data, **not additional canonical/analytical fields or SQL columns**.
 
 Bounds are fixed: 256 metadata groups across connections/symbols/types/metadata, 256 lifecycle records, 16 conditions per event, 64 characters per text field. Sanitized/truncated/malformed optional metadata is flagged `incomplete`; omitted group-event attribution and dropped transitions have explicit counters. Aggregates remain accurate when samples are capped, but metadata coverage is then incomplete. Structured timing/backpressure/persistence anomaly logs are limited to one per category per minute; no raw messages or credentials are logged. These diagnostic reporting cutoffs do not change trading thresholds or source recovery behavior.
 
 `MessageReceivedTimeUtc` is sampled after the final fragment completes, before UTF-8/JSON decoding. It measures **application completion of the receive call**, not NIC/kernel arrival or provider send time; data buffered while the app was not reading can still look "pre-arrival." `ParsedTimeUtc` is after canonical construction and diagnostic metadata extraction, before yield. Existing `ReceivedTimeUtc` remains the per-item pre-parser stamp and still participates in existing quote identities. Ordering, duplicate handling, formulas, zero-ask rules, and SQL persistence are unchanged.
 
-Keep the final diagnostic JSON, clock JSON, sanitized console log, exact-session SQL results before/after shutdown, and browser observations together. Compare accepted minus duplicates with persistence acknowledgements and SQL identities; report unpersisted/in-flight work explicitly. Treat a drain as successful only when `shutdownDrainStatus` is `Completed`, `remainingEvents` is zero, and accepted work reconciles as duplicates plus persistence acknowledgements. Channel depth zero or process exit alone does not establish a successful drain.
+Keep the session evidence directory, exact-session SQL results before/after shutdown, and browser observations together. Compare accepted minus duplicates with persistence acknowledgements and SQL identities; report unpersisted/in-flight work explicitly. Treat a drain as successful only when `shutdownDrainStatus` is `Completed`, `remainingEvents` is zero, and accepted work reconciles as duplicates plus persistence acknowledgements. Channel depth zero or process exit alone does not establish a successful drain.
+
+#### Session evidence artifacts
+
+Every launcher run writes these files to the printed diagnostics directory. Each name starts with the same `<SessionId>`, and the JSON artifacts also contain that `SessionId`:
+
+| File | Writer | Content |
+| --- | --- | --- |
+| `<SessionId>.clock.json` | Launcher, before app start | Read-only host clock status; not an authoritative UTC error bound |
+| `<SessionId>.app.log` | App, while running | Sanitized application log (EF Core below Warning omitted; 64 MB cap) |
+| `<SessionId>.diagnostics.json` | App, every 5 s and after scanner shutdown | Counters, timings with threshold counts, drain status, and shutdown evidence |
+| `<SessionId>.launcher-result.json` | Launcher, after `dotnet run` exits (including after Ctrl+C or a non-zero exit) | `ProcessExitCode`, `ProcessExitCodeCaptured`, `ProcessStartedUtc`, `ProcessExitedUtc`, `ConfiguredDurationSeconds`, and artifact paths |
+
+`shutdownTrigger` is recorded when its cause occurs and is never inferred from elapsed runtime:
+
+- `DurationElapsed`: the bounded-duration timer records it **before** calling `StopApplication`.
+- `OperatorCancellation`: console Ctrl+C (SIGINT) or Ctrl+Break (SIGQUIT) in the app terminal.
+- `GracefulDrainTimeout`: the scanner drain exceeded `Operations:GracefulShutdownTimeoutSeconds`.
+- `ApplicationFailure`: drain reconciliation or scanner processing failed.
+- `Unknown`: no cause was recorded (for example, a window close or an external stop).
+
+A requested trigger (duration or operator) is kept unless a later drain timeout or failure supersedes it. Every recorded cause remains in `shutdownTriggerEvents`. `shutdownRequestedUtc` is the first recorded cause or host stop request. The app cannot report its own exit code; `ProcessExitCode` comes from the launcher result.
+
+The session log and launcher result never contain connection strings, User Secrets, or provider keys. Configured connection strings and their passwords, configuration values whose names indicate passwords, secrets, API/access/private keys, tokens, or credentials, plus `password=`/`pwd=`/`secret=`/`apikey=`/`token=` assignments are replaced with `[REDACTED]` before writing. Review the log before sharing it anyway.
+
+#### Final integrated-browser validation workflow
+
+Use one terminal for the launcher, one browser, and one second terminal. Do not start a second app or provider connection.
+
+1. Prepare the database and run preflight as described in [Milestone A.1 live IEX validation](#milestone-a1-live-iex-validation). During an open U.S. equity session, run `pwsh -NoProfile -File .\scripts\Start-AlpacaValidation.ps1 -Feed iex`. Copy the printed `SessionId` and `DiagnosticsDirectory`.
+2. Open `http://localhost:5291/` in the integrated browser as soon as the app is listening. Keep that tab open for the whole run, and do not refresh it after the initial load.
+3. In the browser, record at least two observations at different times, with local and UTC times. Include provenance `Alpaca / iex / Limited`, feed health and gap state, the event count changing **without a refresh**, and symbols, setup states, and vetoes as displayed. Capture screenshots if available; store them in the session diagnostics directory as `<SessionId>.browser-*.png`. Note any circuit disconnect/reconnect banner.
+4. In the second terminal, capture status and diagnostics before shutdown (`/api/v1/system/status`, `/api/v1/system/diagnostics`), then run the exact-session SQL query.
+5. Let the duration elapse, which should produce `shutdownTrigger` `DurationElapsed`. Alternatively, press Ctrl+C in the launcher terminal for `OperatorCancellation`. Do not use `Stop-Process`. Wait for the launcher to print `Launcher result saved`.
+6. Repeat the exact-session SQL query. Then confirm the evidence:
+   - All artifacts share the `SessionId`.
+   - `shutdownTrigger` matches what happened, and `ProcessExitCode` is `0`.
+   - `shutdownDrainStatus` is `Completed` with zero `remainingEvents`.
+   - The diagnostic accounting reconciles with the SQL identities.
+   - The `.app.log` shows startup, no Blazor circuit or scanner errors (ASP.NET Core logs at Warning and above), and the shutdown line `trigger=...`.
+7. Record results in [VALIDATION_HISTORY](./VALIDATION_HISTORY.md), including latency threshold counts per stage, and update [PROJECT_STATUS](./PROJECT_STATUS.md). Do not create a separate top-level report.
 
 ### Verify or troubleshoot selection
 
