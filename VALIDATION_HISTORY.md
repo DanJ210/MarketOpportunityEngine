@@ -1,8 +1,104 @@
 # Archived Project Status and Validation Record (2026-10-27)
 
+## Final same-page browser observation (2026-10-30)
+
+**Browser criterion: PASS. Milestone A.1 - Live Scanner Validation: COMPLETE.** This closes only the outstanding browser-observability criterion; the prior ingestion/SQL/shutdown closeout below remains separate evidence.
+
+Session `alpaca-iex-20261030T174047331Z`; existing integrated-browser page `d23e0d2a-5bd7-4986-9baf-19904dec8a5a`, URL `http://localhost:5291/`. Both timestamped, read-only DOM snapshots show Alpaca / iex / Limited, Live health, seven symbol/session results, one session, and symbols AAPL, AMZN, GOOGL, MSFT, NOK, SPY, TSLA. No refresh, navigation, extra tab, host/provider start, database write, or analytical/configuration change was performed.
+
+Observation 1: **2026-10-30T17:49:59.124Z (13:49:59.124 EDT)**. Observation 2: **2026-10-30T17:51:04.190Z (13:51:04.190 EDT)**; elapsed **65.066 seconds**. Displayed times below are October 30 EDT, at the dashboard's displayed second precision. Arrows mean observation 1 -> observation 2.
+
+| Dashboard field | Before | After |
+| --- | --- | --- |
+| Last market event / latest event time | 13:49:53 | 13:50:54 |
+| Last receive time | 13:49:52 | 13:50:54 |
+| Unique canonical events | 70,611 | 78,317 |
+| Feed health | Live | Live |
+| Visible reconnect/failure UI | None | None |
+
+| Symbol | Reference price | Classification / publication | Bias | VWAP | Spread (bps) | Quality / 100 | Vetoes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| AAPL | 345.48 -> 345.32 | Avoid / No Trade, NotQualified -> Probable Short, Active | Neutral -> Short | 345.82 -> 345.81 | 13.6 -> 7.5 | 15 -> 100 | NoDefensibleInvalidation -> none |
+| AMZN | 239.45 -> 239.61 | Avoid / No Trade, NotQualified -> Probable Long, Active | Long (unchanged) | 239.33 (unchanged) | 55.3 -> 4.6 | 100 (unchanged) | ExcessiveSpread -> none |
+| GOOGL | 279.13 -> 278.89 | Avoid / No Trade, NotQualified -> Probable Short, Active | Neutral -> Short | 279.03 (unchanged) | 10.4 -> 3.2 | 15 -> 100 | NoDefensibleInvalidation -> none |
+| MSFT | 521.93 -> 521.35 | Avoid / No Trade, NotQualified (unchanged) | Neutral -> Short | 521.58 -> 521.59 | 50.1 -> 34.8 | 15 -> 100 | ExcessiveSpread + NoDefensibleInvalidation -> ExcessiveSpread + InsufficientDollarVolume |
+| NOK | 8.50 -> 8.48 | Avoid / No Trade, NotQualified (unchanged) | Short (unchanged) | 8.53 (unchanged) | 11.8 (unchanged) | 100 (unchanged) | InsufficientDollarVolume (unchanged) |
+| SPY | 754.68 -> 754.26 | Avoid / No Trade, NotQualified (unchanged) | Neutral -> Short | 754.67 -> 754.55 | 0.3 -> 0.4 | 15 -> 100 | InsufficientRequiredFeatureData + NoDefensibleInvalidation -> InsufficientRequiredFeatureData |
+| TSLA | 397.63 -> 396.76 | Avoid / No Trade, NotQualified (unchanged) | Neutral -> Short | 398.24 -> 398.11 | 80.8 -> 123.9 | 15 -> 100 | ExcessiveSpread + NoDefensibleInvalidation -> ExcessiveSpread |
+
+The publication explanation changed for AAPL, AMZN, and GOOGL from "The setup detector classified this candidate as Avoid / No Trade." to "Market data is healthy and the candidate remains within its validity period." Other publication explanations were unchanged. Quality scores are not probabilities of profit.
+
+| Symbol | Analysis as-of | Expiry | Feature snapshot ID | Quote age (s) |
+| --- | --- | --- | --- | --- |
+| AAPL | 13:49:48 -> 13:50:54 | 13:51:48 -> 13:52:54 | 4082341dc4dc -> 1d100636b3b3 | 0.0 (unchanged) |
+| AMZN | 13:49:48 -> 13:50:53 | 13:51:48 -> 13:52:53 | c9721d5b4395 -> 242343754b18 | 0.8 -> 0.0 |
+| GOOGL | 13:49:47 -> 13:50:54 | 13:51:47 -> 13:52:54 | 288e8938e469 -> c590c072960e | 0.0 -> 3.0 |
+| MSFT | 13:49:47 -> 13:50:53 | 13:51:47 -> 13:52:53 | f8d2cf4cd0f1 -> 336c5731c4fd | 0.0 (unchanged) |
+| NOK | 13:49:48 -> 13:50:54 | 13:51:48 -> 13:52:54 | 3cffb8e6b258 -> fe2ce5528683 | 0.0 (unchanged) |
+| SPY | 13:49:48 -> 13:50:54 | 13:51:48 -> 13:52:54 | 790db540eaa2 -> 9962379d9e1a | 0.0 (unchanged) |
+| TSLA | 13:49:47 -> 13:50:54 | 13:51:47 -> 13:52:54 | 3981e2bf14a3 -> 9836440bebdb | 0.0 (unchanged) |
+
+Additional captured feature changes (percent values are displayed percentages; dollar volume is USD):
+
+| Symbol | Momentum / secondary horizon | Window volume / dollar volume / session cumulative | Trend / VWAP slope | EMA fast / medium | Price structure / ADX | Range position / realized volatility |
+| --- | --- | --- | --- | --- | --- | --- |
+| AAPL | 0.04 / 0.03 -> -0.06 / -0.03 | 2,084 / 719,823 / 22,246 -> 1,294 / 447,094 / 23,540 | Conflicting / Falling (unchanged) | 345.48 / 345.45 -> 345.33 / 345.39 | HigherHighHigherLow / 29.13 -> Mixed / 44.06 | 16.76 / 0.18 -> 3.21 / 0.19 |
+| AMZN | 0.14 / 0.04 -> 0.05 / 0.06 | 4,365 / 1,044,807 / 35,604 -> 1,575 / 377,205 / 37,282 | Conflicting / Rising -> Bullish / Rising | 239.45 / 239.46 -> 239.58 / 239.53 | Mixed / 26.03 -> Flat / 21.54 | 63.33 / 0.26 -> 85.33 / 0.26 |
+| GOOGL | 0.00 / 0.00 -> -0.07 / -0.04 | 1,590 / 443,848 / 25,392 -> 1,184 / 330,349 / 26,644 | Conflicting / Rising -> Bearish / Falling | 279.14 / 279.16 -> 278.89 / 278.94 | LowerHighLowerLow / 15.86 -> LowerHighLowerLow / 41.12 | 64.86 / 0.15 -> 21.62 / 0.16 |
+| MSFT | -0.01 / 0.00 -> -0.11 / -0.02 | 2,041 / 1,065,129 / 22,913 -> 155 / 80,883 / 23,071 | Conflicting / Rising (unchanged) | 521.92 / 521.91 -> 521.66 / 521.85 | Mixed / 15.22 -> Mixed / 22.15 | 70.97 / 0.22 -> 46.02 / 0.24 |
+| NOK | -0.06 / 0.00 -> -0.24 / -0.24 | 7,405 / 62,975 / 131,542 -> 4,489 / 38,155 / 136,031 | Conflicting / Falling (unchanged) | 8.50 / 8.50 -> 8.49 / 8.50 | Mixed / 29.14 -> Mixed / 44.20 | 10.00 / 0.36 -> 0.00 / 0.40 |
+| SPY | 0.01 / 0.00 -> -0.06 / -0.03 | 1,107 / 835,403 / 9,354 -> 3,419 / 2,579,662 / 4,883 | Conflicting / Falling -> Bearish / Falling | 754.71 / 754.70 -> 754.26 / 754.27 | HigherHighHigherLow / 23.61 -> LowerHighLowerLow / 50.00 | 70.59 / 0.02 -> 11.32 / 0.03 |
+| TSLA | -0.04 / -0.03 -> -0.22 / -0.13 | 810 / 322,202 / 11,377 -> 1,714 / 680,918 / 13,193 | Conflicting / Falling (unchanged) | 397.68 / 397.75 -> 396.80 / 396.99 | HigherHighHigherLow / 19.48 -> Mixed / 56.61 | 2.59 / 0.20 -> 0.00 / 0.22 |
+
+Freshness/data quality remained Fresh/Good with complete-session True except SPY, which remained Degraded/Degraded with complete-session False. Dollar-volume and ADX status remained Available; feature version remained `features-v14`. SPY's displayed cumulative volume is bounded retained-state output, not proof of a counter reset or browser reload.
+
+**Continuity:** same page load YES; browser refresh during observation NO; live values changed YES; circuit remained connected YES; reconnect/failure UI before intentional shutdown NO during the measured interval. Both snapshots have `performance.timeOrigin = 1793382094039.4`; the navigation entry remains `type=reload, startTime=0`, identifying the already-loaded page at approximately 17:41:34.039Z, before observation, not a refresh during the check. Across 63 intervening DOM samples, health was only Live, no reconnect/error element became visible, and there were zero captured console warnings/errors, page exceptions, or main-frame navigations. Hidden reconnect-template text was not counted as visible failure UI.
+
+**Shutdown boundary:** the existing run was configured for **1,800 seconds**, not 600. It was allowed to finish normally; no Ctrl+C or external stop was issued. An additional 60 browser samples from 17:51:15.466Z-17:52:16.965Z showed only Live with no reconnect UI, console errors, exceptions, or navigation. Extended monitoring from **17:51:45.457Z to 18:12:03.617Z** retained **1,182 samples** with unchanged page time origin and zero navigation events. Before intentional shutdown it showed only Live, no reconnect/failure UI, and zero console warnings/errors or page exceptions.
+
+The session diagnostics record **DurationElapsed at 2026-10-30T18:11:17.1925747Z (14:11:17.1925747 EDT)**. Only afterward did the browser record WebSocket disconnect code 1006 (console timestamp **18:11:17.253Z**, captured 18:11:17.258Z), visible "Rejoining the server..." (**18:11:17.938Z**), negotiation/fetch failures (**18:11:21.985Z**), and retry-countdown UI (**18:11:32.173Z**). Through 18:12:03.617Z, no terminal visible "Failed to rejoin" state appeared; rejoin retries continued against the stopped host. The last-rendered Live label after shutdown was frozen page content, not evidence of an active connection. All these disconnect/retry symptoms are **post-shutdown**, not an A.1 browser defect.
+
+The matching launcher result records **exit code 0 at 18:11:27.3556604Z**; final diagnostics show drain **Completed**, remaining events **0**, and the sanitized app log has **0 Error/Critical entries**. Port 5291 has no remaining listener. Artifacts remain under `artifacts/alpaca-validation/alpaca-iex-20261030T174047331Z/`. No new SQL reconciliation or implementation validation was performed for this browser-only check.
+
 ## Consolidated A.1 validation record (2026-10-29)
 
-This section preserves durable evidence from the live IEX, forensic, instrumentation, and shutdown work. The completed instrumented observation and its evidence limits are recorded below; A.1 remains blocked on missing session-specific logs and browser/circuit evidence. The current checkpoint is in [PROJECT_STATUS.md](./PROJECT_STATUS.md), and the operator procedure is in [README.md](./README.md#one-final-instrumented-a1-observation).
+This section preserves durable evidence from the live IEX, forensic, instrumentation, and shutdown work. At this checkpoint, the latest 30-minute closeout supplied the missing logs, shutdown trigger, and exit code; the remaining browser evidence gap was subsequently closed by the [2026-10-30 same-page observation](#final-same-page-browser-observation-2026-10-30). The current checkpoint is in [PROJECT_STATUS.md](./PROJECT_STATUS.md), and the operator procedure is in [README.md](./README.md#one-final-instrumented-a1-observation).
+
+### Self-describing 30-minute IEX closeout (2026-10-29)
+
+Session `alpaca-iex-20261029T190952800Z` ran Alpaca IEX / Limited in Development on port 5291 against `MarketOpportunityEngine_LiveValidationTests` (the launcher's guarded database; exact-session SQL rows found there) for `AAPL, MSFT, SPY, NOK, GOOGL, AMZN, TSLA`. Its diagnostic, clock, launcher-result, and sanitized app-log artifacts all carry this SessionId. The process ran from `19:09:58.618Z` to `19:40:12.937Z` (1,814.3 s); configured duration was 1,800 s. The app log and diagnostic both record `trigger=DurationElapsed` at `19:40:02.371Z`; the launcher captured exit code **0**. The separate 81-second session `alpaca-iex-20261029T190804148Z` was not merged.
+
+One connection (`1d6138ad-...`) authenticated, subscribed all seven symbols for trades and quotes, stayed Live with no reconnect, and ended `Disconnected / CancellationRequested` at shutdown. It received **87,003** messages (**87,000** market-data), producing **209,616** canonical events (**14,334 trades / 195,282 quotes**) with 0 parser failures. Accepted = dequeued = analyzed = persistence-acknowledged = **209,616**; duplicates, processing/persistence failures, cancelled writes, channel depth, and remaining work were 0; drain **Completed** about 10.3 s after the request (not separately timed; 20 s budget). Sampled high-water was 1,642 with 0 asynchronous write waits. Unresolved-gap state and malformed/unsupported-message counts are not instrumented.
+
+Exact-session read-only SQL matched exactly: 209,616 rows and distinct identities, 14,334 trades, 195,282 quotes, **2,433** snapshots and evaluations, 12,320 evidence rows, and 0 zero-ask rows. All evaluations had Alpaca / iex / Limited / realtime provenance with `features-v14`, `momentum-continuation-v1`, and `scanner-config-v15`. Event time spanned `19:10:03.003Z`-`19:40:02.589Z`; receive time spanned `19:10:02.825Z`-`19:40:02.419Z`.
+
+| Symbol | Events | Snapshots / evaluations | Avoid / Probable long / Probable short / Watch |
+|---|---:|---:|---:|
+| AAPL | 23,465 | 350 | 347 / 0 / 3 / 0 |
+| AMZN | 36,811 | 350 | 324 / 7 / 16 / 3 |
+| GOOGL | 15,732 | 350 | 253 / 29 / 40 / 28 |
+| MSFT | 2,651 | 336 | 284 / 13 / 31 / 8 |
+| NOK | 7,941 | 348 | 231 / 33 / 47 / 37 |
+| SPY | 111,469 | 350 | 350 / 0 / 0 / 0 |
+| TSLA | 11,547 | 349 | 325 / 6 / 8 / 10 |
+| **Total** | **209,616** | **2,433** | **2,114 / 88 / 145 / 86** |
+
+All 2,114 Avoid evaluations, and only those, carried at least one veto (86.9%). Veto evidence counts: NoDefensibleInvalidation 1,636, InsufficientRequiredFeatureData 935, ExcessiveSpread 565, InsufficientDollarVolume 156, DollarVolumeUnavailable 26, VolatilityUnavailable 19, InvalidQuoteOrPrice 15, StaleQuote 10. Quality scores ranged 0-100 (mean 39.97, median 15). Classifications and scores are not calibrated probabilities or profit expectations.
+
+| Stage | Samples | Min / max ms | Median / p95 bucket ms | >1 s | >5 s | >10 s | >15 s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Provider -> message | 209,616 | -195.7 / 646.8 | [-195.7,-100] / [-195.7,-100] | 0 | 0 | 0 | 0 |
+| Message -> canonical | 209,616 | 0.004 / 333.0 | [0.1,0.25] / [2,5] | 0 | 0 | 0 | 0 |
+| Canonical -> analysis | 209,616 | 0.1 / 20,167.1 | [2k,5k] / [5k,10k] | 189,460 (90.4%) | 42,288 (20.2%) | 1,992 (0.95%) | 128 (0.06%) |
+| Analysis -> persistence | 2,433 | 48.7 / 5,910.7 | [200,500] / [1k,2k] | 195 (8.0%) | 1 (0.04%) | 0 | 0 |
+| Persistence call | 2,433 | 48.3 / 5,897.5 | [200,500] / [1k,2k] | 187 (7.7%) | 1 (0.04%) | 0 | 0 |
+| Channel-write wait | 0 | n/a | n/a | 0 | 0 | 0 | 0 |
+
+Latency is primarily after message receipt, in canonical-to-analysis waiting and secondarily persistence; no write blocked. Aggregate histograms prevent per-symbol burst correlation. The app log recorded 22 persistence anomalies >1 s (largest logged 2.24 s), all on the single connection without reconnects. The clock snapshot again showed `Leap Indicator 3 (not synchronized)`, last sync error 1, phase offset 1.586 s, root dispersion 9.356 s, and an unreconciled last-sync timestamp; it gives no authoritative UTC bound, so the negative provider-to-message lag (median bucket below -100 ms) remains unexplained.
+
+There were 0 zero-ask quotes. All 38 metadata groups were complete with no unattributed events or dropped transitions. Quotes had bid/ask exchange `V`; tape `C` except NOK `A` and SPY `B`; conditions `R`, plus `?` on AAPL, AMZN, GOOGL, MSFT, and NOK. The app log has no Error/Critical entries; Warning entries were four EF decimal-precision model warnings and one HTTPS-port warning.
+
+The agent browser retained the final dashboard DOM for this SessionId: status Live, `Provider: Alpaca · Feed: iex`, Limited coverage, all seven symbols, and last render `15:39:53 EDT` (`19:39:53Z`). Retained console errors (`Failed to complete negotiation`, then `Failed to rejoin`) begin at `19:40:04Z`, after the duration-triggered shutdown. This proves the dashboard loaded and displayed correct provenance, but one final snapshot cannot prove live updates without refresh or continuous circuit health. No resource measurements were retained.
 
 ### Completed instrumented IEX observation (2026-10-29)
 
