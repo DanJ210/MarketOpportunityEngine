@@ -10,6 +10,83 @@ namespace MarketOpportunity.IntegrationTests;
 public sealed class SqlServerPersistenceTests
 {
     [Fact]
+    public async Task Confirmed_swing_snapshots_are_persisted_idempotently_without_rewriting_earlier_results()
+    {
+        var connectionString = GetTestConnectionString();
+        var token = Guid.NewGuid().ToString("N")[..16];
+        var symbol = $"IT{token}";
+        var sessionId = $"it-swing-session-{token}";
+        var configuration = new ScannerConfiguration
+        {
+            Version = $"it-swing-config-{token}",
+            FeatureSetVersion = $"it-swing-features-{token}"
+        };
+        var start = new DateTimeOffset(2026, 10, 23, 14, 30, 0, TimeSpan.Zero);
+        decimal[] prices = [101.5m, 101m, 105m, 103m, 102m, 104m, 103m, 107m, 105m, 104m, 106m, 105m];
+        var events = prices.Select((price, index) => (MarketEvent)new TradeEvent(
+            symbol, sessionId, start.AddSeconds(index), start.AddSeconds(index + 1),
+            "IntegrationFixture", $"swing-{index:D3}", price, 10)).ToArray();
+        var earlyEvents = events.Take(4).ToArray();
+        var early = Analyze(earlyEvents, configuration);
+        var confirmed = Analyze(events, configuration);
+        var schemaReady = false;
+        try
+        {
+            await using (var setupContext = CreateContext(connectionString))
+            {
+                if (!await setupContext.Database.EnsureCreatedAsync())
+                {
+                    await setupContext.Database.MigrateAsync();
+                }
+            }
+            schemaReady = true;
+
+            await Persist(connectionString, configuration, earlyEvents, early);
+            string originalJson;
+            await using (var originalContext = CreateContext(connectionString))
+            {
+                originalJson = await originalContext.FeatureSnapshots
+                    .Where(item => item.Id == early.Features.Id)
+                    .Select(item => item.SnapshotJson)
+                    .SingleAsync();
+            }
+
+            await Persist(connectionString, configuration, events, confirmed);
+            await Persist(connectionString, configuration, events, confirmed);
+            await using var verifyContext = CreateContext(connectionString);
+            var snapshots = await verifyContext.FeatureSnapshots
+                .Where(item => item.Symbol == symbol && item.SessionId == sessionId)
+                .ToListAsync();
+            Assert.Equal(2, snapshots.Count);
+            Assert.Equal(originalJson, Assert.Single(snapshots, item => item.Id == early.Features.Id).SnapshotJson);
+            var confirmedJson = Assert.Single(snapshots, item => item.Id == confirmed.Features.Id).SnapshotJson;
+            var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            var storedEarly = JsonSerializer.Deserialize<FeatureSnapshot>(originalJson, options);
+            var storedConfirmed = JsonSerializer.Deserialize<FeatureSnapshot>(confirmedJson, options);
+            Assert.NotNull(storedEarly);
+            Assert.NotNull(storedConfirmed);
+            Assert.Equal(MarketStructureStatus.Insufficient, storedEarly.MarketStructureStatus);
+            Assert.Null(storedEarly.LatestConfirmedSwingHigh);
+            Assert.Equal(confirmed.Features, storedConfirmed);
+            Assert.Equal(107m, storedConfirmed.LatestConfirmedSwingHigh!.Price);
+            Assert.Equal(104m, storedConfirmed.LatestConfirmedSwingLow!.Price);
+            Assert.Equal(MarketEventIdentity.Create(events[7]), storedConfirmed.LatestConfirmedSwingHigh.OriginEventIdentity);
+            Assert.Equal(MarketEventIdentity.Create(events[9]), storedConfirmed.LatestConfirmedSwingHigh.ConfirmationEventIdentity);
+            Assert.Equal(configuration.FeatureSetVersion, storedConfirmed.LatestConfirmedSwingHigh.FeatureSetVersion);
+            Assert.Equal("session-swing-fractal-v1", storedConfirmed.LatestConfirmedSwingHigh.AlgorithmVersion);
+            Assert.Equal(2, await verifyContext.Opportunities.CountAsync(item => item.Symbol == symbol));
+            Assert.Equal(events.Length, await verifyContext.MarketEvents.CountAsync(item => item.Symbol == symbol));
+        }
+        finally
+        {
+            if (schemaReady)
+            {
+                await Cleanup(connectionString, [symbol], configuration.Version, configuration.Version);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Sql_persistence_is_session_scoped_immutable_and_replay_idempotent()
     {
         var connectionString = GetTestConnectionString();

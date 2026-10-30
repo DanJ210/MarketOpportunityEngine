@@ -19,10 +19,6 @@ public sealed record MassiveMarketDataOptions(
         var section = configuration.GetSection("MarketData:Massive");
         var apiKey = section["ApiKey"];
         var sessionId = section["SessionId"];
-        var symbols = section["Symbols"]?
-            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray() ?? [];
 
         if (string.IsNullOrWhiteSpace(apiKey))
         {
@@ -36,13 +32,7 @@ public sealed record MassiveMarketDataOptions(
                 "Massive is selected but MarketData:Massive:SessionId is not configured.");
         }
 
-        if (symbols.Length == 0 || symbols.Any(string.IsNullOrWhiteSpace))
-        {
-            throw new InvalidOperationException(
-                "Massive is selected but MarketData:Massive:Symbols has no configured symbols.");
-        }
-
-        return new MassiveMarketDataOptions(apiKey, sessionId, symbols);
+        return new MassiveMarketDataOptions(apiKey, sessionId, ScannerUniverse.FromConfiguration(configuration));
     }
 }
 

@@ -33,6 +33,7 @@ main { width: 100%; }
 .metric-card > span, .as-of span { display: block; color: #6b7b87; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
 .metric-card strong { display: block; margin: 10px 0 4px; font-size: 25px; }
 .metric-card small { color: #73818c; font-size: 12px; }
+.structure-observations small { display: block; margin-top: 4px; }
 .fresh-text { color: #19734f; }
 .stale-text { color: #bd3434; }
 .opportunity-card { padding: 25px; }

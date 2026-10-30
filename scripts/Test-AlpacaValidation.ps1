@@ -124,7 +124,7 @@ try {
     $secretsDirectory = Join-Path $env:APPDATA 'Microsoft\UserSecrets\offline-launcher-test'
     [void] [IO.Directory]::CreateDirectory($secretsDirectory)
     [IO.File]::WriteAllText((Join-Path $secretsDirectory 'secrets.json'),
-        '{"MarketData:Massive:Symbols":"AAA, BBB, aaa"}')
+        '{"Scanner:Universe:Symbols":"aaa, BBB, AAA","MarketData:Massive:Symbols":"IGNORED"}')
 
     $portProbe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $portProbe.Start()
@@ -138,7 +138,7 @@ try {
     Assert-True ((Get-AppArgument '--MarketData:Diagnostics:DurationSeconds') -eq '600') 'IEX default must be 600 seconds.'
     $expectedDirectory = Join-Path $root 'artifacts\alpaca-validation\offline-iex'
     Assert-True ((Get-AppArgument '--MarketData:Diagnostics:Directory') -eq $expectedDirectory) 'Default directory is not repository/session scoped.'
-    Assert-True ((Get-AppArgument '--MarketData:Alpaca:Symbols') -eq 'AAA,BBB') 'Distinct universe not preserved.'
+    Assert-True ((Get-AppArgument '--Scanner:Universe:Symbols') -eq 'AAA,BBB') 'Distinct universe not preserved.'
     $summary = $testState.Output -join "`n"
     foreach ($field in @('Feed=iex', 'SessionId=offline-iex', 'DurationSeconds=600', "Port=$port",
         'Database=MarketOpportunityEngine_LiveValidationTests', 'DistinctSymbols=2',
@@ -181,6 +181,7 @@ try {
     $synthetic = @{ Feed = 'test'; SessionId = 'offline-test'; Port = $port }
     Invoke-LauncherCase 'Test feed has shorter duration and restores absent environment' $synthetic
     Assert-True ((Get-AppArgument '--MarketData:Diagnostics:DurationSeconds') -eq '30') 'Test default must be 30 seconds.'
+    Assert-True ((Get-AppArgument '--Scanner:Universe:Symbols') -eq 'FAKEPACA') 'Test feed must use a one-run synthetic universe.'
     $synthetic.DurationSeconds = 45
     $synthetic.DiagnosticsDirectory = Join-Path $root 'exact evidence'
     Invoke-LauncherCase 'Test duration and exact diagnostics directory remain configurable' $synthetic
@@ -193,6 +194,13 @@ try {
     Invoke-LauncherCase 'Preflight creates clock evidence but never launches app' $preflight
     Assert-True (@($testState.Calls | Where-Object { $_[0] -eq 'run' }).Count -eq 0) 'Preflight launched app.'
     Assert-True (Test-Path -LiteralPath (Join-Path $root 'artifacts\alpaca-validation\preflight\preflight.clock.json')) 'Preflight omitted clock evidence.'
+
+    $secretsPath = Join-Path $secretsDirectory 'secrets.json'
+    [IO.File]::WriteAllText($secretsPath, '{"MarketData:Massive:Symbols":"LEGACY"}')
+    Invoke-LauncherCase 'Legacy provider universe is not used as a fallback' $base 'Scanner:Universe:Symbols'
+    [IO.File]::WriteAllText($secretsPath, '{"Scanner:Universe:Symbols":"AAA, ,BBB"}')
+    Invoke-LauncherCase 'Empty universe entry fails before build' $base 'must not contain empty entries'
+    [IO.File]::WriteAllText($secretsPath, '{"Scanner:Universe:Symbols":"aaa, BBB, AAA"}')
 
     foreach ($parameter in @('DiagnosticsDirectory', 'DiagnosticsRoot')) {
         $invalid = $base.Clone()

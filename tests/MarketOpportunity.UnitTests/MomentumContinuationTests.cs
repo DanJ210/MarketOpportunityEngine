@@ -230,8 +230,8 @@ public sealed class MomentumContinuationTests
         var configuration = new ScannerConfiguration();
         configuration.Validate();
 
-        Assert.Equal("scanner-config-v15", configuration.Version);
-        Assert.Equal("features-v14", configuration.FeatureSetVersion);
+        Assert.Equal("scanner-config-v16", configuration.Version);
+        Assert.Equal("features-v15", configuration.FeatureSetVersion);
         Assert.Equal("momentum-continuation-v1", configuration.SetupDefinitionVersion);
         Assert.Equal(1.00m, configuration.MaximumSessionRealizedVolatilityPercent);
         Assert.Equal(100_000m, configuration.MinimumShortHorizonDollarVolumeUsd);

@@ -32,10 +32,6 @@ public sealed record AlpacaMarketDataOptions(
         var secretKey = section["SecretKey"];
         var feed = section["Feed"] ?? "test";
         var sessionId = section["SessionId"];
-        var symbols = section["Symbols"]?
-            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray() ?? [];
 
         if (string.IsNullOrWhiteSpace(apiKey))
         {
@@ -61,13 +57,8 @@ public sealed record AlpacaMarketDataOptions(
                 "Alpaca is selected but MarketData:Alpaca:SessionId is not configured.");
         }
 
-        if (symbols.Length == 0)
-        {
-            throw new InvalidOperationException(
-                "Alpaca is selected but MarketData:Alpaca:Symbols has no configured symbols.");
-        }
-
-        return new AlpacaMarketDataOptions(apiKey, secretKey, feed.ToLowerInvariant(), sessionId, symbols);
+        return new AlpacaMarketDataOptions(
+            apiKey, secretKey, feed.ToLowerInvariant(), sessionId, ScannerUniverse.FromConfiguration(configuration));
     }
 
     public MarketDataCapabilities Capabilities => Feed switch

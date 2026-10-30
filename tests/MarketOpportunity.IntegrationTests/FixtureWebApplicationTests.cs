@@ -160,10 +160,10 @@ public sealed class FixtureWebApplicationTests
             Assert.NotNull(snapshot);
             Assert.Equal(opportunity.Symbol, snapshot.Symbol);
             Assert.Equal(opportunity.SessionId, snapshot.SessionId);
-            Assert.Equal("features-v14", snapshot.FeatureSetVersion);
-            Assert.Equal("features-v14", opportunity.FeatureSetVersion);
+            Assert.Equal("features-v15", snapshot.FeatureSetVersion);
+            Assert.Equal("features-v15", opportunity.FeatureSetVersion);
             Assert.Equal("momentum-continuation-v1", opportunity.SetupDefinitionVersion);
-            Assert.Equal("scanner-config-v15", opportunity.ConfigurationVersion);
+            Assert.Equal("scanner-config-v16", opportunity.ConfigurationVersion);
             var expectedRange = expectedGroups[(opportunity.Symbol, opportunity.SessionId)];
             Assert.Equal(expectedRange.High, snapshotJson.RootElement.GetProperty("sessionHighPrice").GetDecimal());
             Assert.Equal(expectedRange.Low, snapshotJson.RootElement.GetProperty("sessionLowPrice").GetDecimal());
@@ -175,6 +175,20 @@ public sealed class FixtureWebApplicationTests
             Assert.Equal(expectedRange.Structure, snapshot.SessionPriceStructure);
             Assert.Equal(JsonValueKind.Null,
                 snapshotJson.RootElement.GetProperty("sessionPriceStructure").ValueKind);
+            var expectedStructureStatus =
+                (opportunity.Symbol, opportunity.SessionId) is ("MOE", "fixture-2026-10-22")
+                    or ("QNT", "fixture-2026-10-23")
+                    ? MarketStructureStatus.Available
+                    : MarketStructureStatus.Insufficient;
+            Assert.Equal(expectedStructureStatus, snapshot.MarketStructureStatus);
+            Assert.Equal(expectedStructureStatus.ToString(),
+                snapshotJson.RootElement.GetProperty("marketStructureStatus").GetString());
+            Assert.Null(snapshot.LatestConfirmedSwingHigh);
+            Assert.Null(snapshot.LatestConfirmedSwingLow);
+            Assert.Equal(JsonValueKind.Null,
+                snapshotJson.RootElement.GetProperty("latestConfirmedSwingHigh").ValueKind);
+            Assert.Equal(JsonValueKind.Null,
+                snapshotJson.RootElement.GetProperty("latestConfirmedSwingLow").ValueKind);
             AssertNullableDecimal(snapshotJson.RootElement, "sessionAdx", expectedRange.Adx);
             Assert.Equal(expectedRange.AdxStatus.ToString(),
                 snapshotJson.RootElement.GetProperty("sessionAdxStatus").GetString());
@@ -284,6 +298,12 @@ public sealed class FixtureWebApplicationTests
                 persistedJson.RootElement.GetProperty("sessionRangePositionPercent").GetDecimal());
             Assert.Equal(JsonValueKind.Null,
                 persistedJson.RootElement.GetProperty("sessionPriceStructure").ValueKind);
+            Assert.Equal(JsonValueKind.Null,
+                persistedJson.RootElement.GetProperty("latestConfirmedSwingHigh").ValueKind);
+            Assert.Equal(JsonValueKind.Null,
+                persistedJson.RootElement.GetProperty("latestConfirmedSwingLow").ValueKind);
+            Assert.Equal((int)snapshot.MarketStructureStatus,
+                persistedJson.RootElement.GetProperty("marketStructureStatus").GetInt32());
             AssertNullableDecimal(persistedJson.RootElement, "sessionAdx", expectedRange.Adx);
             Assert.Equal((int)expectedRange.AdxStatus,
                 persistedJson.RootElement.GetProperty("sessionAdxStatus").GetInt32());

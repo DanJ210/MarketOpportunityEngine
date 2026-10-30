@@ -20,8 +20,8 @@ The fixture remains the default source. The Alpaca adapter reads:
 - `MarketData:Alpaca:ApiKey`
 - `MarketData:Alpaca:SecretKey`
 - `MarketData:Alpaca:Feed`
-- `MarketData:Alpaca:Symbols`
 - `MarketData:Alpaca:SessionId`
+- `Scanner:Universe:Symbols` (shared by both live adapters)
 
 The [Alpaca Market Data getting-started guide](https://docs.alpaca.markets/us/docs/getting-started-with-alpaca-market-data) directs users to generate API credentials and save them; it also says to regenerate credentials if the secret was lost. For this adapter, `ApiKey` is the key ID and `SecretKey` is required: Alpaca's [WebSocket authentication guide](https://docs.alpaca.markets/us/docs/streaming-market-data#authenticate-via-message) authenticates the test stream with both `key` and `secret`. A URL is an endpoint, not a replacement for the secret. This adapter currently constructs `wss://stream.data.alpaca.markets/v2/{Feed}` itself and does not read `MarketData:Alpaca:Url`.
 
@@ -30,7 +30,7 @@ Set non-secret development selection values:
 ```powershell
 dotnet user-secrets set "MarketData:Provider" "Alpaca" --project src\MarketOpportunity.Web
 dotnet user-secrets set "MarketData:Alpaca:Feed" "test" --project src\MarketOpportunity.Web
-dotnet user-secrets set "MarketData:Alpaca:Symbols" "FAKEPACA" --project src\MarketOpportunity.Web
+dotnet user-secrets set "Scanner:Universe:Symbols" "FAKEPACA" --project src\MarketOpportunity.Web
 dotnet user-secrets set "MarketData:Alpaca:SessionId" "alpaca-test-session" --project src\MarketOpportunity.Web
 ```
 
@@ -64,7 +64,7 @@ finally {
 }
 ```
 
-Then run the app using the local SQL Server steps in the [README](../../README.md#local-run). User Secrets are for local development, are not encrypted, and must not be treated as a deployed secret store. The WebSocket adapter sends credentials only in Alpaca's documented authentication message and does not log them or include provider error text in exceptions.
+The saved scanner universe is shared with Massive; setting it above replaces any previously saved live list. For a test-only override that leaves the saved list intact, use the [one-run command](../../README.md#override-selection-for-one-run). Migrate old provider-specific symbol keys using the [scanner-universe instructions](../../README.md#scanner-owned-universe-and-user-secrets-migration). Then run the app using the local SQL Server steps in the [README](../../README.md#local-run). User Secrets are for local development, are not encrypted, and must not be treated as a deployed secret store. The WebSocket adapter sends credentials only in Alpaca's documented authentication message and does not log them or include provider error text in exceptions.
 
 ## Adapter behavior and limitations
 
@@ -92,7 +92,7 @@ Complete-message receipt is an adapter observation, not a wire timestamp. If the
 
 ## Optional test-stream connectivity check
 
-The network test is in `tests\MarketOpportunity.AlpacaConnectivityTests`, deliberately outside the solution and default offline unit-test project. It is skipped clearly when key/secret are absent. Configure the same Web-project User Secrets shown above, with `Feed=test`, `Symbols=FAKEPACA`, and a non-empty `SessionId`, then run:
+The network test is in `tests\MarketOpportunity.AlpacaConnectivityTests`, deliberately outside the solution and default offline unit-test project. It is skipped clearly when key/secret are absent. Configure the same Web-project User Secrets shown above, with `Feed=test`, `Scanner:Universe:Symbols=FAKEPACA`, and a non-empty `SessionId`, then run:
 
 ```powershell
 dotnet test tests\MarketOpportunity.AlpacaConnectivityTests\MarketOpportunity.AlpacaConnectivityTests.csproj

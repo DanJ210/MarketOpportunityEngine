@@ -219,7 +219,10 @@ public sealed record FeatureSnapshot(
     bool HasRequiredData,
     bool HasCompleteSessionData,
     DataQualityStatus DataQuality,
-    MarketDataCapabilities MarketData);
+    MarketDataCapabilities MarketData,
+    ConfirmedSwing? LatestConfirmedSwingHigh = null,
+    ConfirmedSwing? LatestConfirmedSwingLow = null,
+    MarketStructureStatus MarketStructureStatus = MarketStructureStatus.NotComputed);
 
 public enum OpportunityClassification
 {
@@ -275,8 +278,8 @@ public sealed record Opportunity(
 
 public sealed record ScannerConfiguration
 {
-    public string Version { get; init; } = "scanner-config-v15";
-    public string FeatureSetVersion { get; init; } = "features-v14";
+    public string Version { get; init; } = "scanner-config-v16";
+    public string FeatureSetVersion { get; init; } = "features-v15";
     public string SetupDefinitionVersion { get; init; } = "momentum-continuation-v1";
     public int MaximumStateEvents { get; init; } = 10_000;
     public int MomentumWindowSeconds { get; init; } = 60;

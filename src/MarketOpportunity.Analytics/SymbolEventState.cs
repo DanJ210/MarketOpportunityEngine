@@ -109,6 +109,9 @@ public sealed class SymbolEventState
 
 public sealed class FeatureCalculator
 {
+    private const int SwingPivotStrength = 2;
+    private const string SwingAlgorithmVersion = "session-swing-fractal-v1";
+
     public FeatureSnapshot Calculate(
         SymbolEventState state,
         DateTimeOffset asOfUtc,
@@ -140,7 +143,9 @@ public sealed class FeatureCalculator
                     / (sessionHighPrice.Value - sessionLowPrice.Value)
                     * 100m
                 : null;
-        var sessionPriceStructure = CalculatePriceStructure(trades, hasValidSessionPrices);
+        var (sessionPriceStructure, latestConfirmedSwingHigh, latestConfirmedSwingLow, marketStructureStatus) =
+            CalculateMarketStructure(
+                trades, hasValidSessionPrices, state.Symbol, state.SessionId, configuration.FeatureSetVersion);
         var (sessionAdx, sessionAdxStatus) = CalculateAdx(
             trades,
             configuration.TrendStrengthPeriod,
@@ -315,7 +320,10 @@ public sealed class FeatureCalculator
             hasRequiredData.ToString(),
             (!state.HasEvictedEvents).ToString(),
             quality.ToString(),
-            JsonSerializer.Serialize(marketData)
+            JsonSerializer.Serialize(marketData),
+            JsonSerializer.Serialize(latestConfirmedSwingHigh),
+            JsonSerializer.Serialize(latestConfirmedSwingLow),
+            marketStructureStatus.ToString()
         };
         var inputIdentity = string.Join(
             "\u001f",
@@ -365,7 +373,10 @@ public sealed class FeatureCalculator
             hasRequiredData,
             !state.HasEvictedEvents,
             quality,
-            marketData);
+            marketData,
+            latestConfirmedSwingHigh,
+            latestConfirmedSwingLow,
+            marketStructureStatus);
     }
 
     private static (decimal? Value, ShortHorizonDollarVolumeStatus Status) CalculateShortHorizonDollarVolume(
@@ -579,24 +590,42 @@ public sealed class FeatureCalculator
         return (ema, slopePerMinute);
     }
 
-    private static PriceStructure? CalculatePriceStructure(
+    private static (
+        PriceStructure? PriceStructure,
+        ConfirmedSwing? LatestHigh,
+        ConfirmedSwing? LatestLow,
+        MarketStructureStatus Status) CalculateMarketStructure(
         IReadOnlyList<TradeEvent> trades,
-        bool pricesAreValid)
+        bool pricesAreValid,
+        string symbol,
+        string sessionId,
+        string featureSetVersion)
     {
-        const int pivotStrength = 2;
-        if (!pricesAreValid || trades.Count < (pivotStrength * 2) + 1)
+        if (trades.Count == 0)
         {
-            return null;
+            return (null, null, null, MarketStructureStatus.Insufficient);
         }
 
-        List<decimal> pivotHighs = [];
-        List<decimal> pivotLows = [];
-        for (var index = pivotStrength; index < trades.Count - pivotStrength; index++)
+        if (!pricesAreValid)
+        {
+            return (null, null, null, MarketStructureStatus.InvalidPriceData);
+        }
+
+        if (trades.Count < (SwingPivotStrength * 2) + 1)
+        {
+            return (null, null, null, MarketStructureStatus.Insufficient);
+        }
+
+        var previousHighIndex = -1;
+        var latestHighIndex = -1;
+        var previousLowIndex = -1;
+        var latestLowIndex = -1;
+        for (var index = SwingPivotStrength; index < trades.Count - SwingPivotStrength; index++)
         {
             var price = trades[index].Price;
             var isHigh = true;
             var isLow = true;
-            for (var offset = 1; offset <= pivotStrength; offset++)
+            for (var offset = 1; offset <= SwingPivotStrength; offset++)
             {
                 if (price <= trades[index - offset].Price)
                 {
@@ -621,38 +650,80 @@ public sealed class FeatureCalculator
 
             if (isHigh)
             {
-                pivotHighs.Add(price);
+                previousHighIndex = latestHighIndex;
+                latestHighIndex = index;
             }
 
             if (isLow)
             {
-                pivotLows.Add(price);
+                previousLowIndex = latestLowIndex;
+                latestLowIndex = index;
             }
         }
 
-        if (pivotHighs.Count < 2 || pivotLows.Count < 2)
+        var latestHigh = CreateConfirmedSwing(
+            trades, latestHighIndex, ConfirmedSwingType.ConfirmedSwingHigh, symbol, sessionId, featureSetVersion);
+        var latestLow = CreateConfirmedSwing(
+            trades, latestLowIndex, ConfirmedSwingType.ConfirmedSwingLow, symbol, sessionId, featureSetVersion);
+        PriceStructure? priceStructure = null;
+        if (previousHighIndex >= 0 && previousLowIndex >= 0)
+        {
+            var highDirection = trades[latestHighIndex].Price.CompareTo(trades[previousHighIndex].Price);
+            var lowDirection = trades[latestLowIndex].Price.CompareTo(trades[previousLowIndex].Price);
+            priceStructure = (highDirection, lowDirection) switch
+            {
+                (0, _) or (_, 0) => PriceStructure.Flat,
+                (> 0, > 0) => PriceStructure.HigherHighHigherLow,
+                (< 0, < 0) => PriceStructure.LowerHighLowerLow,
+                _ => PriceStructure.Mixed
+            };
+        }
+
+        return (priceStructure, latestHigh, latestLow, MarketStructureStatus.Available);
+    }
+
+    private static ConfirmedSwing? CreateConfirmedSwing(
+        IReadOnlyList<TradeEvent> trades,
+        int index,
+        ConfirmedSwingType type,
+        string symbol,
+        string sessionId,
+        string featureSetVersion)
+    {
+        if (index < 0)
         {
             return null;
         }
 
-        var highDirection = pivotHighs[^1].CompareTo(pivotHighs[^2]);
-        var lowDirection = pivotLows[^1].CompareTo(pivotLows[^2]);
-        if (highDirection == 0 || lowDirection == 0)
-        {
-            return PriceStructure.Flat;
-        }
-
-        if (highDirection > 0 && lowDirection > 0)
-        {
-            return PriceStructure.HigherHighHigherLow;
-        }
-
-        if (highDirection < 0 && lowDirection < 0)
-        {
-            return PriceStructure.LowerHighLowerLow;
-        }
-
-        return PriceStructure.Mixed;
+        var origin = trades[index];
+        var confirmation = trades[index + SwingPivotStrength];
+        var originIdentity = MarketEventIdentity.Create(origin);
+        var confirmationIdentity = MarketEventIdentity.Create(confirmation);
+        var identity = string.Join(
+            "\u001f",
+            "confirmed-swing",
+            symbol,
+            sessionId,
+            type.ToString(),
+            Format(origin.Price),
+            origin.EventTimeUtc.UtcDateTime.Ticks.ToString(CultureInfo.InvariantCulture),
+            confirmation.EventTimeUtc.UtcDateTime.Ticks.ToString(CultureInfo.InvariantCulture),
+            originIdentity,
+            confirmationIdentity,
+            featureSetVersion,
+            SwingAlgorithmVersion);
+        return new ConfirmedSwing(
+            DeterministicId.From(identity),
+            symbol,
+            sessionId,
+            origin.Price,
+            origin.EventTimeUtc.ToUniversalTime(),
+            confirmation.EventTimeUtc.ToUniversalTime(),
+            originIdentity,
+            confirmationIdentity,
+            type,
+            featureSetVersion,
+            SwingAlgorithmVersion);
     }
 
     private static string Format(decimal? value) =>

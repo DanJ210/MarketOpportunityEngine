@@ -1,11 +1,11 @@
 # Current Project Status
 
-**Checkpoint:** Milestone A.1 - Live Scanner Validation: COMPLETE
+**Checkpoint:** Milestone A.2.1 - Provider-Neutral Universe + Market Structure Foundation
 **Updated:** 2026-10-30
 
 ## Current status
 
-The latest self-describing 30-minute IEX run is recorded in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#self-describing-30-minute-iex-closeout-2026-10-29). It verifies live IEX ingestion, exact-session SQL reconciliation, provenance, vetoes, pipeline accounting, completed drain, `DurationElapsed` shutdown, exit code 0, and no Error/Critical app-log entries.
+The A.2.1 foundation implements the scanner-owned symbol universe and descriptive confirmed swing contracts. The latest self-describing 30-minute IEX run is recorded in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#self-describing-30-minute-iex-closeout-2026-10-29). It verifies live IEX ingestion, exact-session SQL reconciliation, provenance, vetoes, pipeline accounting, completed drain, `DurationElapsed` shutdown, exit code 0, and no Error/Critical app-log entries.
 
 **Milestone A.1 - Live Scanner Validation: COMPLETE**
 
@@ -29,10 +29,17 @@ Extended browser monitoring remained Live without reconnect/failure UI or browse
 
 The launcher and app record self-describing session evidence: a sanitized `<SessionId>.app.log`, recorded shutdown trigger and duration, per-stage latency threshold counts, and `<SessionId>.launcher-result.json` with exit code and exit time. The 30-minute run verified these artifacts. Follow the README [final integrated-browser validation workflow](./README.md#final-integrated-browser-validation-workflow). Ingestion, channel capacity, analysis interval, persistence, formulas, thresholds, scoring, classifications, and quote handling are unchanged.
 
-## Post-A.1 housekeeping
+## A.2.1 foundation
 
-After A.1, move the provider-specific universe setting:
+- `Scanner:Universe:Symbols` is the canonical comma-separated live universe. Both adapters share the same trim, uppercase, empty-entry rejection, and case-insensitive first-occurrence deduplication. Fixture replay does not consult the universe.
+- Provider-specific symbol keys are no longer read, and there is no automatic fallback: legacy lists can differ. Operators must explicitly migrate their intended universe in User Secrets as described in the [README](./README.md#scanner-owned-universe-and-user-secrets-migration). No local settings were changed by the implementation.
+- `features-v15` and `scanner-config-v16` add the latest confirmed swing high/low, event-time confirmation and provenance, and explicit availability status. The existing two-sided fractal is unchanged; observations are descriptive, session-scoped, bounded-state-aware, and not trading instructions. `momentum-continuation-v1` and its classifications, scoring, vetoes, and publication rules are unchanged.
+- Earlier persisted snapshots and decisions remain immutable; the new fields use the existing snapshot JSON and require no schema migration.
 
-`MarketData:Massive:Symbols` -> `Scanner:Universe:Symbols`
+## A.2.1 validation
 
-The provider-neutral symbol universe should normalize, trim, and deduplicate symbols. This refactor is not part of A.1 and is not implemented.
+- Focused structure, universe, provider-option, and replay tests passed; the complete offline unit suite passed **260/260**.
+- The in-process hosted API/dashboard test passed **1/1** with synthetic canonical events and a capturing store; it is not SQL persistence coverage.
+- Offline launcher interception tests passed **17/17**, with no app, SQL, Docker, or provider connection started by those tests.
+- `dotnet build MarketOpportunityEngine.sln --no-restore` succeeded with zero warnings and errors.
+- SQL Server persistence and hosted-fixture integration coverage was **not run**: no guarded `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was configured, and the existing SQL service was not retargeted or modified. No live-provider validation was repeated.

@@ -29,7 +29,7 @@ The quickstart documents a default limit of one concurrent WebSocket connection 
 The current implementation is in [`MassiveMarketDataSource`](../../src/MarketOpportunity.Infrastructure/MassiveMarketDataSource.cs). It:
 
 - Connects to the real-time stocks endpoint; it does not silently fall back to delayed data.
-- Authenticates, then subscribes to `T.<symbol>` and `Q.<symbol>` for each configured symbol.
+- Authenticates, then subscribes to `T.<symbol>` and `Q.<symbol>` for each symbol in the shared `Scanner:Universe:Symbols` setting.
 - Handles single-event and array-shaped messages, and maps supported trade and quote messages to provider-independent market events.
 - Uses provider event timestamps for event time, the local `TimeProvider` at receipt for receive time, and the configured `MarketData:Massive:SessionId` verbatim. It does not infer a session from a date.
 - Starts without historical warm-up or gap backfill and does not automatically reconnect after disconnect. A new connection therefore does not restore events missed while disconnected.

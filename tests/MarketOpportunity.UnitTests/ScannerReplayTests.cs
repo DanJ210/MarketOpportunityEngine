@@ -720,7 +720,7 @@ public sealed class ScannerReplayTests
     public void Changed_configuration_version_creates_distinct_feature_and_opportunity_identities()
     {
         var firstConfiguration = new ScannerConfiguration();
-        var changedConfiguration = firstConfiguration with { Version = "scanner-config-v16" };
+        var changedConfiguration = firstConfiguration with { Version = "scanner-config-alternate" };
         var first = Replay(GoldenEvents(), firstConfiguration);
         var changed = Replay(GoldenEvents(), changedConfiguration);
 
@@ -972,6 +972,8 @@ public sealed class ScannerReplayTests
             {
                 Id = Guid.Empty,
                 SessionPriceStructure = null,
+                LatestConfirmedSwingHigh = null,
+                LatestConfirmedSwingLow = null,
                 SessionRealizedVolatilityPercent = null,
                 SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Insufficient,
                 SessionTrendDirection = TrendDirectionContext.Insufficient
@@ -980,6 +982,8 @@ public sealed class ScannerReplayTests
             {
                 Id = Guid.Empty,
                 SessionPriceStructure = null,
+                LatestConfirmedSwingHigh = null,
+                LatestConfirmedSwingLow = null,
                 SessionRealizedVolatilityPercent = null,
                 SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Insufficient,
                 SessionTrendDirection = TrendDirectionContext.Insufficient
@@ -1933,8 +1937,8 @@ public sealed class ScannerReplayTests
         Assert.Equal((int)ShortHorizonDollarVolumeStatus.Available,
             document.RootElement.GetProperty("shortHorizonDollarVolumeStatus").GetInt32());
         Assert.Equal(features, JsonSerializer.Deserialize<FeatureSnapshot>(json, jsonOptions));
-        Assert.Equal("features-v14", features.FeatureSetVersion);
-        Assert.Equal("scanner-config-v15", configuration.Version);
+        Assert.Equal("features-v15", features.FeatureSetVersion);
+        Assert.Equal("scanner-config-v16", configuration.Version);
         Assert.Equal("momentum-continuation-v1", configuration.SetupDefinitionVersion);
 
         var values = new[]
@@ -1944,12 +1948,22 @@ public sealed class ScannerReplayTests
             "100", "0", "Flat", "0", "0", "0", "100", "10000", "Available",
             "100", "100", "100", "", "", "", "Insufficient", "0", "Available", "Neutral", "", "", "", "", "", "0",
             "True", "True", "True", "True", "Good",
-            JsonSerializer.Serialize(MarketDataCapabilities.Unknown)
+            JsonSerializer.Serialize(MarketDataCapabilities.Unknown),
+            "null", "null", "Insufficient"
         };
         var identity = string.Join("\u001f", JsonSerializer.Serialize(configuration),
             string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
             string.Join("\u001f", values));
         Assert.Equal(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(identity)).AsSpan(0, 16)), features.Id);
+        for (var index = values.Length - 3; index < values.Length; index++)
+        {
+            var changedValues = values.ToArray();
+            changedValues[index] = "changed";
+            var changedIdentity = string.Join("\u001f", JsonSerializer.Serialize(configuration),
+                string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
+                string.Join("\u001f", changedValues));
+            Assert.NotEqual(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(changedIdentity)).AsSpan(0, 16)), features.Id);
+        }
         foreach (var index in new[] { 15, 17, 18, 19, 20, 22, 24, 27, 28, 29, 30, 31 })
         {
             foreach (var value in new[] { "101", "102" })

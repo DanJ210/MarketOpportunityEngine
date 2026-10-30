@@ -122,18 +122,22 @@ try {
 
         $secretsPath = Join-Path $env:APPDATA "Microsoft\UserSecrets\$secretsId\secrets.json"
         $secrets = Get-Content -LiteralPath $secretsPath -Raw | ConvertFrom-Json -AsHashtable
-        $configuredSymbols = $secrets['MarketData:Massive:Symbols']
+        $configuredSymbols = $secrets['Scanner:Universe:Symbols']
         if ($configuredSymbols -isnot [string] -or [string]::IsNullOrWhiteSpace($configuredSymbols)) {
-            throw 'MarketData:Massive:Symbols must contain the existing comma-separated development universe.'
+            throw 'Scanner:Universe:Symbols must contain the comma-separated development universe.'
         }
 
-        $entries = @($configuredSymbols.Split(',', [StringSplitOptions]::TrimEntries -bor
-                [StringSplitOptions]::RemoveEmptyEntries))
+        $entries = @($configuredSymbols.Split(','))
         $configuredCount = $entries.Count
-        $symbols = @($entries | Select-Object -Unique -CaseInsensitive)
-        if ($symbols.Count -eq 0) {
-            throw 'The configured development symbol universe is empty.'
-        }
+        $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        $symbols = @(foreach ($entry in $entries) {
+            $symbol = $entry.Trim()
+            if ([string]::IsNullOrWhiteSpace($symbol)) {
+                throw 'Scanner:Universe:Symbols must not contain empty entries.'
+            }
+            $symbol = $symbol.ToUpperInvariant()
+            if ($seen.Add($symbol)) { $symbol }
+        })
         $secrets = $null
     }
 
@@ -298,7 +302,7 @@ try {
             --urls "http://localhost:$Port" `
             --MarketData:Provider Alpaca `
             --MarketData:Alpaca:Feed $Feed `
-            --MarketData:Alpaca:Symbols ($symbols -join ',') `
+            --Scanner:Universe:Symbols ($symbols -join ',') `
             --MarketData:Alpaca:SessionId $SessionId @diagnosticArguments
         $processExitCode = $LASTEXITCODE
     }

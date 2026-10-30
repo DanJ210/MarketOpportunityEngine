@@ -13,7 +13,7 @@ public sealed class MassiveMarketDataOptionsTests
             {
                 ["MarketData:Massive:ApiKey"] = "test-key",
                 ["MarketData:Massive:SessionId"] = "operator-session",
-                ["MarketData:Massive:Symbols"] = " AAPL,MSFT,aapl,,SPY "
+                ["Scanner:Universe:Symbols"] = " aapl,MSFT,AAPL,SPY "
             })
             .Build();
 
@@ -31,7 +31,7 @@ public sealed class MassiveMarketDataOptionsTests
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["MarketData:Massive:SessionId"] = "operator-session",
-                ["MarketData:Massive:Symbols"] = "AAPL"
+                ["Scanner:Universe:Symbols"] = "AAPL"
             })
             .Build();
 

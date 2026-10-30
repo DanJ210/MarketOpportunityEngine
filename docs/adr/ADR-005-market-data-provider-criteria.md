@@ -19,7 +19,8 @@
 - The recorded fixture remains the default source for local development and offline tests.
 - Alpaca is used to exercise the real WebSocket ingestion path during development, including the synthetic test stream; it does not establish a final-provider commitment.
 - Massive remains a supported real-time trades-and-quotes adapter. Provider selection does not imply brokerage, account-linking, or order permissions.
-- The operator configures provider, feed, credentials, symbols, and explicit session ID; the application does not infer sessions from dates.
+- The operator configures provider, feed, credentials, and explicit session ID separately from the scanner-owned `Scanner:Universe:Symbols` universe; the application does not infer sessions from dates. Both live adapters use the same normalized universe. The fixture does not depend on it.
+- The old provider-specific symbol settings are not read or merged. Existing local configurations require an explicit one-time migration to the scanner universe.
 - Provider/feed coverage and real-time/delayed capability metadata travel with analysis provenance. Analytics must not infer feed semantics by matching provider names.
 - Confirm applicable real-time feed entitlements, personal-use/display/retention terms, and costs for the intended usage before relying on live data beyond local evaluation.
 - Provider-specific DTOs will live in an infrastructure adapter behind `IMarketDataSource`.

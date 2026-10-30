@@ -136,6 +136,25 @@
                             <strong>@features.SessionTrendDirection</strong>
                             <small>VWAP slope: @features.SessionVwapSlopeDirection · EMA fast/medium: @FormatPrice(features.FastEma) / @FormatPrice(features.MediumEma)</small>
                             <small>Price structure: @(features.SessionPriceStructure?.ToString() ?? "Insufficient") · ADX: @FormatPrice(features.SessionAdx) (@features.SessionAdxStatus)</small>
+                            <div class="structure-observations" aria-label="Confirmed swing observations">
+                                <small>Confirmed swing observations: @features.MarketStructureStatus @(features.HasCompleteSessionData ? "" : "(partial retained state)")</small>
+                                @if (features.LatestConfirmedSwingHigh is { } swingHigh)
+                                {
+                                    <small>Latest high: @FormatSwingPrice(swingHigh.Price) · pivot event <time class="local-time" data-local-time datetime="@ToUtcIso(swingHigh.EventTimeUtc)">@FormatUtc(swingHigh.EventTimeUtc)</time> · confirmation event <time class="local-time" data-local-time datetime="@ToUtcIso(swingHigh.ConfirmedAtEventTimeUtc)">@FormatUtc(swingHigh.ConfirmedAtEventTimeUtc)</time></small>
+                                }
+                                else
+                                {
+                                    <small>Latest confirmed high: unavailable</small>
+                                }
+                                @if (features.LatestConfirmedSwingLow is { } swingLow)
+                                {
+                                    <small>Latest low: @FormatSwingPrice(swingLow.Price) · pivot event <time class="local-time" data-local-time datetime="@ToUtcIso(swingLow.EventTimeUtc)">@FormatUtc(swingLow.EventTimeUtc)</time> · confirmation event <time class="local-time" data-local-time datetime="@ToUtcIso(swingLow.ConfirmedAtEventTimeUtc)">@FormatUtc(swingLow.ConfirmedAtEventTimeUtc)</time></small>
+                                }
+                                else
+                                {
+                                    <small>Latest confirmed low: unavailable</small>
+                                }
+                            </div>
                         </article>
                         <article class="metric-card">
                             <span>QUALITY / RANGE</span>
@@ -316,6 +335,8 @@
     };
 
     private static string FormatPrice(decimal? price) => price?.ToString("F2") ?? "--";
+    private static string FormatSwingPrice(decimal price) =>
+        price.ToString("G29", System.Globalization.CultureInfo.InvariantCulture);
     private static string FormatPercent(decimal? value) => value is null ? "--" : $"{value.Value:F2}%";
     private static string FormatVolume(long? volume) => volume?.ToString("N0") ?? "--";
     private static string FormatDollars(decimal? value) => value is null ? "--" : $"${value.Value:N0}";

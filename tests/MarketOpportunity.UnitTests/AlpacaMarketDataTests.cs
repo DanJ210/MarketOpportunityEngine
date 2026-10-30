@@ -106,11 +106,11 @@ public sealed class AlpacaMarketDataTests
     }
 
     [Fact]
-    public void Reads_namespaced_provider_configuration_and_normalizes_symbols()
+    public void Reads_provider_configuration_and_the_scanner_universe()
     {
         var configuration = AlpacaConfiguration(
             feed: "IEX",
-            symbols: " AAPL,MSFT,aapl,,SPY ");
+            symbols: " aapl,MSFT,AAPL,SPY ");
 
         var options = AlpacaMarketDataOptions.FromConfiguration(configuration);
 
@@ -153,7 +153,7 @@ public sealed class AlpacaMarketDataTests
                 ["MarketData:Alpaca:SecretKey"] = "sensitive-secret",
                 ["MarketData:Alpaca:Feed"] = "unknown",
                 ["MarketData:Alpaca:SessionId"] = "session",
-                ["MarketData:Alpaca:Symbols"] = "FAKEPACA"
+                ["Scanner:Universe:Symbols"] = "FAKEPACA"
             });
 
         var badFeed = Assert.Throws<InvalidOperationException>(
@@ -166,7 +166,7 @@ public sealed class AlpacaMarketDataTests
     [InlineData("MarketData:Alpaca:ApiKey", "ApiKey")]
     [InlineData("MarketData:Alpaca:SecretKey", "SecretKey")]
     [InlineData("MarketData:Alpaca:SessionId", "SessionId")]
-    [InlineData("MarketData:Alpaca:Symbols", "Symbols")]
+    [InlineData("Scanner:Universe:Symbols", "Scanner:Universe:Symbols")]
     public void Requires_credentials_session_and_symbols(
         string missingSetting,
         string expectedSetting)
@@ -177,7 +177,7 @@ public sealed class AlpacaMarketDataTests
             ["MarketData:Alpaca:SecretKey"] = "test-secret",
             ["MarketData:Alpaca:Feed"] = "test",
             ["MarketData:Alpaca:SessionId"] = "operator-session",
-            ["MarketData:Alpaca:Symbols"] = "FAKEPACA"
+            ["Scanner:Universe:Symbols"] = "FAKEPACA"
         };
         settings.Remove(missingSetting);
 
@@ -199,10 +199,9 @@ public sealed class AlpacaMarketDataTests
                 ["MarketData:Alpaca:SecretKey"] = "alpaca-secret",
                 ["MarketData:Alpaca:Feed"] = "test",
                 ["MarketData:Alpaca:SessionId"] = "session",
-                ["MarketData:Alpaca:Symbols"] = "FAKEPACA",
+                ["Scanner:Universe:Symbols"] = "FAKEPACA",
                 ["MarketData:Massive:ApiKey"] = "massive-key",
-                ["MarketData:Massive:SessionId"] = "session",
-                ["MarketData:Massive:Symbols"] = "AAPL"
+                ["MarketData:Massive:SessionId"] = "session"
             })
             .Build();
         var fixturePath = Path.GetTempFileName();
@@ -257,7 +256,7 @@ public sealed class AlpacaMarketDataTests
                 ["MarketData:Alpaca:SecretKey"] = "test-secret",
                 ["MarketData:Alpaca:Feed"] = feed,
                 ["MarketData:Alpaca:SessionId"] = "operator-session",
-                ["MarketData:Alpaca:Symbols"] = symbols
+                ["Scanner:Universe:Symbols"] = symbols
             })
             .Build();
 }

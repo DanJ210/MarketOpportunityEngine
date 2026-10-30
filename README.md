@@ -2,7 +2,7 @@
 
 Milestone A defaults to a deterministic recorded-fixture scanner and supports optional read-only live ingestion from Alpaca Market Data or Massive. It does not place orders or use a broker API.
 
-**Current checkpoint: Milestone A.1 - Live Scanner Validation.** Feature expansion is stopped, including relative volume. See [current status](./PROJECT_STATUS.md) for verified live-source behavior and remaining exit criteria, and [validation history](./VALIDATION_HISTORY.md) for prior runs. Older slice recommendations below are historical, not authorization for new analytics.
+**Current checkpoint: Milestone A.2.1 - Provider-Neutral Universe + Market Structure Foundation.** Milestone A.1 live scanner validation is complete; its [validation history](./VALIDATION_HISTORY.md) is historical evidence, not a requirement to repeat provider validation. See [current status](./PROJECT_STATUS.md) for the current checkpoint. Older slice recommendations below are historical, not authorization for additional analytics.
 
 ## Requirements
 
@@ -14,6 +14,12 @@ Milestone A defaults to a deterministic recorded-fixture scanner and supports op
 `src\MarketOpportunity.Web\Fixtures\momentum-continuation.json` contains synthetic trades and quotes for `MOE` and `QNT` in two explicit fixture sessions: `fixture-2026-10-22` and `fixture-2026-10-23`. Every event carries its event time, receive time, provider, sequence ID, symbol, and session ID.
 
 The source preserves fixture arrival order, including interleaved symbols and late/out-of-order events. Every source must provide a non-empty symbol, provider, and explicit session ID; the scanner rejects events missing any of these identities rather than inferring them. The bounded state deduplicates stable identities and orders events deterministically by event time and identity before computing features. State and session VWAP are isolated by symbol and explicit session ID; no session is inferred from a UTC calendar date. The pipeline creates and persists one immutable feature/opportunity result for each of the four symbol/session pairs.
+
+`features-v15` exposes the latest confirmed swing high and low as descriptive observations, reusing the existing `features-v10` two-sided trade-point fractal described below. Each observation has a deterministic ID, symbol, explicit session ID, decimal price, pivot event time, confirmation **event** time, canonical origin and confirmation event identities, feature-set version, algorithm version (`session-swing-fractal-v1`), and type (`ConfirmedSwingHigh` or `ConfirmedSwingLow`). The confirmation time is the event time of the second subsequent eligible trade in canonical order, not a wall-clock publication time or a guarantee of when a late event was received. Equal timestamps remain separate observations; the canonical event identities identify the pivot and confirming trade.
+
+The snapshot reports `marketStructureStatus` as `Insufficient` when fewer than five eligible trades are present, `InvalidPriceData` when any eligible trade price is non-positive, or `Available` when at least five eligible prices are valid, even if neither kind of pivot has formed. Both swing fields are nullable independently. `NotComputed` denotes older snapshot JSON that predates these fields. Quotes and trade sizes do not determine the pivots; canonical identity may still incorporate receive time and size for an event without a sequence ID. Only retained same-symbol/session trades at or before `AsOfUtc` are eligible. Read the observations with `HasCompleteSessionData`: an eviction can leave only partial structure, including for a historical as-of query after a future arrival. A late observation can change a subsequent analysis, but never rewrites an earlier persisted snapshot.
+
+API enums use strings; persisted snapshot JSON uses the existing numeric-enum convention. Swing fields and status participate in snapshot identity. The feature/configuration versions are `features-v15` and `scanner-config-v16`; the setup remains `momentum-continuation-v1`. These facts do not affect classification, scoring, vetoes, or publication, and are not entries, targets, position sizes, or trading instructions.
 
 The `features-v11` snapshot retains session VWAP slope over the existing `MomentumWindowSeconds` window. At each distinct trade event time, the calculator samples cumulative session VWAP; slope is the change from the first to last in-window sample divided by elapsed event-time minutes, so irregularly spaced observations are time-normalized. The snapshot reports the signed price-per-minute value and `Rising`, `Falling`, `Flat`, or `Insufficient` direction. `Flat` means exactly zero slope; fewer than two distinct in-window timestamps with a positive cumulative volume yields a null slope and `Insufficient`. This is descriptive feature output only and does not affect setup classification, scoring, publication, or vetoes.
 
@@ -85,7 +91,7 @@ No eligible window trades yields null/`Insufficient`. Any eligible trade with `P
 - Always interpret this value with `HasCompleteSessionData`: false means a non-null position describes only retained partial-session state (including after quote eviction); true means no observed state event has been evicted, not proof of upstream session-start coverage. Future events do not affect the earlier result if eligible retained state and completeness are unchanged, but may evict earlier events from bounded state. No historical backfill is added.
 - HTTP and persisted JSON use `sessionRangePositionPercent`; null is serialized explicitly. The value participates explicitly in deterministic feature identity, in addition to event identities and serialized configuration.
 
-The preceding range-position slice advanced defaults from `features-v7` / `scanner-config-v7` to **`features-v8` / `scanner-config-v8`**. The EMA slice advanced them to **`scanner-config-v9` / `features-v9`**, the structure slice to **`scanner-config-v10` / `features-v10`**, the trade-point ADX slice to **`scanner-config-v11` / `features-v11`**, trend direction to **`scanner-config-v12` / `features-v12`**, and retained-session realized volatility to **`scanner-config-v13` / `features-v13`**. The separate volatility-risk gate advanced only configuration to **`scanner-config-v14`**. The dollar-volume feature/gate now advances defaults to **`features-v14` / `scanner-config-v15`**; `momentum-continuation-v1` remains unchanged. Prior persisted configurations, snapshots, and decisions remain immutable; changing analysis creates a new version/record. Session volume's empty/invalid-size/checked-overflow/completeness contract, rolling volume, both ROC horizons and validation, exact VWAP-slope behavior, and unrelated detector outcomes remain unchanged. No schema migration, dependency or UI change is part of this slice.
+The preceding range-position slice advanced defaults from `features-v7` / `scanner-config-v7` to **`features-v8` / `scanner-config-v8`**. The EMA slice advanced them to **`scanner-config-v9` / `features-v9`**, the structure slice to **`scanner-config-v10` / `features-v10`**, the trade-point ADX slice to **`scanner-config-v11` / `features-v11`**, trend direction to **`scanner-config-v12` / `features-v12`**, and retained-session realized volatility to **`scanner-config-v13` / `features-v13`**. The separate volatility-risk gate advanced only configuration to **`scanner-config-v14`**. The dollar-volume feature/gate advanced defaults to **`features-v14` / `scanner-config-v15`**; A.2.1 advances them to **`features-v15` / `scanner-config-v16`** with the descriptive swing fields above. `momentum-continuation-v1` remains unchanged. Prior persisted configurations, snapshots, and decisions remain immutable; changing analysis creates a new version/record. Session volume's empty/invalid-size/checked-overflow/completeness contract, rolling volume, both ROC horizons and validation, exact VWAP-slope behavior, and unrelated detector outcomes remain unchanged. The swing observations are stored in the existing snapshot JSON; no schema migration is required.
 
 ## Local run
 
@@ -106,7 +112,7 @@ Compose normally prefixes the volume name with the project name (currently `mark
 
 The `http` launch profile in `src\MarketOpportunity.Web\Properties\launchSettings.json` sets the development environment, opens the browser, and configures the app to listen at `http://localhost:5228`. You do not need to set `ASPNETCORE_URLS` yourself. Use the `https` profile instead if you want HTTPS and have the local development certificate trusted.
 
-Development startup creates the application schema with EF Core `EnsureCreated`; if an earlier schema already exists, it applies the explicit-session and opportunity-provenance migrations. Pre-migration records are labeled `legacy-unknown` rather than assigned an inferred session. The current session-scoped feature contract is versioned as `features-v14`, and the effective scanner configuration as `scanner-config-v15`; prior immutable decisions are not rewritten. The development connection string targets SQL Server at `localhost,1433`. The checked-in password is only for local Docker development; override `MSSQL_SA_PASSWORD` when needed and keep credentials out of source control.
+Development startup creates the application schema with EF Core `EnsureCreated`; if an earlier schema already exists, it applies the explicit-session and opportunity-provenance migrations. Pre-migration records are labeled `legacy-unknown` rather than assigned an inferred session. The current session-scoped feature contract is versioned as `features-v15`, and the effective scanner configuration as `scanner-config-v16`; prior immutable decisions are not rewritten. The development connection string targets SQL Server at `localhost,1433`. The checked-in password is only for local Docker development; override `MSSQL_SA_PASSWORD` when needed and keep credentials out of source control.
 
 In a second PowerShell terminal, verify the running app:
 
@@ -135,6 +141,20 @@ For the current application, configuration precedence is **highest first**, appl
 
 The `http` and `https` launch profiles select Development but do not select a provider. Environment variables supplied by a launch profile or IDE participate in the environment-variable layer. A higher-priority `Massive` selection will override `Fixture` or `Alpaca` in a JSON file.
 
+### Scanner-owned universe and User Secrets migration
+
+Both live adapters subscribe to the single, comma-separated `Scanner:Universe:Symbols` setting. Entries are trimmed, converted to invariant uppercase, and deduplicated case-insensitively in first-occurrence order; empty entries, including leading/trailing or repeated commas, are rejected. Live selection requires a non-empty universe. Fixture replay does not read or validate this setting. The universe is subscription configuration, not part of the analytical `ScannerConfiguration` returned by the effective-configuration API.
+
+There is **no legacy fallback**: `MarketData:Massive:Symbols` and `MarketData:Alpaca:Symbols` are no longer read. Older local configurations can contain different lists, so silently choosing or merging one could subscribe the wrong symbols. Before the next live launch, explicitly choose the desired live universe and migrate it in Development User Secrets; replace the example below with your intended non-secret symbols:
+
+```powershell
+dotnet user-secrets set "Scanner:Universe:Symbols" "AAPL,MSFT,SPY" --project src\MarketOpportunity.Web
+dotnet user-secrets remove "MarketData:Massive:Symbols" --project src\MarketOpportunity.Web
+dotnet user-secrets remove "MarketData:Alpaca:Symbols" --project src\MarketOpportunity.Web
+```
+
+These commands do not change provider selection or credentials. Do not dump the User Secrets file or all secret values when migrating. For Alpaca's synthetic test feed, use the one-run `FAKEPACA` override below rather than replacing a saved live universe.
+
 ### Select Alpaca for normal local launches
 
 From the repository root, with the Alpaca key ID and secret already configured using the [credential setup guide](./docs/providers/alpaca-websocket.md#local-configuration), set these **non-secret** values:
@@ -142,24 +162,26 @@ From the repository root, with the Alpaca key ID and secret already configured u
 ```powershell
 dotnet user-secrets set "MarketData:Provider" "Alpaca" --project src\MarketOpportunity.Web
 dotnet user-secrets set "MarketData:Alpaca:Feed" "test" --project src\MarketOpportunity.Web
-dotnet user-secrets set "MarketData:Alpaca:Symbols" "FAKEPACA" --project src\MarketOpportunity.Web
+dotnet user-secrets set "Scanner:Universe:Symbols" "FAKEPACA" --project src\MarketOpportunity.Web
 dotnet user-secrets set "MarketData:Alpaca:SessionId" "alpaca-manual-validation" --project src\MarketOpportunity.Web
 dotnet run --project src\MarketOpportunity.Web --launch-profile http
 ```
 
-These settings persist locally outside the repository. Use an explicit session ID appropriate to the run; it is not inferred from the date. `test` / `FAKEPACA` is synthetic Alpaca traffic, not exchange market data. For Milestone A.1 IEX validation, use the [dedicated validation commands](#milestone-a1-live-iex-validation) below to reuse the existing configured symbol universe rather than maintaining a second list. IEX is limited/non-consolidated coverage and may produce no events outside market availability. A connection alone does not establish Live health.
+These settings persist locally outside the repository, including replacing any previously saved universe. Use an explicit session ID appropriate to the run; it is not inferred from the date. `test` / `FAKEPACA` is synthetic Alpaca traffic, not exchange market data. The [validation launcher](#milestone-a1-live-iex-validation) can reuse the scanner universe for IEX and temporarily override it for the test feed. IEX is limited/non-consolidated coverage and may produce no events outside market availability. A connection alone does not establish Live health.
 
 ### Override selection for one run
 
 To force Alpaca's test stream without changing persistent selection:
 
 ```powershell
-dotnet run --project src\MarketOpportunity.Web --launch-profile http -- --MarketData:Provider Alpaca --MarketData:Alpaca:Feed test --MarketData:Alpaca:Symbols FAKEPACA --MarketData:Alpaca:SessionId alpaca-manual-validation
+dotnet run --project src\MarketOpportunity.Web --launch-profile http -- --MarketData:Provider Alpaca --MarketData:Alpaca:Feed test --Scanner:Universe:Symbols FAKEPACA --MarketData:Alpaca:SessionId alpaca-manual-validation
 ```
 
 Arguments after `--` are passed to the application. This is how provider selection was forced during Milestone A.1 validation; it does **not** make a subsequent normal launch use Alpaca. This command also does **not** change the SQL connection: normal launches use the effective `ConnectionStrings:MarketOpportunity`. Dedicated-test validation requires the separate [guarded SQL procedure](#fixture-runtime-verification-order); do not assume a provider override selects a test database.
 
 ### Milestone A.1 live IEX validation
+
+Milestone A.1 is complete. These retained operational commands do not authorize or require another live-provider validation for A.2.1.
 
 Run these commands from the repository root in **PowerShell 7.6+** (`pwsh`, running .NET 10), with Docker Desktop running. Alpaca credentials must already be configured as described in the [provider guide](./docs/providers/alpaca-websocket.md#local-configuration). Neither command changes User Secrets, analytics, thresholds, or the offline default.
 
@@ -183,7 +205,7 @@ The launcher builds the Web project and verifies `DB_NAME()` with SQL Server bef
 pwsh -NoProfile -File .\scripts\Start-AlpacaValidation.ps1 -Feed iex
 ```
 
-`-Feed iex` selects **`wss://stream.data.alpaca.markets/v2/iex`**, with `Alpaca / iex / Limited` provenance. It reads only the existing `MarketData:Massive:Symbols` universe from Web-project User Secrets and passes its non-empty, distinct symbols as a one-run Alpaca subscription setting. It does not print unrelated secrets, require re-entry, save another symbol list, connect to Massive, or couple analytics to that configuration key. Configured-entry and distinct-symbol counts are printed; these are **not** subscription acknowledgements or proof of activity. Not every symbol must produce events.
+`-Feed iex` selects **`wss://stream.data.alpaca.markets/v2/iex`**, with `Alpaca / iex / Limited` provenance. It reads `Scanner:Universe:Symbols` from Web-project User Secrets and passes the normalized, distinct list as a one-run scanner-universe override. It rejects empty entries, does not print unrelated secrets, and does not save another symbol list. Because this explicit process-only override is supplied on the command line, it takes precedence over an environment-variable universe for that launcher run. Configured-entry and distinct-symbol counts are printed; these are **not** subscription acknowledgements or proof of activity. Not every symbol must produce events.
 
 Run during a normal **09:30-16:00 America/New_York** equity session, excluding holidays and accounting for early closes. The launcher does not enforce an exchange calendar or delay execution until open. IEX defaults to an instrumented **600-second (10-minute)** final validation run; this is operational validation, not a full-session soak or a profitability test.
 
@@ -225,7 +247,7 @@ Record final status (`Invoke-RestMethod .../api/v1/system/status`), persisted co
 
 #### One final instrumented A.1 observation
 
-See the [consolidated A.1 validation history](./VALIDATION_HISTORY.md#consolidated-a1-validation-record-2026-10-29) for prior evidence, limitations, and shutdown behavior. Instrumentation does not authorize analytical changes. Run only during market availability; an after-hours empty connection or the synthetic test feed does not replace the required IEX observation.
+See the [consolidated A.1 validation history](./VALIDATION_HISTORY.md#consolidated-a1-validation-record-2026-10-29) for the completed evidence, limitations, and shutdown behavior. Instrumentation does not authorize analytical changes. The commands in this historical section are optional; A.2.1 does not require another IEX observation.
 
 ```powershell
 pwsh -NoProfile -File .\scripts\Start-AlpacaValidation.ps1 -Feed iex
@@ -233,7 +255,7 @@ pwsh -NoProfile -File .\scripts\Start-AlpacaValidation.ps1 -Feed iex
 
 This is the canonical command; **no `-Instrument` switch is needed**. Every validation-launcher run enables diagnostics, including IEX and test-feed runs; the legacy switch remains accepted but cannot disable instrumentation. The default evidence directory is repository-local `artifacts\alpaca-validation\<SessionId>`, ignored by Git. The generated session ID scopes the clock and app diagnostic artifacts. Copy the printed session ID and diagnostics directory when collecting evidence.
 
-Optional overrides are `-DurationSeconds` (5-3600; IEX default 600, test default 30), `-Port` (default 5291), `-DiagnosticsRoot` (a parent directory, with SessionId appended), `-SessionId`, and `-ArtifactsPath` (alternate build output). `-DiagnosticsDirectory` remains available for an exact evidence directory instead of a session-scoped root; it takes precedence over `-DiagnosticsRoot`. Explicitly empty diagnostic paths are rejected. Alternate port/build output avoids overwriting a running development host; it does **not** make a second Alpaca connection safe if the existing host already uses the account's feed allowance. Coordinate ownership before starting; never stop an unrelated process. The existing `MarketData:Massive:Symbols` universe remains the launcher input. Moving it to `Scanner:Universe:Symbols` is explicitly post-A.1 housekeeping.
+Optional overrides are `-DurationSeconds` (5-3600; IEX default 600, test default 30), `-Port` (default 5291), `-DiagnosticsRoot` (a parent directory, with SessionId appended), `-SessionId`, and `-ArtifactsPath` (alternate build output). `-DiagnosticsDirectory` remains available for an exact evidence directory instead of a session-scoped root; it takes precedence over `-DiagnosticsRoot`. Explicitly empty diagnostic paths are rejected. Alternate port/build output avoids overwriting a running development host; it does **not** make a second Alpaca connection safe if the existing host already uses the account's feed allowance. Coordinate ownership before starting; never stop an unrelated process. The IEX launcher reads the scanner-owned universe from User Secrets; the test launcher supplies `FAKEPACA` only for that process.
 
 Before any app/provider startup, preflight requires a successful current build, the verified dedicated validation database, enabled diagnostics, a created/writable evidence directory, a saved `<session>.clock.json`, explicit `Development` environment, and an available localhost port (IPv4 and IPv6 when supported). The startup summary prints feed, session, duration, port, database name, distinct symbol count, evidence directory, and instrumentation/environment state, never credentials. `-PreflightOnly` performs these same checks and creates clock evidence, but never starts the app or opens an Alpaca connection. Environment overrides are restored on exit.
 
@@ -328,7 +350,7 @@ Restart without a higher-priority live-provider override. Credentials may remain
 
 Alpaca is available for development/live-stream pipeline testing, including its always-available synthetic `test` feed and `FAKEPACA` symbol. This is market-data-only: the adapter does not use Alpaca's Broker API or place orders. Configure credentials through .NET User Secrets, never `appsettings.json` or browser code. See [docs/providers/alpaca-websocket.md](./docs/providers/alpaca-websocket.md) for setup, feed coverage, and the separately invoked opt-in connectivity test.
 
-The default provider remains `Fixture`. To select Alpaca's test stream, configure a non-empty explicit session ID and User Secrets values for `MarketData:Alpaca:ApiKey` and `MarketData:Alpaca:SecretKey`; set `MarketData:Provider` to `Alpaca`. `MarketData:Alpaca:Feed` defaults to `test`, and `Symbols` defaults to `FAKEPACA`. `iex`, `sip`, and `delayed_sip` feeds are also represented in capability metadata; confirm subscription entitlements before selecting live-market feeds. IEX is limited coverage, SIP is consolidated, and delayed SIP is 15 minutes delayed.
+The default provider remains `Fixture`. To select Alpaca's test stream, configure a non-empty explicit session ID and User Secrets values for `MarketData:Alpaca:ApiKey` and `MarketData:Alpaca:SecretKey`; set `MarketData:Provider` to `Alpaca` and use `Scanner:Universe:Symbols=FAKEPACA` for that run. `MarketData:Alpaca:Feed` defaults to `test`; there is no default live universe. `iex`, `sip`, and `delayed_sip` feeds are also represented in capability metadata; confirm subscription entitlements before selecting live-market feeds. IEX is limited coverage, SIP is consolidated, and delayed SIP is 15 minutes delayed.
 
 To explicitly run the separate Alpaca test-stream connectivity check, configure the credentials and test-feed settings as described in [docs/providers/alpaca-websocket.md](./docs/providers/alpaca-websocket.md), then run:
 
@@ -346,7 +368,7 @@ For local development, store the API key in .NET User Secrets rather than a chec
 
 ```powershell
 dotnet user-secrets set "MarketData:Provider" "Massive" --project src\MarketOpportunity.Web
-dotnet user-secrets set "MarketData:Massive:Symbols" "AAPL,MSFT,SPY,NOK,AAPL,GOOGL,AMZN,TSLA" --project src\MarketOpportunity.Web
+dotnet user-secrets set "Scanner:Universe:Symbols" "AAPL,MSFT,SPY,NOK,AAPL,GOOGL,AMZN,TSLA" --project src\MarketOpportunity.Web
 dotnet user-secrets set "MarketData:Massive:SessionId" "operator-session-2026-10-23" --project src\MarketOpportunity.Web
 ```
 
@@ -407,6 +429,12 @@ dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj
 
 The standalone Alpaca connectivity test above is not part of this offline validation.
 
+The hosted structure/API/dashboard test uses an in-process test host, synthetic canonical events, and a capturing store; it opens no provider connection and does **not** test SQL persistence:
+
+```powershell
+dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter FullyQualifiedName~StructureWebApplicationTests
+```
+
 ## SQL Server integration tests
 
 The SQL test project is separate so normal unit tests remain independent of SQL Server. Integration tests use the real EF Core SQL Server provider, require an explicit test connection, and throw a clear configuration error rather than skip when it is missing. Configure a dedicated SQL Server database whose name contains `test`; do not point this variable at the development or production database. The persistence test creates its schema if needed or migrates an existing test schema using the same startup branches as the application, and deletes only rows written with its unique test symbols/configuration versions. Migration tests create uniquely named temporary databases and drop only those databases after each test, so the configured SQL login must be allowed to create and drop databases. No existing database or user-owned rows are dropped or cleaned up.
@@ -427,7 +455,7 @@ Run only the explicit-session migration tests with:
 dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter FullyQualifiedName~ExplicitSessionMigrationTests
 ```
 
-The migration tests exercise the clean-schema `EnsureCreated` and existing-schema `Migrate` branches used by development startup. They verify non-null `SessionId` columns and symbol/session/time indexes, and confirm that pre-existing market-event, feature-snapshot, and opportunity values remain unchanged while existing rows receive `legacy-unknown`. No session is inferred and no historical analysis is rewritten. The remaining SQL tests verify event, feature, opportunity, evidence, and configuration persistence; replay idempotency; immutable results for changed inputs/configuration; and symbol/session separation. If these commands are not run with a configured SQL Server, SQL integration coverage has **not** been run.
+The migration tests exercise the clean-schema `EnsureCreated` and existing-schema `Migrate` branches used by development startup. They verify non-null `SessionId` columns and symbol/session/time indexes, and confirm that pre-existing market-event, feature-snapshot, and opportunity values remain unchanged while existing rows receive `legacy-unknown`. No session is inferred and no historical analysis is rewritten. The remaining SQL tests verify event, feature, opportunity, evidence, and configuration persistence; confirmed swing provenance in snapshot JSON; replay idempotency; immutable results for changed inputs/configuration; and symbol/session separation. If these commands are not run with a configured SQL Server, SQL integration coverage has **not** been run.
 
 The hosted fixture regression test also requires this guarded SQL test connection. It starts the real Web application in an isolated `Testing` environment (no Development User Secrets), supplies provider/connection settings before `Program` captures them, and explicitly registers the fixture source, checked-in scanner configuration, and guarded SQL connection. Test setup creates or migrates only that configured test schema; the application's Development startup branch is not used by this host.
 
@@ -465,7 +493,7 @@ dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj
 dotnet build MarketOpportunityEngine.sln
 ```
 
-### Current verification: configured minimum dollar-volume veto (2026-10-27)
+### Historical verification: configured minimum dollar-volume veto (2026-10-27)
 
 The current policy adds `ShortHorizonDollarVolumeUsd` and `ShortHorizonDollarVolumeStatus` in `features-v14`, and the positive-decimal `MinimumShortHorizonDollarVolumeUsd` setting (default **100,000 USD**) in `scanner-config-v15`; `momentum-continuation-v1` is unchanged. The value is the decimal sum of `TradeEvent.Price * TradeEvent.Size` in USD for retained, canonically ordered, eligible trades in `[AsOfUtc - MomentumWindowSeconds, AsOfUtc]`. It uses same-symbol, explicit-session event-time state; quotes, receive time, wall-clock time, other symbols/sessions and future events do not contribute. Decimal overflow is not caught or clamped.
 
@@ -699,13 +727,14 @@ dotnet list MarketOpportunityEngine.sln package --vulnerable --include-transitiv
 
 Opportunity list/detail responses include the immutable analytical `Opportunity` and a separate `PublicationDecision` (`Active`, `Suspended`, `Expired`, or `NotQualified`) with a reason and evaluation time. Market-data provider/feed/coverage metadata is recorded with each analysis; a provider failure changes current publication status to suspended/error without rewriting setup evidence.
 
-Feature snapshots expose descriptive `SessionVwapSlopePerMinute`, `SessionVwapSlopeDirection`, `SecondaryHorizonReturnPercent`, `ShortHorizonDollarVolumeUsd` plus `ShortHorizonDollarVolumeStatus`, `SessionCumulativeVolume`, `SessionHighPrice`, `SessionLowPrice`, `SessionRangePositionPercent`, nullable `SessionPriceStructure`, nullable `SessionAdx`, `SessionAdxStatus`, non-null `SessionTrendDirection`, and nullable `SessionRealizedVolatilityPercent` plus `RealizedVolatilityStatus`. Read retained-session values with `HasCompleteSessionData` as described above. Dollar volume is consumed only by the separate hard veto; the volatility veto and its distinct descriptive feature remain documented above.
+Feature snapshots expose descriptive `SessionVwapSlopePerMinute`, `SessionVwapSlopeDirection`, `SecondaryHorizonReturnPercent`, `ShortHorizonDollarVolumeUsd` plus `ShortHorizonDollarVolumeStatus`, `SessionCumulativeVolume`, `SessionHighPrice`, `SessionLowPrice`, `SessionRangePositionPercent`, nullable `SessionPriceStructure`, nullable `LatestConfirmedSwingHigh` and `LatestConfirmedSwingLow` plus `MarketStructureStatus`, nullable `SessionAdx`, `SessionAdxStatus`, non-null `SessionTrendDirection`, and nullable `SessionRealizedVolatilityPercent` plus `RealizedVolatilityStatus`. Read retained-session values with `HasCompleteSessionData` as described above. Dollar volume is consumed only by the separate hard veto; the volatility veto and its distinct descriptive feature remain documented above.
 
 ## Current limits
 
 - Two synthetic fixture symbols and two explicit fixture sessions; this is not a market recommendation.
 - One Momentum Continuation detector; the remaining three Milestone A detectors are not implemented.
 - Session VWAP and momentum use bounded in-memory events per symbol/session. If bounded state evicts events, the analysis is explicitly marked incomplete and vetoed.
+- The new trade-point fractal reports only the latest confirmed high and low, not an exhaustive level history or an entry, target, position size, or execution plan.
 - Complete, available realized volatility at or above the provisional configured 1.00 percentage-point threshold is a hard veto; insufficient and invalid volatility have explicit veto reasons.
 - No exchange calendar, Massive live-feed reconnect, benchmark/sector context, SignalR application hub, outcome labeling, or production migration pipeline.
 - Alpaca has bounded reconnect and explicit unresolved-gap publication suspension; historical gap recovery/backfill remains unimplemented. Other feed health states suspend publication through the application lifecycle gate.
