@@ -1394,3 +1394,27 @@ Before relative-volume implementation, decide the approved historical-volume sou
 **Current Blocker:** No implementation blocker for the completed slice; guarded SQL integration remains unverified until a dedicated test connection is configured. Full Milestone A still requires missing functionality.
 **Recommended Next Step:** Approve a historical-volume source, session-calendar alignment, retention and data-completeness contract, then decide the comparable-session count and baseline statistic. Do not treat persisted-but-unread events, retained-session cumulative volume, short-horizon dollar volume, or synthetic fixtures as that baseline.
 **Decisions Needed:** The 1.00 volatility and $100,000 dollar-volume cutoffs are provisional and not market-calibrated. Do not connect live providers implicitly.
+
+## Milestone A.2.2 - SQL validation closeout (2026-10-30)
+
+**Milestone A.2.2 - Trade Plan Foundation: COMPLETE.** Production code changed: **NO**. No remaining A.2.2 blocker; A.2.3 was not started.
+
+**Safety:** `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was absent. Reused the already-running healthy local Compose SQL Server and verified `DB_NAME()` read-only as `MarketOpportunityEngine_IntegrationTests` at `localhost,1433`. The SqlClient builder enforced that exact dedicated target before every SQL invocation. Credentials came from the existing container into process memory only; the test connection override was process-only and restored afterward. No server was started/recreated, no existing database was dropped/reset, no existing user/fixture records were cleared, and no development/live-validation/production database, User Secrets, Alpaca, or Massive connection was used. Migration tests created/dropped only their uniquely named temporary test databases; persistence cleanup targeted only each run's unique test rows.
+
+**Final sequential validation** (all tests: zero failures/skips):
+
+| Order | Command | Result |
+|---|---|---|
+| 1 | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --no-restore --filter "FullyQualifiedName~SqlServerPersistenceTests|FullyQualifiedName~ExplicitSessionMigrationTests" --logger "console;verbosity=normal"` | **6/6 passed**: 4 persistence cases, 2 migration tests |
+| 2 | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --no-restore --filter FullyQualifiedName~FixtureWebApplicationTests --logger "console;verbosity=normal"` | **1/1 passed** |
+| 3 | Same hosted command, same guarded database, no reset | **1/1 passed** |
+| 4 | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj --no-restore` | **279/279 passed** |
+| 5 | `dotnet build MarketOpportunityEngine.sln --no-restore` | **Succeeded, 0 warnings, 0 errors** |
+
+Coverage proves clean `EnsureCreated` followed by migrations and legacy-schema `Migrate` both produce the seven-column `trade_plan` table and ordered `(Symbol, SessionId, AsOfUtc)` / opportunity indexes, with legacy analytical values preserved. Defined long/short plans round-trip complete JSON and entity fields, including null Target2, decimal geometry/risk/reward, versions, provenance, and evidence. Exact replay leaves one row; a forced same-ID/different-content replay throws the immutable-plan exception and leaves the original JSON unchanged. Existing event, feature, opportunity, evidence, configuration, session isolation, and immutable-history assertions pass.
+
+Hosted list/detail payloads include all four plans and match their SQL records. Total row counts after hosted run 1 and run 2 were identical: market events **82**, features **94**, opportunities **94**, evidence **508**, configurations **14**, trade plans **4**. Existing fixture records were retained.
+
+**Corrections before the final sequence:** The first SQL run passed 3/4 tests; the swing test expected `5`/`2` despite canonical fixture pivots of `105`/`102`. Corrected only those test expectations. Added the previously missing long/short full-round-trip/collision theory and hosted SQL-plan equality assertions. Its first fixture accidentally confirmed an extra target at the reference price, correctly producing `Rejected`; corrected the fixture's interior prices to exercise defined geometry without weakening assertions. All required stages then passed in the order above. Hosted runs emitted the test-host HTTPS redirect-port warning; no production defect was exposed.
+
+**Independent re-run (same day, same guarded database, no reset):** the full five-stage sequence above was repeated in order with identical results: 6/6 (including both `Defined_trade_plans_round_trip_all_fields_and_reject_conflicting_replay` long/short cases and both migration tests), 1/1, 1/1, 279/279, build 0 warnings/0 errors. Row counts were identical before stage 1 and after each SQL stage (82/94/94/508/14/4); logs contained no credentials.

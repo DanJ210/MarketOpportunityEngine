@@ -128,6 +128,7 @@ public sealed class FixtureWebApplicationTests
         var opportunityIds = new HashSet<Guid>();
         var httpOpportunities = new Dictionary<Guid, Opportunity>();
         var httpSnapshots = new Dictionary<Guid, FeatureSnapshot>();
+        var httpTradePlans = new Dictionary<Guid, TradePlan>();
         foreach (var item in opportunityItems)
         {
             var result = item.Deserialize<OpportunityPublicationReadModel>(JsonOptions);
@@ -139,6 +140,7 @@ public sealed class FixtureWebApplicationTests
             Assert.Equal(opportunity.Id, result.TradePlan.OpportunityId);
             Assert.Equal("trade-plan-v1", result.TradePlan.PlanDefinitionVersion);
             Assert.Equal(opportunity.AsOfUtc, result.TradePlan.AsOfUtc);
+            httpTradePlans.Add(result.TradePlan.Id, result.TradePlan);
             httpOpportunities.Add(opportunity.Id, opportunity);
 
             var expired = opportunity.SessionId == "fixture-2026-10-22";
@@ -277,6 +279,24 @@ public sealed class FixtureWebApplicationTests
         foreach (var persisted in persistedOpportunities)
         {
             AssertPersistedOpportunity(httpOpportunities[persisted.Id], persisted);
+        }
+
+        var planIds = httpTradePlans.Keys.ToArray();
+        var persistedPlans = await dbContext.TradePlans.AsNoTracking()
+            .Where(item => planIds.Contains(item.Id))
+            .ToListAsync();
+        Assert.Equal(planIds.OrderBy(id => id), persistedPlans.Select(item => item.Id).OrderBy(id => id));
+        foreach (var persisted in persistedPlans)
+        {
+            var plan = httpTradePlans[persisted.Id];
+            Assert.Equal(plan.Symbol, persisted.Symbol);
+            Assert.Equal(plan.SessionId, persisted.SessionId);
+            Assert.Equal(plan.AsOfUtc, persisted.AsOfUtc);
+            Assert.Equal(plan.OpportunityId, persisted.OpportunityId);
+            Assert.Equal(plan.PlanDefinitionVersion, persisted.PlanDefinitionVersion);
+            var storedPlan = JsonSerializer.Deserialize<TradePlan>(persisted.TradePlanJson, JsonOptions);
+            Assert.NotNull(storedPlan);
+            AssertJsonEqual(plan, storedPlan);
         }
 
         var snapshotIds = httpSnapshots.Keys.ToArray();

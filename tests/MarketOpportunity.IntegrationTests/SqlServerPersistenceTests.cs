@@ -71,8 +71,8 @@ public sealed class SqlServerPersistenceTests
             Assert.Equal(confirmed.Features, storedConfirmed);
             Assert.Equal(107m, storedConfirmed.LatestConfirmedSwingHigh!.Price);
             Assert.Equal(104m, storedConfirmed.LatestConfirmedSwingLow!.Price);
-            Assert.Equal(5m, storedConfirmed.PreviousConfirmedSwingHigh!.Price);
-            Assert.Equal(2m, storedConfirmed.PreviousConfirmedSwingLow!.Price);
+            Assert.Equal(105m, storedConfirmed.PreviousConfirmedSwingHigh!.Price);
+            Assert.Equal(102m, storedConfirmed.PreviousConfirmedSwingLow!.Price);
             Assert.Equal(MarketStructureState.Bullish, storedConfirmed.StructureState);
             Assert.Equal(104m, storedConfirmed.NearestSupportCandidate!.Price);
             Assert.Equal(105m, storedConfirmed.NearestResistanceCandidate!.Price);
@@ -339,6 +339,88 @@ public sealed class SqlServerPersistenceTests
                     [symbol, otherSymbol],
                     firstConfiguration.Version,
                     changedConfiguration.Version);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(TradeDirection.Long)]
+    [InlineData(TradeDirection.Short)]
+    public async Task Defined_trade_plans_round_trip_all_fields_and_reject_conflicting_replay(
+        TradeDirection direction)
+    {
+        var connectionString = GetTestConnectionString();
+        var token = Guid.NewGuid().ToString("N")[..16];
+        var symbol = $"IT{token}";
+        var sessionId = $"it-plan-session-{token}";
+        var configuration = new ScannerConfiguration
+        {
+            Version = $"it-plan-config-{token}",
+            FeatureSetVersion = $"it-plan-features-{token}"
+        };
+        var start = new DateTimeOffset(2026, 10, 30, 14, 30, 0, TimeSpan.Zero);
+        decimal[] prices = [101.5m, 101m, 105m, 103m, 102m, 104m, 103m, 107m, 105m, 104m, 105m, 105m, 106m];
+        var events = prices.Select((price, index) => (MarketEvent)new TradeEvent(
+            symbol, sessionId, start.AddSeconds(index), start.AddSeconds(index + 1),
+            "IntegrationFixture", $"plan-{index:D3}",
+            direction == TradeDirection.Long ? price : 208m - price, 10)).ToArray();
+        var result = Analyze(events, configuration);
+        var plan = result.TradePlan;
+        Assert.Equal(direction, plan.Direction);
+        Assert.Equal(TradePlanStatus.PlanDefined, plan.Status);
+        Assert.Equal(direction == TradeDirection.Long ? new PriceZone(104m, 106m) : new PriceZone(102m, 104m),
+            plan.EntryZone);
+        Assert.Equal(direction == TradeDirection.Long ? 105m : 103m, plan.EntryReferencePrice);
+        Assert.Equal(direction == TradeDirection.Long ? 102m : 106m, plan.InvalidationPrice);
+        Assert.Equal(direction == TradeDirection.Long ? 107m : 101m, plan.Target1!.Price);
+        Assert.Null(plan.Target2);
+        Assert.Equal(3m, plan.RiskPerShare);
+        Assert.Equal(2m, plan.RewardPerShareToTarget1);
+        Assert.Equal(2m / 3m, plan.RewardRiskRatioTarget1);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var expectedJson = JsonSerializer.Serialize(plan, options);
+        var schemaReady = false;
+        try
+        {
+            await using (var setupContext = CreateContext(connectionString))
+            {
+                if (!await setupContext.Database.EnsureCreatedAsync())
+                {
+                    await setupContext.Database.MigrateAsync();
+                }
+            }
+            schemaReady = true;
+
+            await Persist(connectionString, configuration, events, result);
+            await Persist(connectionString, configuration, events, result);
+            var collision = result with { TradePlan = plan with { InvalidationPrice = plan.InvalidationPrice + 1m } };
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                Persist(connectionString, configuration, events, collision));
+            Assert.Equal($"Trade plan '{plan.Id}' is immutable and already has different values.", exception.Message);
+
+            await using var verifyContext = CreateContext(connectionString);
+            var stored = Assert.Single(await verifyContext.TradePlans.AsNoTracking()
+                .Where(item => item.Symbol == symbol).ToListAsync());
+            Assert.Equal(plan.Id, stored.Id);
+            Assert.Equal(plan.Symbol, stored.Symbol);
+            Assert.Equal(plan.SessionId, stored.SessionId);
+            Assert.Equal(plan.AsOfUtc, stored.AsOfUtc);
+            Assert.Equal(plan.OpportunityId, stored.OpportunityId);
+            Assert.Equal(plan.PlanDefinitionVersion, stored.PlanDefinitionVersion);
+            Assert.Equal(expectedJson, stored.TradePlanJson);
+            var roundTripped = JsonSerializer.Deserialize<TradePlan>(stored.TradePlanJson, options);
+            Assert.NotNull(roundTripped);
+            Assert.Equal(expectedJson, JsonSerializer.Serialize(roundTripped, options));
+            Assert.Null(roundTripped.Target2);
+            Assert.Equal(1, await verifyContext.Opportunities.CountAsync(item => item.Symbol == symbol));
+            Assert.Equal(1, await verifyContext.FeatureSnapshots.CountAsync(item => item.Symbol == symbol));
+            Assert.Equal(events.Length, await verifyContext.MarketEvents.CountAsync(item => item.Symbol == symbol));
+        }
+        finally
+        {
+            if (schemaReady)
+            {
+                await Cleanup(connectionString, [symbol], configuration.Version, configuration.Version);
             }
         }
     }

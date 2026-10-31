@@ -9,6 +9,8 @@ The A.2.1 foundation implements the scanner-owned symbol universe and descriptiv
 
 **Milestone A.1 - Live Scanner Validation: COMPLETE**
 
+**Milestone A.2.2 - Trade Plan Foundation: COMPLETE**
+
 The final [same-page browser check](./VALIDATION_HISTORY.md#final-same-page-browser-observation-2026-10-30), session `alpaca-iex-20261030T174047331Z`, closes the remaining observability criterion. Two timestamped DOM snapshots, 65.066 seconds apart, show increasing event counts, advancing event/receive times, changing prices/features, and changing classifications, vetoes, and publication states without refresh. Feed health remained Live, with no visible reconnect/failure UI or captured browser exceptions during the interval. No application or provider was restarted.
 
 ## Current proven capabilities
@@ -58,5 +60,7 @@ The launcher and app record self-describing session evidence: a sanitized `<Sess
 - Focused trade-plan, A.2.1 market-structure, and Momentum Continuation regression tests passed **52/52**.
 - Complete offline unit suite passed **279/279**.
 - Hosted fixture/API/dashboard tests passed **2/2** using an in-process capturing store; no SQL or provider connection was opened.
-- SQL persistence and migration coverage was **not run / unavailable**: `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was unset. No SQL server/database was started or modified.
+- SQL persistence/migration coverage passed **6/6** against the existing dedicated local `MarketOpportunityEngine_IntegrationTests` database. Clean-schema creation and existing-schema migration verify `trade_plan` columns and ordered indexes; long/short plans round-trip all fields including null Target2, exact replay is idempotent, and conflicting content under the same plan ID fails without rewriting history. Existing event, feature, opportunity, evidence, and configuration persistence also passes.
+- SQL-backed hosted fixture/API coverage passed **1/1 twice** against the same guarded database without reset. All four HTTP plans match persisted plans; all six table row counts remain unchanged on repeat. No development/live-validation database or live provider was used. See the [SQL closeout evidence](./VALIDATION_HISTORY.md#milestone-a22---sql-validation-closeout-2026-10-30).
+- The final required sequence passed: persistence/migrations **6/6**, SQL-backed hosted fixture **1/1**, repeat **1/1**, full offline units **279/279**, then solution build. Only tests and documentation changed; production code is unchanged.
 - `dotnet build MarketOpportunityEngine.sln --no-restore` succeeded with **0 warnings and 0 errors**.
