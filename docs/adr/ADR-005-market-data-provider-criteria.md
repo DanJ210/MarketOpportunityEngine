@@ -23,5 +23,5 @@
 - The old provider-specific symbol settings are not read or merged. Existing local configurations require an explicit one-time migration to the scanner universe.
 - Provider/feed coverage and real-time/delayed capability metadata travel with analysis provenance. Analytics must not infer feed semantics by matching provider names.
 - Confirm applicable real-time feed entitlements, personal-use/display/retention terms, and costs for the intended usage before relying on live data beyond local evaluation.
-- Provider-specific DTOs will live in an infrastructure adapter behind `IMarketDataSource`.
+- Provider-specific DTOs live in infrastructure adapters behind `IMarketDataSource`.
 - A provider change or additional provider requires an explicit decision; familiarity alone is not a selection criterion.

@@ -29,9 +29,9 @@ public sealed class LiveValidationInstrumentationTests
         }
         var target = new SqlConnectionStringBuilder(connection);
         if (target.DataSource != "localhost,1433"
-            || target.InitialCatalog != "MarketOpportunityEngine_LiveValidationTests")
+            || target.InitialCatalog != "MarketOpportunityEngine_IntegrationTests")
         {
-            throw new InvalidOperationException("Diagnostic verification requires the dedicated local live-validation database.");
+            throw new InvalidOperationException("Offline diagnostic verification requires the dedicated local integration-test database.");
         }
         await using (var guard = new SqlConnection(connection))
         {
