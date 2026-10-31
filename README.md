@@ -2,7 +2,7 @@
 
 Milestone A defaults to a deterministic recorded-fixture scanner and supports optional read-only live ingestion from Alpaca Market Data or Massive. It does not place orders or use a broker API.
 
-**Current checkpoint: Milestone A.2.2 - Trade Plan Foundation.** Milestone A.1 live scanner validation and A.2.1 market-structure foundation are complete; their [validation history](./VALIDATION_HISTORY.md) is historical evidence, not a requirement to repeat provider validation. See [current status](./PROJECT_STATUS.md) for the current checkpoint. Older slice recommendations below are historical, not authorization for additional analytics.
+**Current checkpoint: Milestone A.2.3a - Prior-Session Market Context.** A.1, A.2.1, and A.2.2 are complete; A.2.3b readiness is not started. See [current status](./PROJECT_STATUS.md) and [validation history](./VALIDATION_HISTORY.md).
 
 ## A.2.2 candidate trade plans
 
@@ -11,6 +11,12 @@ The scanner derives a descriptive, provider-independent candidate `TradePlan` fr
 Plans report `InsufficientStructure`, `PlanForming`, `PlanDefined`, or `Rejected`; `PlanDefined` describes calculable geometry, not an instruction to trade. Risk/share, reward/share, and reward/risk use decimal arithmetic. Market-data publication health remains separate and can suspend publication without changing the historical plan geometry.
 
 The `trade-plan-v1` definition has deterministic IDs and is persisted as an immutable record in the SQL Server `trade_plan` table with symbol/session/as-of indexes; see [ADR-006](./docs/adr/ADR-006-immutable-trade-plan-persistence.md). `/api/v1/opportunities` and its detail endpoint include the plan; dashboard cards show a clearly labeled **TRADE PLAN** section. The feature-set, scanner-configuration, and Momentum Continuation setup versions remain `features-v16`, `scanner-config-v16`, and `momentum-continuation-v1`.
+
+## A.2.3a prior-session context
+
+The separate `prior-session-context-v1` contract reports prior-session trade-point pivots, structural references, completeness, and feed/source provenance at `/api/v1/symbols/{symbol}/prior-context`. The dashboard labels partial-session extrema as observed values and reports session high/low/close only when full, gap-free coverage is established. Close means the last eligible trade by event time at or before session end, not an asserted official exchange close.
+
+Only the recorded fixture currently supplies historical data and an explicit fixture calendar; that calendar maps session identities to U.S. equity regular-session boundaries in `America/New_York` semantics. It does not infer dates or holidays. Synthetic fixture coverage is partial. Live Alpaca/Massive history and an authoritative live calendar remain unavailable/unverified, so the scanner keeps running and shows prior context as unavailable. Context is deterministically rebuilt from approved fixture input, not stored in SQL; persisted live events are not currently exposed as an approved historical replay source. See [ADR-007](./docs/adr/ADR-007-prior-session-context.md). No readiness or trading-action state is introduced.
 
 ## Requirements
 

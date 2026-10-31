@@ -1,15 +1,19 @@
 # Current Project Status
 
-**Checkpoint:** Milestone A.2.2 - Trade Plan Foundation
-**Updated:** 2026-10-30
+**Checkpoint:** Milestone A.2.3a - Prior-Session Market Context
+**Updated:** 2026-10-31
 
 ## Current status
 
-The A.2.1 foundation implements the scanner-owned symbol universe and descriptive confirmed swing contracts. A.2.2 adds deterministic structural candidate trade plans, immutable SQL persistence, API exposure, and descriptive dashboard presentation without changing Momentum Continuation decisions. The latest self-describing 30-minute IEX run is recorded in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#self-describing-30-minute-iex-closeout-2026-10-29). It verifies live IEX ingestion, exact-session SQL reconciliation, provenance, vetoes, pipeline accounting, completed drain, `DurationElapsed` shutdown, exit code 0, and no Error/Critical app-log entries.
+The A.2.3a foundation adds explicit prior-session context, fixture-only historical reads, and deterministic fixture calendar mapping without changing current-session setup decisions. A.2.1 implements the scanner-owned symbol universe and descriptive confirmed swing contracts; A.2.2 adds immutable candidate trade plans. Historical data remains synthetic and partial in fixture mode; live provider history and an authoritative live session calendar are not implemented or verified. The latest self-describing 30-minute IEX run remains historical evidence in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#self-describing-30-minute-iex-closeout-2026-10-29), not a validation requirement for this checkpoint.
 
 **Milestone A.1 - Live Scanner Validation: COMPLETE**
 
 **Milestone A.2.2 - Trade Plan Foundation: COMPLETE**
+
+**Milestone A.2.3a - Prior-Session Market Context: COMPLETE**
+
+**Milestone A.2.3b - Pre-Trade Readiness: NOT STARTED**
 
 The final [same-page browser check](./VALIDATION_HISTORY.md#final-same-page-browser-observation-2026-10-30), session `alpaca-iex-20261030T174047331Z`, closes the remaining observability criterion. Two timestamped DOM snapshots, 65.066 seconds apart, show increasing event counts, advancing event/receive times, changing prices/features, and changing classifications, vetoes, and publication states without refresh. Feed health remained Live, with no visible reconnect/failure UI or captured browser exceptions during the interval. No application or provider was restarted.
 
@@ -64,3 +68,14 @@ The launcher and app record self-describing session evidence: a sanitized `<Sess
 - SQL-backed hosted fixture/API coverage passed **1/1 twice** against the same guarded database without reset. All four HTTP plans match persisted plans; all six table row counts remain unchanged on repeat. No development/live-validation database or live provider was used. See the [SQL closeout evidence](./VALIDATION_HISTORY.md#milestone-a22---sql-validation-closeout-2026-10-30).
 - The final required sequence passed: persistence/migrations **6/6**, SQL-backed hosted fixture **1/1**, repeat **1/1**, full offline units **279/279**, then solution build. Only tests and documentation changed; production code is unchanged.
 - `dotnet build MarketOpportunityEngine.sln --no-restore` succeeded with **0 warnings and 0 errors**.
+
+## A.2.3a prior-session context
+
+- `IHistoricalMarketDataSource` is separate from the live stream. The recorded fixture is the only implemented historical source. The fixture calendar explicitly maps `fixture-2026-10-23` to `fixture-2026-10-22`; session boundaries use U.S. equity regular-session `America/New_York` semantics expressed in UTC. There is no computed live calendar and no date subtraction.
+- Repository inspection found Alpaca and Massive WebSocket adapters only; neither implements historical REST retrieval. Persisted normalized `market_event` rows have no application read/replay interface. `SessionId` is explicit but does not reliably identify an exchange session. Provider historical entitlements, licensing, and retention are unverified.
+- `PriorSessionContext` is independently versioned as `prior-session-context-v1`. It reuses `FeatureCalculator` and `session-swing-fractal-v1`, with prior-session-only eligible events, event-time pivots, source-swing provenance, explicit completeness, coverage, and feed metadata. Complete-session high/low are extrema of eligible trade points; close is the last eligible trade by event time at or before session end, not necessarily an official exchange close. Partial fixture coverage exposes observed extrema and last trade without claiming full-session values.
+- Current-session distances and nearest prior support/resistance are a separate read projection; current price changes do not change context identity or prior levels. The scanner caches the first context per symbol/current-session and continues with an explicit unavailable result if history/calendar is missing or a historical read fails.
+- Context is deterministically rebuilt from approved fixture input, not persisted in SQL. This avoids treating existing live event retention as approved history; no migration or feature/configuration/Momentum/TradePlan version change was made.
+- `/api/v1/symbols/{symbol}/prior-context` and the dashboard's **PRIOR SESSION** section expose completeness, provenance, reference levels, pivots, and distances without adding readiness or action states. A.2.3b remains not started; its remaining prerequisite is an approved historical source with verified access/retention terms and an authoritative session calendar for live sessions.
+- Focused prior-context unit tests passed **10/10**; A.2.1 market-structure tests passed **13/13**, A.2.2 TradePlan tests **17/17**, and Momentum Continuation regressions **22/22**. The complete offline unit suite passed **289/289**. Hosted fixture/API/dashboard tests passed **2/2** without SQL/provider connections. Full solution build succeeded with **0 warnings and 0 errors**.
+- SQL persistence and full SQL integration tests were **not run**: no guarded `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was configured, and no schema change was made. No live provider was connected.

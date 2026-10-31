@@ -207,6 +207,8 @@ Track:
 - Consolidation boundaries.
 - Prior-session reference levels when historical data is available.
 
+**A.2.3a Prior-Session Market Context is a prerequisite to any A.2.3b pre-trade readiness behavior.** Readiness must consume an explicit, versioned context for the immediately preceding eligible session; it must not select a session by subtracting a calendar day. The context must preserve provider/feed provenance, structural-observation identity, and explicit completeness. Partial, unavailable, or invalid history must remain distinguishable and must not be presented as complete prior-session levels. Prior-session swings reuse the versioned two-left/two-right trade-point algorithm and cannot be confirmed by later-session events. If no approved historical source or authoritative calendar is configured, readiness must treat prior context as unavailable rather than infer it.
+
 A level crossing alone is insufficient. Breakout quality should consider participation, momentum, relative strength, liquidity, broader context, and whether price holds or rejects the level.
 
 ## 4.8 Volatility and risk
