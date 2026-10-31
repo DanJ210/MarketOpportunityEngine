@@ -6,9 +6,9 @@
 ## Master Architecture and Roadmap
 
 ### Purpose
-A personal-use .NET decision-support application that monitors live US stock/ETF market data, analyzes intraday conditions using transparent and testable trading rules, ranks opportunities, explains why a symbol is interesting, and records outcomes for later replay, backtesting, and machine-learning research.
+A personal-use .NET decision-support application that analyzes US stock/ETF market data with transparent, testable rules; explains candidate setups and their structural trade geometry; and records immutable decisions for later research. The current product defaults to recorded fixtures and supports optional read-only Alpaca and Massive market-data adapters. Fixture, provider, and broker permissions are distinct.
 
-The system must present setup quality and uncertainty rather than imply guaranteed profitability. Autonomous real-money execution is outside the initial delivery plan.
+The system must present setup quality and uncertainty rather than imply guaranteed profitability. It does not place orders or know a user's holdings. Autonomous real-money execution is outside the initial delivery plan.
 
 ---
 
@@ -18,17 +18,16 @@ The complete architecture is intentionally broader than the first release. **Do 
 
 ## Milestone A: Usable Scanner
 
+The current vertical slice is a recorded-fixture scanner with one Momentum Continuation detector. The architecture supports optional read-only live market-data adapters behind provider-independent contracts. Milestone A work proceeds incrementally; future roadmap entries do not authorize implementing them ahead of an approved checkpoint.
+
 ```text
-Live Market Data
-      -> Normalization and Data Quality
-      -> Event-Time Symbol State
-      -> Multi-Horizon Features
-      -> Deterministic Trading Setup Detectors
-      -> Risk and Liquidity Gates
-      -> Opportunity Ranking
-      -> REST + SignalR as appropriate
-      -> Blazor Live Dashboard
-      -> Recorded Events and Outcomes
+Fixture or optional live adapter
+  -> canonical events / bounded in-process live channel
+  -> event-time state and versioned features
+  -> implemented setup detector
+  -> immutable opportunity and candidate TradePlan
+  -> current publication-health projection
+  -> API and Blazor Interactive Server dashboard
 ```
 
 Start with a configurable small universe, approximately 20 liquid symbols for development. This is not a permanent limit.
@@ -65,7 +64,7 @@ These are fixed architectural decisions for this application. A coding agent mus
 - **Frontend:** ASP.NET Core Blazor on .NET 10. Blazor is the required frontend framework; do not substitute Vue, React, or Angular.
 - **Database engine:** Microsoft SQL Server. Local development uses SQL Server Developer Edition or the appropriate Microsoft SQL development container/image. Azure deployment uses Azure SQL Database unless a SQL Server-specific capability later requires another Azure SQL option.
 - **Data access:** Entity Framework Core 10 for application persistence, with Microsoft SQL Server provider; use carefully reviewed SQL where a demonstrated high-throughput market-data path requires it.
-- **Realtime application transport:** ASP.NET Core SignalR for real-time server-to-Blazor UI updates where the selected Blazor render mode requires explicit hub-based application messaging.
+- **Realtime application transport:** Blazor Interactive Server circuits for the current UI. Do not add a separate application SignalR hub without an approved requirement.
 - **Cloud:** Microsoft Azure is the required cloud platform.
 - **Backend hosting:** Azure App Service is the default Milestone A production hosting target for the ASP.NET Core API/background application. Revisit Azure Container Apps only if measured runtime/scaling requirements justify it.
 - **Frontend hosting:** Host the Blazor Web App with the ASP.NET Core application on Azure App Service by default. Do not introduce a separate frontend hosting service unless a later hosting decision requires it.
@@ -87,7 +86,7 @@ External Market Data WebSocket/API
 Azure App Service
   ASP.NET Core 10 API + hosted workers
              |\
-             | \ SignalR/HTTPS
+             | \ Blazor circuit / HTTPS
              |  \
              v   v
  Azure SQL     Blazor Web App
@@ -102,6 +101,11 @@ Milestone A remains a modular monolith. Azure does not imply microservices, Kube
 ---
 
 # 3. YAGNI Rules for Milestone A
+
+- Keep the application a modular monolith; do not introduce future platform components solely because they appear in this roadmap.
+- Fixture remains the offline default. Do not connect a provider unless explicitly requested and its provider criteria have been reviewed.
+- Do not add broker/order integration, position tracking, outcome labeling, backtesting, ML, ONNX inference, or extra setup detectors before their approved milestones.
+- Keep current publication health separate from immutable analysis and plan records.
 ---
 
 # 4. Milestone A Trading Analysis Specification
@@ -126,7 +130,7 @@ Milestone A is a deterministic intraday analysis engine. For every eligible symb
 7. How is price behaving around VWAP and important intraday levels?
 8. Does the state match a supported trading setup?
 9. Is there a defensible invalidation condition?
-10. Is expected reward/risk acceptable under configured rules?
+10. What descriptive risk/share, reward/share, and reward/risk geometry does a candidate structural plan have?
 11. Is there sufficient agreement to publish, or should the engine abstain?
 
 ## 4.2 Trend engine
@@ -241,11 +245,31 @@ Evaluate broad-market direction, sector direction, symbol alignment/divergence, 
 
 Time of day should influence expectations for normal volume, volatility, and activity. It must not become an arbitrary clock-based ban unless later research supports such a rule.
 
+## 4.11 Market-structure foundation
+
+The current structure foundation identifies confirmed trade-point swing highs and lows using event-time-ordered eligible trades. It can expose latest/previous swings, their high/low relationships, a combined descriptive structure state, and support/resistance candidates with provider-independent source-swing provenance. These are provider-independent analytical observations, not guaranteed reversal levels or trading instructions. Structure is versioned and may be insufficient when retained evidence is incomplete.
+
+## 4.12 Candidate TradePlan
+
+A candidate TradePlan answers: **“If this setup were traded, what is its structural geometry?”** It is a separate immutable analytical contract, not an instruction, execution readiness, or position state. It contains:
+
+- Direction and plan status.
+- Entry zone and explicit entry reference.
+- Numeric invalidation price.
+- Structural targets and source provenance.
+- Decimal risk/share, reward/share, and reward/risk.
+- Deterministic, versioned identity and the source opportunity/feature/configuration provenance.
+- SQL Server persistence keyed by immutable `PlanId`.
+
+The current `trade-plan-v1` derives these values from confirmed structure. `PlanDefined` means the geometry is calculable; it does not mean “entry ready.” No synthetic levels or minimum reward/risk cutoff may be invented.
+
 ---
 
 # 5. Initial Setup Detectors
 
 Each setup owns required evidence, supporting evidence, contradictions, vetoes, and thresholds. Do not average all indicators into one generic signal.
+
+Momentum Continuation is the only implemented detector at the A.2.2 checkpoint. The other detectors below remain intended future scope and must not be described as complete.
 
 ## 5.1 Momentum continuation
 
@@ -327,11 +351,10 @@ SetupQuality =
   + ContextFit
   + StructureFit
   + LiquidityFit
-  + RiskRewardFit
   - ContradictionPenalty
 ```
 
-Exact coefficients and thresholds must be versioned configuration, never unexplained magic constants. The 0-100 score represents rules-based setup quality, not probability of profit.
+Exact coefficients and thresholds must be versioned configuration, never unexplained magic constants. The 0-100 score represents rules-based setup quality, not probability of profit. Reward/risk is currently descriptive TradePlan geometry; a hard reward/risk veto is deferred until a separate threshold/calibration decision is approved. Do not invent a minimum.
 
 ---
 
@@ -347,10 +370,11 @@ Do not publish when an applicable veto is active:
 - Required benchmark data unavailable or stale.
 - Volatility/risk outside supported bounds.
 - No defensible invalidation condition.
-- Estimated reward/risk below setup requirement.
 - Opportunity expired or its defining structure invalidated.
 
 A veto should be visible in the explanation instead of silently hiding the candidate.
+
+Current gates are those implemented and versioned for the active setup; this list does not authorize implementation of missing gates. In particular, reward/risk is not currently a hard veto.
 
 ---
 
@@ -370,6 +394,17 @@ Every opportunity should contain:
 - reference market state
 
 Material changes create a new version rather than rewriting historical reasoning.
+
+Keep these concepts distinct:
+
+- **Analytical setup:** What pattern or condition exists?
+- **TradePlan:** If the setup were traded, what is its structural geometry?
+- **Publication:** Is current source health sufficient to present this result? Publication may suspend or expire a candidate without mutating its immutable analysis or plan.
+- **Future action lifecycle:** What should the user currently consider doing? This is not implemented and must not be conflated with setup classification or plan status.
+
+Future pre-trade action states may include `NO TRADE`, `WATCHING`, `SETUP FORMING`, and `ENTRY READY`. `MANAGE`, `TAKE PROFIT`, and `EXIT` require a supplied `PositionContext` (or equivalent) confirming an actual position. The scanner can generate and monitor candidate plans without knowing a user's holdings; it must not imply that it does.
+
+Future detector work follows `Detector -> TradePlan -> Action/readiness layer -> Outcome`. These are separate contracts and milestones; a detector does not itself produce a user action or outcome.
 
 ---
 
@@ -412,9 +447,9 @@ This example is illustrative and is not a current recommendation.
 
 ---
 
-# 10. Outcome Recording
+# 10. Outcome Recording (Future Research Milestone)
 
-Record published, watched, expired, invalidated, and vetoed candidates so future research is not restricted to setups that appeared successful.
+Outcome tracking is deferred until stable immutable TradePlans and a separately approved research/data-retention policy exist. Future outcomes must link to the exact immutable `PlanId`, so later labels cannot rewrite the plan or imply that current outcomes already exist.
 
 At decision time persist:
 
@@ -445,51 +480,40 @@ Never rewrite the original decision-time record with later information.
 
 # 11. Architecture
 
-Use a modular monolith initially:
+Use a modular monolith. Current analysis and plan geometry remain deterministic and separate from publication health, future user action state, and future outcome research:
 
 ```text
-Market Data Provider
+Fixture (default) or optional read-only market-data provider
        |
        v
-Provider Adapter -> Normalizer -> Data Quality Gate -> Storage
+Provider Adapter -> Canonical Events -> Data Quality Gate -> Storage
                                            |
                                            v
                                   Event-Time State
                                            |
-                 +-------------------------+-------------------------+
-                 |                         |                         |
-                 v                         v                         v
-            Feature Engine            Regime Engine             Scanner
-                 |                         |                         |
-                 +-------------------------+-------------------------+
+                                  Versioned Features
                                            |
                                            v
-                                   Setup/Strategy Agents
+                              Implemented Setup Detector
                                            |
-                                           v
-                                      Meta Scorer
+                            Immutable Opportunity + TradePlan
                                            |
-                                           v
-                                       Risk Gate
-                                           |
-                                           v
-                               Opportunity + Explanation
+                             Publication-health projection
                                   |                 |
                                   v                 v
-                           REST / SignalR      Outcome Tracker
-                                  |
-                                  v
-                              Web Dashboard
+                              REST API      Blazor Interactive Server
+
+Future action/readiness and outcome/research layers consume immutable analytical records; neither is implemented in A.2.2.
 ```
 
 ## Required stack
 
 - .NET 10 LTS / ASP.NET Core 10 / C#; target `net10.0`.
 - ASP.NET Core Blazor on .NET 10 for the frontend.
-- ASP.NET Core SignalR for live UI updates.
+- Blazor Interactive Server; the current UI uses its server circuits, not a separate application SignalR hub.
 - Microsoft SQL Server locally and Azure SQL Database in Azure.
 - Entity Framework Core 10 with the Microsoft SQL Server provider for normal persistence.
-- In-process `Channel<T>` for first-release event transport.
+- Bounded in-process `Channel<MarketEvent>` for live ingestion, with backpressure, bounded graceful drain, and explicit accounting; fixture processing remains in-process.
 - Azure App Service hosts the ASP.NET Core 10 + Blazor Web App by default.
 - Azure App Service for the ASP.NET Core backend by default.
 - Azure Key Vault for deployed secrets.
@@ -500,68 +524,33 @@ Provider Adapter -> Normalizer -> Data Quality Gate -> Storage
 
 ---
 
-# 12. Solution Structure
+# 12. Current Solution Structure
 
 ```text
 MarketOpportunityEngine.sln
 
 src/
-  MarketOpportunity.Api/
-  MarketOpportunity.Web/
+  MarketOpportunity.Web/             # Blazor UI and HTTP API
   MarketOpportunity.Domain/
   MarketOpportunity.Application/
-  MarketOpportunity.Contracts/
-  MarketOpportunity.Infrastructure/
-  MarketOpportunity.MarketData/
   MarketOpportunity.Analytics/
-  MarketOpportunity.Models/
-  MarketOpportunity.Replay/
-  MarketOpportunity.Observability/
-
-tools/
-  MarketOpportunity.Cli/
-  MarketOpportunity.ModelTrainer/
-  MarketOpportunity.DataImporter/
+  MarketOpportunity.Infrastructure/  # EF Core and provider adapters
 
 tests/
   MarketOpportunity.UnitTests/
-  MarketOpportunity.ComponentTests/
   MarketOpportunity.IntegrationTests/
-  MarketOpportunity.ReplayTests/
-  MarketOpportunity.ArchitectureTests/
-  MarketOpportunity.UiTests/
+  MarketOpportunity.AlpacaConnectivityTests/  # separate, opt-in network tests
 ```
 
-Domain and analytics projects must not depend on provider SDKs, Entity Framework, HTTP, SignalR, or UI code.
+This is the current modular-monolith project layout. Do not split out API, contracts, providers, replay, model training, or observability projects without an approved architectural need. Domain and analytics must not depend on provider SDKs, Entity Framework, HTTP, SignalR, or UI code.
 
 ---
 
 # 13. Core Contracts
 
-```csharp
-public abstract record MarketEvent(
-    string Symbol,
-    DateTimeOffset EventTimeUtc,
-    DateTimeOffset ReceivedTimeUtc,
-    string Provider,
-    string? SequenceId);
+Canonical market events carry symbol, explicit session identity, event and receive timestamps, provider, stable event identity, and decimal/integer trade or quote values. Provider DTOs remain in infrastructure adapters. Features and analytical decisions are versioned and evaluated only from eligible events at or before `AsOfUtc`.
 
-public sealed record FeatureSnapshot(
-    Guid Id,
-    string Symbol,
-    DateTimeOffset AsOfUtc,
-    string FeatureSetVersion,
-    IReadOnlyDictionary<string, double> Values,
-    DataQualityStatus DataQuality);
-
-public interface IStrategyAgent
-{
-    string Name { get; }
-    AgentAssessment Evaluate(FeatureSnapshot snapshot, MarketContext context);
-}
-```
-
-Use decimal/integer types for prices and quantities in transactional contracts. Convert to floating-point only inside numerical pipelines where required.
+`TradePlan` is an immutable provider-independent contract with deterministic `PlanId`, direction/status, entry zone/reference, numeric invalidation, structural targets, decimal risk/reward geometry, source opportunity, versions, provenance, and evidence. Publication health does not belong in this historical geometry.
 
 ---
 
@@ -581,61 +570,31 @@ Use decimal/integer types for prices and quantities in transactional contracts. 
 
 # 15. Storage Model
 
-Initial logical tables:
+Current persisted records include normalized market events, feature snapshots, opportunities/evidence, configuration snapshots, and immutable TradePlans. `trade_plan` uses `PlanId` as its key and indexes symbol/session/as-of plus opportunity identity. Identical replay is idempotent; different content under the same ID fails. Outcomes, position state, model registry, and research tables are future scope, not current schema.
 
-- `instrument`
-- `market_session`
-- `trade_event`
-- `quote_event`
-- `aggregate_bar`
-- `data_gap`
-- `feature_snapshot`
-- `regime_snapshot`
-- `agent_assessment`
-- `opportunity`
-- `opportunity_evidence`
-- `opportunity_outcome`
-- `paper_observation`
-- `model_registry` later
-- `model_evaluation` later
-- `configuration_snapshot`
-- `system_incident`
-
-Indexes should prioritize symbol/event time, feature version, opportunity state/score, and outcome lookup.
+Schema management is deliberately mixed: a clean development database may be created with `EnsureCreated`; existing schemas use reviewed hand-written/idempotent migrations. There is no EF model snapshot or initial migration. Review future migration generation strategy deliberately rather than silently switching conventions.
 
 ---
 
 # 16. API and Live UI
 
-Initial REST surface:
+Current REST surface:
 
 ```text
 GET /api/v1/system/status
-GET /api/v1/market/regime
 GET /api/v1/opportunities
 GET /api/v1/opportunities/{id}
 GET /api/v1/symbols/{symbol}/snapshot
-GET /api/v1/symbols/{symbol}/features
 GET /api/v1/configuration/effective
 ```
 
-SignalR events:
-
-```text
-SystemStatusChanged
-MarketRegimeChanged
-SymbolSnapshotChanged
-OpportunityPublished
-OpportunityUpdated
-OpportunityExpired
-DataQualityChanged
-```
+Opportunity list/detail responses include the opportunity, current publication decision, and candidate TradePlan. Market structure is exposed in the versioned feature snapshot. `GET /api/v1/system/diagnostics` exists only in Development when opt-in validation diagnostics are enabled. The current Blazor UI updates through Interactive Server state notifications; there is no separate application SignalR hub.
 
 The dashboard should prioritize:
 
-1. Feed health.
-2. Current market regime/context.
-3. Ranked opportunities.
+1. Feed health and source provenance.
+2. Current setup analyses and publication health.
+3. Candidate TradePlan geometry and evidence.
 4. Symbol detail/explanation.
 5. Explicit `No qualified opportunities` state.
 
@@ -643,7 +602,7 @@ The dashboard should prioritize:
 
 # 17. Replay and Research
 
-Live, fixture, and historical/replay inputs must eventually feed the same normalized `MarketEvent` pipeline.
+Fixture and optional live inputs use the same normalized `MarketEvent` pipeline. Historical reads, deterministic replay tooling, and backtesting remain future research scope; persisted events are not yet a general historical read path.
 
 Replay requirements:
 
@@ -662,6 +621,17 @@ Anti-leakage rules:
 ---
 
 # 18. Machine Learning, Later
+
+Machine learning remains deferred until sufficient outcome-labeled data exists and the research/data-rights policy is approved. Intended architecture:
+
+```text
+deterministic features + structure + immutable TradePlan
+                     + historical outcomes linked by PlanId
+                         -> trained model
+                         -> ONNX inference in .NET where appropriate
+```
+
+ML may augment or rank deterministic plans. It must not silently invent price levels, rewrite plan geometry, or bypass hard data-quality/risk constraints. Training, ONNX, model inference, and probability calibration are not current capabilities.
 
 Milestone C may ask:
 
@@ -703,7 +673,7 @@ An LLM, if added, may turn structured analysis into natural-language explanation
 
 - SQL Server/EF Core migrations.
 - Provider fixtures/connectors.
-- SignalR contracts.
+- API and Blazor Interactive Server circuit behavior.
 - Event-to-opportunity vertical slice.
 
 ## Golden replay
@@ -724,7 +694,7 @@ Track at minimum:
 - End-to-end opportunity latency.
 - Opportunities published, expired, and vetoed.
 - Database latency.
-- SignalR failures/client count.
+- Interactive Server circuit/reconnection failures.
 
 Trace provider reception -> normalization -> state -> features -> setup detector -> scoring -> risk -> persistence -> UI publication.
 
@@ -745,6 +715,15 @@ Trace provider reception -> normalization -> state -> features -> setup detector
 
 # 22. Delivery Roadmap
 
+## Current Milestone A checkpoint
+
+- **A.1 Live Scanner Validation:** COMPLETE.
+- **A.2.1 Market Structure Foundation:** COMPLETE.
+- **A.2.2 Trade Plan Foundation:** COMPLETE.
+- **Next: A.2.3 Pre-Trade Opportunity Readiness:** NOT STARTED.
+
+A.2.3 should initially define a user-facing pre-trade readiness/action contract over current setup and plan evidence. It must keep readiness separate from setup, TradePlan geometry, and current publication health. Position-management states remain out of scope unless a separate `PositionContext` contract is approved.
+
 ## Phase 0: Minimal foundations
 
 - Repository/solution.
@@ -758,12 +737,9 @@ Trace provider reception -> normalization -> state -> features -> setup detector
 
 ## Phase 1: Market-data spine
 
-- Initial live provider adapter.
-- Reconnect/heartbeat/staleness.
-- Feed-health endpoint/UI.
-- Gap recording.
+- Provider-independent normalized ingestion and basic feed-health presentation.
 
-**Current repository note:** Fixture remains the default. Optional Alpaca and Massive trade/quote adapters are present; Alpaca is used for development stream testing, while neither adapter provides brokerage or order execution. See [ADR-005](./docs/adr/ADR-005-market-data-provider-criteria.md) for the accepted provider decision. These adapters do not satisfy the reconnect, heartbeat, or gap-recovery exit criteria below.
+**Current repository note:** Fixture remains the default. Optional Alpaca and Massive adapters are present; Alpaca live evaluation has occurred. Alpaca has bounded reconnect behavior, but no historical gap backfill is performed; Massive does not yet reconnect. Neither adapter provides brokerage or order execution. See [ADR-005](./docs/adr/ADR-005-market-data-provider-criteria.md).
 
 **Exit:** full-session soak has no unexplained data loss and recovery tests pass.
 
@@ -778,17 +754,16 @@ Trace provider reception -> normalization -> state -> features -> setup detector
 
 ## Phase 3: Milestone A opportunity engine
 
-- Four initial setup detectors.
-- Hard risk/liquidity gates.
-- Setup quality score.
-- Opportunity lifecycle.
-- Structured explanations.
+- Add the remaining approved setup detectors incrementally; Momentum Continuation is currently implemented.
+- Versioned risk/liquidity gates.
+- Setup quality, opportunity lifecycle, and structured explanations.
+- Market structure and immutable candidate TradePlans.
 
 **Exit:** every published opportunity is explainable and reproducible; stale data cannot publish.
 
 ## Phase 4: Milestone A dashboard
 
-- SignalR.
+- Blazor Interactive Server dashboard and current publication-health projection; no separate SignalR hub.
 - Ranked list and detail view.
 - Feed-health presentation.
 - Watchlist/filters as needed.
@@ -800,10 +775,11 @@ Trace provider reception -> normalization -> state -> features -> setup detector
 ## Phase 5: Milestone B replay/research
 
 - Historical replay.
-- Matured outcomes.
+- Matured outcomes linked to immutable `PlanId`.
 - Transaction-cost model.
 - Research reports.
 - Leakage tests.
+- Explicit provider-data licensing, normalized/derived retention, permitted research/backtesting and ML use, provenance, and deletion/expiration policy.
 
 ## Phase 6: Milestone C ML shadow mode
 
@@ -812,7 +788,8 @@ Trace provider reception -> normalization -> state -> features -> setup detector
 - Walk-forward validation.
 - Calibration.
 - Model registry.
-- Shadow inference.
+- Shadow inference, with ONNX in .NET where appropriate.
+- ML may augment/rank deterministic plans only; it cannot invent plan price levels or bypass hard vetoes.
 
 ## Phase 7: Extended validation
 
@@ -839,6 +816,7 @@ No autonomous real-money execution is authorized by this phase.
 - Work in small vertical slices.
 - Use .NET 10 (`net10.0`) and ASP.NET Core 10 for the backend.
 - Use ASP.NET Core Blazor on .NET 10 for the frontend.
+- Keep the recorded fixture as the default; do not connect a live provider without an explicit request and provider-criteria review.
 - Use Microsoft SQL Server locally and Azure SQL Database for Azure deployment.
 - Use Microsoft Azure as the cloud platform; do not substitute AWS/GCP services.
 - Default to Azure App Service, Azure Key Vault, Azure Monitor/Application Insights, Bicep, and Azure DevOps Pipelines as specified in Section 2.
@@ -847,6 +825,10 @@ No autonomous real-money execution is authorized by this phase.
 - Inject `TimeProvider`.
 - No future events in feature generation.
 - Never overwrite historical opportunity versions.
+- Keep setup, immutable TradePlan, publication health, future pre-trade readiness, position-management state, and outcomes conceptually and technically separate.
+- Position-management states require supplied position context; do not infer holdings or add broker integration to obtain them.
+- Treat TradePlan reward/risk as descriptive until a separately approved threshold decision; do not invent a minimum or hard veto.
+- Link future outcomes to immutable `PlanId`; do not implement outcome tracking before the research milestone and retention decision.
 - No random train/test split for time-series research.
 - No secrets in logs.
 - No live-order placement in Milestone A.
@@ -857,56 +839,12 @@ No autonomous real-money execution is authorized by this phase.
 
 ---
 
-# 24. First Coding-Agent Prompt
+# 24. Checkpoint Guidance
 
-```text
-You are beginning Milestone A of the Real-Time AI Market Opportunity Engine (working solution name: MarketOpportunityEngine).
-
-Read this specification completely. The immediate objective is the smallest useful end-to-end scanner, not the entire future platform.
-
-Build a .NET modular monolith progressing vertically through:
-
-recorded fixture initially, then live provider
--> normalized MarketEvents
--> bounded per-symbol event-time state
--> initial trend/momentum/VWAP/volume/liquidity/context features
--> one setup detector first
--> risk/liquidity vetoes
--> opportunity result
--> REST/SignalR as appropriate
--> Blazor dashboard
--> persistence
-
-Use a configurable small development universe, approximately 20 liquid symbols, not a hard-coded limit.
-
-Start with a recorded-fixture source before live-provider integration. Implement one setup detector end to end before creating all four. The initial detector should expose its evidence, contradictions, quality score, vetoes, AsOfUtc, ValidUntilUtc, feature version, setup version, and configuration version.
-
-Use .NET 10 LTS, target `net10.0`, use current supported .NET 10 servicing patches, ASP.NET Core Blazor on .NET 10, EF Core 10, and the Microsoft SQL Server provider. Add nullable reference types, analyzers, tests, a Microsoft SQL Server local-development setup and Azure SQL Database deployment configuration, health checks, and lightweight OpenTelemetry.
-
-Do NOT add Redis, distributed messaging, microservices, Kubernetes, machine learning, Level 2 processing, broker integration, autonomous trading, or LLM decision logic.
-
-Write only ADRs needed for immediate decisions:
-1. Blazor Web App render mode (Interactive Server, WebAssembly, or Auto) and component-structure conventions; Blazor itself is fixed.
-2. EF Core 10 / SQL Server persistence conventions (technology choice is fixed).
-3. In-process event transport choice.
-4. Raw/normalized retention format.
-5. Initial market-data provider selection criteria.
-
-Keep domain and analytics independent of provider SDKs, EF Core, HTTP, SignalR, and UI dependencies.
-
-At each checkpoint return:
-- repository tree,
-- build/test/run commands,
-- test results,
-- ADRs created,
-- what works visibly end to end,
-- known limitations,
-- next smallest vertical slice,
-- confirmation no future-only infrastructure was introduced.
-```
+Deliver Milestone A in small tested vertical slices. Before each slice, read the current project status and README and inspect the implementation. Status is evidence of current state, not permission to expand scope; this specification is the product/architecture roadmap.
 
 ---
 
 # 25. Final Recommendation
 
-Build a trustworthy, deterministic trading-analysis baseline before adding ML. The highest-value foundations are accurate market data, event-time correctness, transparent setup rules, hard risk/liquidity gates, complete outcome recording, and deterministic replayability. Once Milestone A is producing and recording real observations, Milestone B can determine which rules have evidence behind them, and only then should Milestone C attempt to improve ranking with machine learning.
+Build a trustworthy, deterministic trading-analysis baseline before adding ML. The highest-value foundations are accurate market data, event-time correctness, transparent setup rules, hard risk/liquidity gates, immutable structural plans, and later deterministic replay/outcome research. Preserve the user's position-management boundary and verify data-use rights before sustained historical research or model training. Only after outcome-labeled data exists should Milestone C assess whether ML improves deterministic ranking.

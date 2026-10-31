@@ -5,11 +5,11 @@
 
 ## Context
 
-The first release is a single ASP.NET Core modular monolith. It needs a small dashboard, no browser-side market-data credentials, and a simple path for server-originated updates.
+The application is a single ASP.NET Core modular monolith. It needs a dashboard, no browser-side market-data credentials, and a simple path for server-originated updates. The scanner can run from the recorded fixture or a configured live market-data adapter.
 
 ## Decision
 
-Render the application through Interactive Server components. Keep route/page components in `MarketOpportunity.Web/Components/Pages`, shared layout in `Components/Layout`, and domain-independent formatting in presentation components. Pages consume application read models/services; they do not access EF Core or provider adapters directly. The fixture runner updates a singleton presentation state that notifies connected component circuits. Blazor's server circuit transport is sufficient for this checkpoint; no separate SignalR hub is introduced.
+Render the application through Interactive Server components. Keep route/page components in `MarketOpportunity.Web/Components/Pages`, shared layout in `Components/Layout`, and domain-independent formatting in presentation components. Pages consume application read models/services; they do not access EF Core or provider adapters directly. Fixture or live scanner execution updates singleton `ScannerState`, which notifies connected component circuits. Blazor's server circuit transport is sufficient for this checkpoint; no separate SignalR hub is introduced.
 
 ## Consequences
 

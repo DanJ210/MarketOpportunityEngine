@@ -1,5 +1,8 @@
 # Archived Project Status and Validation Record (2026-10-27)
 
+This document is chronological historical evidence. Statements about "current status", blockers, versions, or missing capabilities inside older sections describe that historical checkpoint and may be superseded.
+For current project truth, see PROJECT_STATUS.md.
+
 ## Final same-page browser observation (2026-10-30)
 
 **Browser criterion: PASS. Milestone A.1 - Live Scanner Validation: COMPLETE.** This closes only the outstanding browser-observability criterion; the prior ingestion/SQL/shutdown closeout below remains separate evidence.
@@ -62,7 +65,7 @@ The matching launcher result records **exit code 0 at 18:11:27.3556604Z**; final
 
 ## Consolidated A.1 validation record (2026-10-29)
 
-This section preserves durable evidence from the live IEX, forensic, instrumentation, and shutdown work. At this checkpoint, the latest 30-minute closeout supplied the missing logs, shutdown trigger, and exit code; the remaining browser evidence gap was subsequently closed by the [2026-10-30 same-page observation](#final-same-page-browser-observation-2026-10-30). The current checkpoint is in [PROJECT_STATUS.md](./PROJECT_STATUS.md), and the operator procedure is in [README.md](./README.md#one-final-instrumented-a1-observation).
+This section preserves durable evidence from the live IEX, forensic, instrumentation, and shutdown work. At this checkpoint, the latest 30-minute closeout supplied the missing logs, shutdown trigger, and exit code; the remaining browser evidence gap was subsequently closed by the [2026-10-30 same-page observation](#final-same-page-browser-observation-2026-10-30). The current checkpoint is in [PROJECT_STATUS.md](./PROJECT_STATUS.md), and the optional operator procedure is in [README.md](./README.md#optional-live-alpaca-validation).
 
 ### Self-describing 30-minute IEX closeout (2026-10-29)
 
@@ -1162,7 +1165,7 @@ The first SQL persistence run failed with missing provenance columns (`DataCover
 | Command / check | Final result after fix |
 |---|---|
 | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter FullyQualifiedName~FixtureWebApplicationTests` | Exit **0**; **1 passed, 0 failed, 0 skipped**. Ran first, then again after the setup fix. |
-| Filtered persistence/migration command in [README](README.md#fixture-runtime-verification-order) | Exit **0**; **3 passed, 0 failed, 0 skipped** (one persistence test and two migration tests). Initial pre-fix run: 2 passed, 1 failed. |
+| Filtered persistence/migration command in [README tests](README.md#tests) | Exit **0**; **3 passed, 0 failed, 0 skipped** (one persistence test and two migration tests). Initial pre-fix run: 2 passed, 1 failed. |
 | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj` | Exit **0**; **69 passed, 0 failed, 0 skipped** after the code change. |
 | `dotnet build MarketOpportunityEngine.sln` | Exit **0**; **0 warnings, 0 errors** after the code change. |
 | `dotnet run --project src\MarketOpportunity.Web --launch-profile http --no-build` | Started with process-only Fixture/provider and guarded SQL overrides. `/health` returned Healthy; status reported Recorded / RecordedFixture / 26 events. |
@@ -1185,7 +1188,7 @@ Inspected `FixtureWebApplicationTests`, `SqlServerPersistenceTests`, `ExplicitSe
 | Process-environment preflight for `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` | **Absent**. No connection value, credentials, or User Secrets were displayed. No SQL connection was attempted. |
 | `dotnet --version` | **10.0.402**. |
 | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter FullyQualifiedName~FixtureWebApplicationTests` | **Not run**: missing dedicated SQL test connection. |
-| Filtered SQL persistence/migration command in [README](README.md#fixture-runtime-verification-order) | **Not run**: same safety gate. |
+| Filtered SQL persistence/migration command in [README tests](README.md#tests) | **Not run**: same safety gate. |
 | Manual Fixture-mode dashboard / HTTP walkthrough | **Not run**: no safely configured local test database was established. No app or Docker process was started and no database was altered. |
 | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj` | **Succeeded**, exit code **0**; **69 passed, 0 failed, 0 skipped**; reported test duration **2 seconds**. |
 | `dotnet build MarketOpportunityEngine.sln` | **Succeeded**, exit code **0**; **0 warnings, 0 errors**; elapsed **00:00:02.60**. Includes the hosted integration-test project, but does not execute it. |
@@ -1418,6 +1421,33 @@ Hosted list/detail payloads include all four plans and match their SQL records. 
 **Corrections before the final sequence:** The first SQL run passed 3/4 tests; the swing test expected `5`/`2` despite canonical fixture pivots of `105`/`102`. Corrected only those test expectations. Added the previously missing long/short full-round-trip/collision theory and hosted SQL-plan equality assertions. Its first fixture accidentally confirmed an extra target at the reference price, correctly producing `Rejected`; corrected the fixture's interior prices to exercise defined geometry without weakening assertions. All required stages then passed in the order above. Hosted runs emitted the test-host HTTPS redirect-port warning; no production defect was exposed.
 
 **Independent re-run (same day, same guarded database, no reset):** the full five-stage sequence above was repeated in order with identical results: 6/6 (including both `Defined_trade_plans_round_trip_all_fields_and_reject_conflicting_replay` long/short cases and both migration tests), 1/1, 1/1, 279/279, build 0 warnings/0 errors. Row counts were identical before stage 1 and after each SQL stage (82/94/94/508/14/4); logs contained no credentials.
+
+## Final A.2.2 six-stage SQL validation (2026-10-30)
+
+**A.2.2 SQL validation: COMPLETE**, verified at 22:48 EDT. Reused the existing healthy local Compose SQL Server at `localhost,1433`, exclusively targeting `MarketOpportunityEngine_IntegrationTests`. The test connection variable was absent; the existing container credential was obtained only in process memory. Before each stage, `SqlConnectionStringBuilder` required the exact local target, explicitly rejected empty/non-test/development/live-validation catalogs, and read-only `SELECT DB_NAME()` confirmed the effective catalog. Connection overrides were confined to child processes and cleared afterward. No User Secrets or market-data providers were accessed; hosted applications used Testing configuration and fixture/offline sources.
+
+The initial sequence passed stages 1-3, then full integrations reported **12 passed, 1 failed, 0 skipped**. Exact failure in `LiveValidationInstrumentationTests.Offline_host_exports_final_diagnostics_and_persists_unchanged_canonical_events`, line 34:
+
+```text
+System.InvalidOperationException : Diagnostic verification requires the dedicated local live-validation database.
+```
+
+**Classification: test defect.** The offline diagnostic test incorrectly required the live-validation catalog. Changed only its exact-catalog guard and error message to require `MarketOpportunityEngine_IntegrationTests`, retaining the exact `localhost,1433` requirement and read-only effective-catalog assertion. No guard was broadened, immutable-history assertion weakened, or production code changed. The failed focused test then passed **1/1**, followed by this complete required sequence:
+
+| Order | Command | Result |
+|---|---|---|
+| 1 | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter "FullyQualifiedName~SqlServerPersistenceTests|FullyQualifiedName~ExplicitSessionMigrationTests"` | **6/6 passed** |
+| 2 | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter "FullyQualifiedName~FixtureWebApplicationTests"` | **1/1 passed** |
+| 3 | Exact stage 2 command, same database without reset | **1/1 passed** |
+| 4 | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj` | **13/13 passed** |
+| 5 | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj` | **279/279 passed** |
+| 6 | `dotnet build MarketOpportunityEngine.sln` | **Succeeded, 0 warnings, 0 errors** |
+
+All final tests had zero failures/skips. Existing tests prove long/short TradePlan round-trips, PriceZone, numeric invalidation, Target1, absent/null Target2, risk/reward/ratio, plan definition/version, provenance, identical-replay idempotency, and rejection of same-ID/different-content replay without rewriting the original. Existing opportunity, feature, evidence, event, configuration, and legacy-history assertions passed. Hosted list/detail responses include matching persisted plans.
+
+Read-only SQL confirmed `trade_plan`, applied migration `20261030210000_AddImmutableTradePlans`, `IX_trade_plan_OpportunityId`, and ordered `IX_trade_plan_Symbol_SessionId_AsOfUtc` keys (`Symbol`, `SessionId`, `AsOfUtc`); migration tests also validated clean and legacy schemas and related symbol/session/as-of indexes.
+
+Row counts after each final hosted run were identical: events **86**, features **95**, opportunities **95**, evidence **517**, configurations **14**, plans **5**. Final counts after the full suite were **90/96/96/526/14/6** respectively, reflecting the additional uniquely scoped offline diagnostic run. No existing records or configured database were reset/deleted. Persistence tests performed only their designed unique-test-row cleanup; migration tests created/dropped only their uniquely named temporary databases. SQL remained healthy. **Remaining blocker: none. A.2.3 was not started.**
 
 ## Milestone A.2.3a - Prior-Session Market Context (2026-10-31)
 

@@ -38,7 +38,7 @@ This is a focused adapter, not a general implementation of every Massive channel
 
 ## Credentials and scope
 
-Keep the API key in local .NET User Secrets for development or a protected secret store such as Azure Key Vault when deployed. Never put it in source control, browser code, chat, or diagnostic logs. See the [README's optional live market data instructions](../../README.md#optional-live-market-data-massive) for configuration and the secure local setup.
+Keep the API key in local .NET User Secrets for development or a protected secret store such as Azure Key Vault when deployed. Never put it in source control, browser code, chat, or diagnostic logs. See the [README market-data provider instructions](../../README.md#market-data-providers) for configuration and the secure local setup.
 
 Massive access is read-only market-data ingestion in this application. Provider selection does not authorize brokerage access, order placement, or a change to the recorded-fixture default. See [ADR-005](../adr/ADR-005-market-data-provider-criteria.md) for the provider-selection criteria and decision.
 

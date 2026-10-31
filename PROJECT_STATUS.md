@@ -1,81 +1,34 @@
 # Current Project Status
 
-**Checkpoint:** Milestone A.2.3a - Prior-Session Market Context
+**Current checkpoint:** Milestone A.2.3a - Prior-Session Market Context
 **Updated:** 2026-10-31
 
-## Current status
+## Milestones
 
-The A.2.3a foundation adds explicit prior-session context, fixture-only historical reads, and deterministic fixture calendar mapping without changing current-session setup decisions. A.2.1 implements the scanner-owned symbol universe and descriptive confirmed swing contracts; A.2.2 adds immutable candidate trade plans. Historical data remains synthetic and partial in fixture mode; live provider history and an authoritative live session calendar are not implemented or verified. The latest self-describing 30-minute IEX run remains historical evidence in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#self-describing-30-minute-iex-closeout-2026-10-29), not a validation requirement for this checkpoint.
+- **A.1 Live Scanner Validation:** COMPLETE
+- **A.2.1 Market Structure Foundation:** COMPLETE
+- **A.2.2 Trade Plan Foundation:** COMPLETE
+- **A.2.3a Prior-Session Market Context:** COMPLETE
+- **A.2.3b Pre-Trade Readiness:** NOT STARTED
 
-**Milestone A.1 - Live Scanner Validation: COMPLETE**
+## Current state
 
-**Milestone A.2.2 - Trade Plan Foundation: COMPLETE**
+The app defaults to the recorded fixture and supports optional read-only Alpaca and Massive market-data adapters. A.2.1 added versioned, descriptive confirmed swing/structure values. A.2.2 adds deterministic candidate TradePlans persisted as immutable SQL records, exposed through opportunity API responses and dashboard cards. Setup decisions and classifications remain unchanged; current publication health is a separate projection from historical plan geometry.
 
-**Milestone A.2.3a - Prior-Session Market Context: COMPLETE**
+A.2.3a adds the separate `prior-session-context-v1` contract: `IHistoricalMarketDataSource` with the recorded fixture as the only implemented historical source, an explicit fixture session calendar, and prior-session pivots, reference levels, completeness, and provenance exposed at `/api/v1/symbols/{symbol}/prior-context` and in the dashboard's **PRIOR SESSION** section. Context is deterministically rebuilt from approved fixture input, cached per symbol/current session, and not persisted; live provider history and an authoritative live calendar remain unavailable/unverified, so live scanning continues with explicit unavailable context. No feature/configuration/Momentum/TradePlan version or schema change was made. See [ADR-007](./docs/adr/ADR-007-prior-session-context.md).
 
-**Milestone A.2.3b - Pre-Trade Readiness: NOT STARTED**
+The scanner does not know the user's actual holdings. Plan status is not execution readiness. Position-management states such as `MANAGE`, `TAKE PROFIT`, and `EXIT` require a `PositionContext`, which is not implemented. Reward/risk is descriptive; no minimum reward/risk veto has been approved or implemented.
 
-The final [same-page browser check](./VALIDATION_HISTORY.md#final-same-page-browser-observation-2026-10-30), session `alpaca-iex-20261030T174047331Z`, closes the remaining observability criterion. Two timestamped DOM snapshots, 65.066 seconds apart, show increasing event counts, advancing event/receive times, changing prices/features, and changing classifications, vetoes, and publication states without refresh. Feed health remained Live, with no visible reconnect/failure UI or captured browser exceptions during the interval. No application or provider was restarted.
+## Latest validation
 
-## Current proven capabilities
+**A.2.3a validation: COMPLETE (offline).** Focused prior-context unit tests passed **10/10**, A.2.1 market-structure regressions **13/13**, A.2.2 TradePlan regressions **17/17**, Momentum Continuation regressions **22/22**, the full offline unit suite **289/289**, and hosted fixture/API/dashboard tests **2/2** with no SQL or provider connection; the solution build succeeded with **0 warnings/errors**. SQL persistence/migration suites were **not run** (no guarded `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was configured; no schema change was made). See the [A.2.3a record](./VALIDATION_HISTORY.md#milestone-a23a---prior-session-market-context-2026-10-31).
 
-- Real Alpaca IEX events have traversed the application and been persisted.
-- Feature calculations and Momentum Continuation evaluations have occurred on live IEX events.
-- Blazor live behavior has previously been observed.
-- Candidate trade plans are separate, versioned analytical records; they do not represent execution readiness or modify setup classification.
-- Reconnect/publication safety is implemented.
-- Opt-in live-validation instrumentation is implemented.
-- Graceful shutdown drains accepted in-process work within a bounded timeout; deterministic and integration tests verify the drain and its accounting.
-- No analytical or trading behavior changed during instrumentation or shutdown fixes.
+**A.2.2 SQL validation: COMPLETE.** Final validation passed SQL persistence/migrations **6/6**, same-database hosted fixture tests **1/1 twice** without clearing records, full integrations **13/13**, offline units **279/279**, and the solution build (**0 warnings/errors**). Only the offline diagnostic test's database guard required correction; production code was unchanged. The prior closeout also passed focused regressions **52/52**. See the [final six-stage validation evidence](./VALIDATION_HISTORY.md#final-a222-six-stage-sql-validation-2026-10-30) and [earlier A.2.2 validation record](./VALIDATION_HISTORY.md#milestone-a22---sql-validation-closeout-2026-10-30). The final A.1 live browser observation is documented [here](./VALIDATION_HISTORY.md#final-same-page-browser-observation-2026-10-30).
 
-## Final A.1 browser evidence
+## Immediate next checkpoint
 
-No remaining A.1 blocker. The browser check directly observed the existing integrated-browser page at `http://localhost:5291/`, with unchanged page time origin and zero navigation events. See the [timestamped comparison](./VALIDATION_HISTORY.md#final-same-page-browser-observation-2026-10-30); post-duration disconnect behavior is recorded separately from live-session behavior.
+**A.2.3b Pre-Trade Readiness.** Define and implement only pre-trade user-facing readiness/action states over current setup, plan, and publication evidence. Keep readiness separate from analytical setup, immutable TradePlan geometry, and current publication health. Do not infer holdings or implement position-management actions; require a separately approved `PositionContext` contract first. The exact remaining prerequisite is an approved historical market-data source with verified access, retention, and licensing terms, plus an authoritative session calendar for live sessions; incomplete prior context must not drive readiness.
 
-Extended browser monitoring remained Live without reconnect/failure UI or browser exceptions until the configured 1,800-second run requested `DurationElapsed` shutdown at `2026-10-30T18:11:17.1925747Z`. Disconnect/rejoin UI and negotiation errors began only afterward. The run stopped normally with exit code 0, completed drain, and zero remaining events; no early shutdown was initiated.
+**Current blockers:** None for completed checkpoints. A.2.3b has not started.
 
-The launcher and app record self-describing session evidence: a sanitized `<SessionId>.app.log`, recorded shutdown trigger and duration, per-stage latency threshold counts, and `<SessionId>.launcher-result.json` with exit code and exit time. The 30-minute run verified these artifacts. Follow the README [final integrated-browser validation workflow](./README.md#final-integrated-browser-validation-workflow). Ingestion, channel capacity, analysis interval, persistence, formulas, thresholds, scoring, classifications, and quote handling are unchanged.
-
-## A.2.1 foundation
-
-- `Scanner:Universe:Symbols` is the canonical comma-separated live universe. Both adapters share the same trim, uppercase, empty-entry rejection, and case-insensitive first-occurrence deduplication. Fixture replay does not consult the universe.
-- Provider-specific symbol keys are no longer read, and there is no automatic fallback: legacy lists can differ. Operators must explicitly migrate their intended universe in User Secrets as described in the [README](./README.md#scanner-owned-universe-and-user-secrets-migration). No local settings were changed by the implementation.
-- `features-v16` and `scanner-config-v16` expose latest/previous confirmed swings, higher/lower/equal swing relationships, combined structure state, nearest support/resistance candidates with provenance, and distances to the nearest confirmed highs/lows. They reuse the existing two-sided trade-point fractal and remain descriptive, event-time-safe, session-scoped, and bounded-state-aware.
-- The feature-set version advanced for new serialized content; no configuration threshold changed. `momentum-continuation-v1`, its classifications/scoring/vetoes/publication, and prior persisted snapshots/decisions remain unchanged. Structure stays in existing snapshot JSON; no schema migration is required.
-
-## A.2.1 validation
-
-- Focused structure, universe, provider-option, and replay tests passed; the complete offline unit suite passed **262/262**.
-- Momentum Continuation regression tests passed **22/22**; detector source and setup behavior are unchanged.
-- In-process hosted fixture and synthetic-structure API/dashboard tests passed **2/2** with a capturing store; neither opens SQL. SQL-backed hosted-fixture coverage is separate.
-- Offline launcher interception tests passed **17/17**, with no app, SQL, Docker, or provider connection started by those tests.
-- `dotnet build MarketOpportunityEngine.sln --no-restore` succeeded with zero warnings and errors.
-- SQL-backed hosted-fixture and persistence coverage was **not run**: no guarded `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was configured, and the existing SQL service was not retargeted or modified. No schema migration was needed, and no live-provider validation was repeated.
-
-## A.2.2 foundation
-
-- `trade-plan-v1` builds a separate candidate plan from the directional opportunity and confirmed swing levels. Entry zones span nearest support/resistance and the reference price; entry reference is their exact decimal midpoint. Invalidation uses a distinct confirmed swing beyond the entry structure, and Target 1 is the nearest opposing confirmed level. Missing structure remains insufficient/forming; directionally inconsistent geometry is rejected.
-- Risk/share, reward/share, and reward/risk are decimal calculations. No minimum reward/risk veto, artificial zone width, target projection, or execution state was introduced. Market-data publication health remains separate from immutable plan geometry.
-- Plan IDs incorporate the snapshot/opportunity identities, direction/status, plan-definition and analytical versions, geometry, evidence, and data provenance. SQL persistence uses a separate `trade_plan` row keyed by immutable `PlanId`; replay of identical content is idempotent and conflicting content fails. [ADR-006](./docs/adr/ADR-006-immutable-trade-plan-persistence.md) records the persistence decision.
-- `/api/v1/opportunities` and the detail endpoint include the plan. Blazor cards render a descriptive **TRADE PLAN** section and continue to show publication state separately. `features-v16`, `scanner-config-v16`, and `momentum-continuation-v1` are unchanged.
-
-## A.2.2 validation
-
-- Focused trade-plan, A.2.1 market-structure, and Momentum Continuation regression tests passed **52/52**.
-- Complete offline unit suite passed **279/279**.
-- Hosted fixture/API/dashboard tests passed **2/2** using an in-process capturing store; no SQL or provider connection was opened.
-- SQL persistence/migration coverage passed **6/6** against the existing dedicated local `MarketOpportunityEngine_IntegrationTests` database. Clean-schema creation and existing-schema migration verify `trade_plan` columns and ordered indexes; long/short plans round-trip all fields including null Target2, exact replay is idempotent, and conflicting content under the same plan ID fails without rewriting history. Existing event, feature, opportunity, evidence, and configuration persistence also passes.
-- SQL-backed hosted fixture/API coverage passed **1/1 twice** against the same guarded database without reset. All four HTTP plans match persisted plans; all six table row counts remain unchanged on repeat. No development/live-validation database or live provider was used. See the [SQL closeout evidence](./VALIDATION_HISTORY.md#milestone-a22---sql-validation-closeout-2026-10-30).
-- The final required sequence passed: persistence/migrations **6/6**, SQL-backed hosted fixture **1/1**, repeat **1/1**, full offline units **279/279**, then solution build. Only tests and documentation changed; production code is unchanged.
-- `dotnet build MarketOpportunityEngine.sln --no-restore` succeeded with **0 warnings and 0 errors**.
-
-## A.2.3a prior-session context
-
-- `IHistoricalMarketDataSource` is separate from the live stream. The recorded fixture is the only implemented historical source. The fixture calendar explicitly maps `fixture-2026-10-23` to `fixture-2026-10-22`; session boundaries use U.S. equity regular-session `America/New_York` semantics expressed in UTC. There is no computed live calendar and no date subtraction.
-- Repository inspection found Alpaca and Massive WebSocket adapters only; neither implements historical REST retrieval. Persisted normalized `market_event` rows have no application read/replay interface. `SessionId` is explicit but does not reliably identify an exchange session. Provider historical entitlements, licensing, and retention are unverified.
-- `PriorSessionContext` is independently versioned as `prior-session-context-v1`. It reuses `FeatureCalculator` and `session-swing-fractal-v1`, with prior-session-only eligible events, event-time pivots, source-swing provenance, explicit completeness, coverage, and feed metadata. Complete-session high/low are extrema of eligible trade points; close is the last eligible trade by event time at or before session end, not necessarily an official exchange close. Partial fixture coverage exposes observed extrema and last trade without claiming full-session values.
-- Current-session distances and nearest prior support/resistance are a separate read projection; current price changes do not change context identity or prior levels. The scanner caches the first context per symbol/current-session and continues with an explicit unavailable result if history/calendar is missing or a historical read fails.
-- Context is deterministically rebuilt from approved fixture input, not persisted in SQL. This avoids treating existing live event retention as approved history; no migration or feature/configuration/Momentum/TradePlan version change was made.
-- `/api/v1/symbols/{symbol}/prior-context` and the dashboard's **PRIOR SESSION** section expose completeness, provenance, reference levels, pivots, and distances without adding readiness or action states. A.2.3b remains not started; its remaining prerequisite is an approved historical source with verified access/retention terms and an authoritative session calendar for live sessions.
-- Focused prior-context unit tests passed **10/10**; A.2.1 market-structure tests passed **13/13**, A.2.2 TradePlan tests **17/17**, and Momentum Continuation regressions **22/22**. The complete offline unit suite passed **289/289**. Hosted fixture/API/dashboard tests passed **2/2** without SQL/provider connections. Full solution build succeeded with **0 warnings and 0 errors**.
-- SQL persistence and full SQL integration tests were **not run**: no guarded `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was configured, and no schema change was made. No live provider was connected.
+No live-provider validation, outcome tracking, backtesting, ML/ONNX inference, broker integration, or order execution is part of A.2.3. See the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md) for product and architecture contracts.

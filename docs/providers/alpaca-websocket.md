@@ -64,7 +64,7 @@ finally {
 }
 ```
 
-The saved scanner universe is shared with Massive; setting it above replaces any previously saved live list. For a test-only override that leaves the saved list intact, use the [one-run command](../../README.md#override-selection-for-one-run). Migrate old provider-specific symbol keys using the [scanner-universe instructions](../../README.md#scanner-owned-universe-and-user-secrets-migration). Then run the app using the local SQL Server steps in the [README](../../README.md#local-run). User Secrets are for local development, are not encrypted, and must not be treated as a deployed secret store. The WebSocket adapter sends credentials only in Alpaca's documented authentication message and does not log them or include provider error text in exceptions.
+The scanner universe is shared with Massive. Configure it using the [README scanner-universe instructions](../../README.md#scanner-universe); migrate old provider-specific symbol keys explicitly rather than merging them. Start the app using the [README quick start](../../README.md#quick-start). User Secrets are for local development, are not encrypted, and must not be treated as a deployed secret store. The WebSocket adapter sends credentials only in Alpaca's documented authentication message and does not log them or include provider error text in exceptions.
 
 ## Adapter behavior and limitations
 
@@ -78,7 +78,7 @@ Feed health becomes unhealthy immediately on disconnect, suspending current publ
 
 ## Opt-in final A.1 diagnostics
 
-The [instrumented launcher procedure](../../README.md#one-final-instrumented-a1-observation) enables `MarketData:Diagnostics:Enabled` for one run only. Default provider/analytics behavior is unchanged.
+The [optional Alpaca validation procedure](../../README.md#optional-live-alpaca-validation) enables `MarketData:Diagnostics:Enabled` for one run only. Default provider/analytics behavior is unchanged.
 
 For each complete text WebSocket message, receipt UTC and monotonic time are sampled immediately after the final `ReceiveAsync` fragment and before decoding/parsing. Each canonical event retains its original `t` and per-item `ReceivedTimeUtc`; diagnostic `ParsedTimeUtc` is sampled after canonical construction and metadata extraction. A weak-reference sidecar associates connection ID, receipt/parsed times, and provider metadata without changing record equality, serialization, canonical identity, or event ordering.
 
