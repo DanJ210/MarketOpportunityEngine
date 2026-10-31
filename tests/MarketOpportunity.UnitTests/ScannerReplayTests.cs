@@ -974,6 +974,17 @@ public sealed class ScannerReplayTests
                 SessionPriceStructure = null,
                 LatestConfirmedSwingHigh = null,
                 LatestConfirmedSwingLow = null,
+                PreviousConfirmedSwingHigh = null,
+                PreviousConfirmedSwingLow = null,
+                StructureState = MarketStructureState.NotComputed,
+                HighSwingRelationship = SwingRelationship.NotComputed,
+                LowSwingRelationship = SwingRelationship.NotComputed,
+                NearestSupportCandidate = null,
+                NearestResistanceCandidate = null,
+                DistanceToNearestConfirmedSwingHigh = null,
+                DistanceToNearestConfirmedSwingHighPercent = null,
+                DistanceToNearestConfirmedSwingLow = null,
+                DistanceToNearestConfirmedSwingLowPercent = null,
                 SessionRealizedVolatilityPercent = null,
                 SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Insufficient,
                 SessionTrendDirection = TrendDirectionContext.Insufficient
@@ -984,6 +995,17 @@ public sealed class ScannerReplayTests
                 SessionPriceStructure = null,
                 LatestConfirmedSwingHigh = null,
                 LatestConfirmedSwingLow = null,
+                PreviousConfirmedSwingHigh = null,
+                PreviousConfirmedSwingLow = null,
+                StructureState = MarketStructureState.NotComputed,
+                HighSwingRelationship = SwingRelationship.NotComputed,
+                LowSwingRelationship = SwingRelationship.NotComputed,
+                NearestSupportCandidate = null,
+                NearestResistanceCandidate = null,
+                DistanceToNearestConfirmedSwingHigh = null,
+                DistanceToNearestConfirmedSwingHighPercent = null,
+                DistanceToNearestConfirmedSwingLow = null,
+                DistanceToNearestConfirmedSwingLowPercent = null,
                 SessionRealizedVolatilityPercent = null,
                 SessionRealizedVolatilityStatus = RealizedVolatilityStatus.Insufficient,
                 SessionTrendDirection = TrendDirectionContext.Insufficient
@@ -1937,7 +1959,7 @@ public sealed class ScannerReplayTests
         Assert.Equal((int)ShortHorizonDollarVolumeStatus.Available,
             document.RootElement.GetProperty("shortHorizonDollarVolumeStatus").GetInt32());
         Assert.Equal(features, JsonSerializer.Deserialize<FeatureSnapshot>(json, jsonOptions));
-        Assert.Equal("features-v15", features.FeatureSetVersion);
+        Assert.Equal("features-v16", features.FeatureSetVersion);
         Assert.Equal("scanner-config-v16", configuration.Version);
         Assert.Equal("momentum-continuation-v1", configuration.SetupDefinitionVersion);
 
@@ -1949,13 +1971,15 @@ public sealed class ScannerReplayTests
             "100", "100", "100", "", "", "", "Insufficient", "0", "Available", "Neutral", "", "", "", "", "", "0",
             "True", "True", "True", "True", "Good",
             JsonSerializer.Serialize(MarketDataCapabilities.Unknown),
-            "null", "null", "Insufficient"
+            "null", "null", "Insufficient",
+            "null", "null", "Insufficient", "Insufficient", "Insufficient",
+            "null", "null", "", "", "", ""
         };
         var identity = string.Join("\u001f", JsonSerializer.Serialize(configuration),
             string.Join("\u001e", state.GetEventsAsOf(AsOfUtc).Select(MarketEventIdentity.Create)),
             string.Join("\u001f", values));
         Assert.Equal(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(identity)).AsSpan(0, 16)), features.Id);
-        for (var index = values.Length - 3; index < values.Length; index++)
+        for (var index = values.Length - 14; index < values.Length; index++)
         {
             var changedValues = values.ToArray();
             changedValues[index] = "changed";

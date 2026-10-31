@@ -14,6 +14,31 @@ public enum MarketStructureStatus
     Available
 }
 
+public enum MarketStructureState
+{
+    NotComputed,
+    Insufficient,
+    Bullish,
+    Bearish,
+    Mixed,
+    Range
+}
+
+public enum SwingRelationship
+{
+    NotComputed,
+    Insufficient,
+    Higher,
+    Lower,
+    Equal
+}
+
+public enum StructuralLevelType
+{
+    Support,
+    Resistance
+}
+
 public sealed record ConfirmedSwing(
     Guid Id,
     string Symbol,
@@ -24,5 +49,19 @@ public sealed record ConfirmedSwing(
     string OriginEventIdentity,
     string ConfirmationEventIdentity,
     ConfirmedSwingType Type,
+    string FeatureSetVersion,
+    string AlgorithmVersion);
+
+public sealed record StructuralLevelCandidate(
+    Guid Id,
+    StructuralLevelType Type,
+    string Symbol,
+    string SessionId,
+    decimal Price,
+    DateTimeOffset EventTimeUtc,
+    DateTimeOffset ConfirmedAtEventTimeUtc,
+    Guid SourceSwingId,
+    string OriginEventIdentity,
+    string ConfirmationEventIdentity,
     string FeatureSetVersion,
     string AlgorithmVersion);

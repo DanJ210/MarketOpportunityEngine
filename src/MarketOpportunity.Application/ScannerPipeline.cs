@@ -40,6 +40,7 @@ public interface IScannerStore
         IReadOnlyCollection<MarketEvent> marketEvents,
         FeatureSnapshot featureSnapshot,
         Opportunity opportunity,
+        TradePlan tradePlan,
         CancellationToken cancellationToken);
 }
 
@@ -57,11 +58,13 @@ public sealed record ScannerStatus(
 public sealed record ScannerAnalysisResult(
     FeatureSnapshot Features,
     Opportunity Opportunity,
-    PublicationDecision Publication);
+    PublicationDecision Publication,
+    TradePlan TradePlan);
 
 public sealed record OpportunityPublicationReadModel(
     Opportunity Opportunity,
-    PublicationDecision Publication);
+    PublicationDecision Publication,
+    TradePlan TradePlan);
 
 public sealed record ScannerReadModel(
     ScannerStatus Status,
@@ -225,6 +228,7 @@ public sealed class ScannerPipeline(
     LivePipelineOptions? livePipelineOptions = null)
 {
     private static readonly TimeSpan LiveAnalysisInterval = TimeSpan.FromSeconds(5);
+    private readonly TradePlanBuilder _tradePlanBuilder = new();
     private readonly LiveMarketDataRecoveryOptions _recoveryOptions =
         recoveryOptions ?? new LiveMarketDataRecoveryOptions();
     private readonly LivePipelineOptions _livePipelineOptions =
@@ -282,7 +286,14 @@ public sealed class ScannerPipeline(
                 configuration,
                 source.Capabilities);
             var opportunity = detector.Evaluate(snapshot, configuration);
-            await store.PersistRunAsync(configuration, stateEvents, snapshot, opportunity, cancellationToken);
+            var tradePlan = _tradePlanBuilder.Build(snapshot, opportunity);
+            await store.PersistRunAsync(
+                configuration,
+                stateEvents,
+                snapshot,
+                opportunity,
+                tradePlan,
+                cancellationToken);
             results.Add(new ScannerAnalysisResult(
                 snapshot,
                 opportunity,
@@ -290,7 +301,8 @@ public sealed class ScannerPipeline(
                     OpportunityLifecycleState.NotQualified,
                     "PendingPublication",
                     "Publication status has not been evaluated.",
-                    asOfUtc)));
+                    asOfUtc),
+                tradePlan));
         }
 
         state.SetResults(
@@ -600,6 +612,7 @@ public sealed class ScannerPipeline(
                 var analysisStart = diagnostics?.AnalysisStarted(batch) ?? 0;
                 FeatureSnapshot snapshot;
                 Opportunity opportunity;
+                TradePlan tradePlan;
                 try
                 {
                     snapshot = featureCalculator.Calculate(
@@ -608,6 +621,7 @@ public sealed class ScannerPipeline(
                         configuration,
                         source.Capabilities);
                     opportunity = detector.Evaluate(snapshot, configuration);
+                    tradePlan = _tradePlanBuilder.Build(snapshot, opportunity);
                 }
                 catch
                 {
@@ -624,6 +638,7 @@ public sealed class ScannerPipeline(
                         batch,
                         snapshot,
                         opportunity,
+                        tradePlan,
                         persistenceCancellation.Token);
                 }
                 catch (OperationCanceledException) when (persistenceCancellation.IsCancellationRequested)
@@ -653,7 +668,8 @@ public sealed class ScannerPipeline(
                         OpportunityLifecycleState.NotQualified,
                         "PendingPublication",
                         "Publication status has not been evaluated.",
-                        asOfUtc));
+                        asOfUtc),
+                    tradePlan);
             }
 
             lock (statusSync)

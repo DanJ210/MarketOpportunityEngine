@@ -136,6 +136,9 @@ public sealed class FixtureWebApplicationTests
             Assert.True(opportunityIds.Add(opportunity.Id));
             var expectedOpportunity = expectedOpportunities[opportunity.Id];
             AssertJsonEqual(expectedOpportunity, opportunity);
+            Assert.Equal(opportunity.Id, result.TradePlan.OpportunityId);
+            Assert.Equal("trade-plan-v1", result.TradePlan.PlanDefinitionVersion);
+            Assert.Equal(opportunity.AsOfUtc, result.TradePlan.AsOfUtc);
             httpOpportunities.Add(opportunity.Id, opportunity);
 
             var expired = opportunity.SessionId == "fixture-2026-10-22";
@@ -160,8 +163,8 @@ public sealed class FixtureWebApplicationTests
             Assert.NotNull(snapshot);
             Assert.Equal(opportunity.Symbol, snapshot.Symbol);
             Assert.Equal(opportunity.SessionId, snapshot.SessionId);
-            Assert.Equal("features-v15", snapshot.FeatureSetVersion);
-            Assert.Equal("features-v15", opportunity.FeatureSetVersion);
+            Assert.Equal("features-v16", snapshot.FeatureSetVersion);
+            Assert.Equal("features-v16", opportunity.FeatureSetVersion);
             Assert.Equal("momentum-continuation-v1", opportunity.SetupDefinitionVersion);
             Assert.Equal("scanner-config-v16", opportunity.ConfigurationVersion);
             var expectedRange = expectedGroups[(opportunity.Symbol, opportunity.SessionId)];

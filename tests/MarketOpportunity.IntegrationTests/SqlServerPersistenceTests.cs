@@ -1,4 +1,5 @@
 using MarketOpportunity.Analytics;
+using MarketOpportunity.Application;
 using MarketOpportunity.Domain;
 using MarketOpportunity.Infrastructure;
 using Microsoft.Data.SqlClient;
@@ -70,11 +71,27 @@ public sealed class SqlServerPersistenceTests
             Assert.Equal(confirmed.Features, storedConfirmed);
             Assert.Equal(107m, storedConfirmed.LatestConfirmedSwingHigh!.Price);
             Assert.Equal(104m, storedConfirmed.LatestConfirmedSwingLow!.Price);
+            Assert.Equal(5m, storedConfirmed.PreviousConfirmedSwingHigh!.Price);
+            Assert.Equal(2m, storedConfirmed.PreviousConfirmedSwingLow!.Price);
+            Assert.Equal(MarketStructureState.Bullish, storedConfirmed.StructureState);
+            Assert.Equal(104m, storedConfirmed.NearestSupportCandidate!.Price);
+            Assert.Equal(105m, storedConfirmed.NearestResistanceCandidate!.Price);
             Assert.Equal(MarketEventIdentity.Create(events[7]), storedConfirmed.LatestConfirmedSwingHigh.OriginEventIdentity);
             Assert.Equal(MarketEventIdentity.Create(events[9]), storedConfirmed.LatestConfirmedSwingHigh.ConfirmationEventIdentity);
             Assert.Equal(configuration.FeatureSetVersion, storedConfirmed.LatestConfirmedSwingHigh.FeatureSetVersion);
             Assert.Equal("session-swing-fractal-v1", storedConfirmed.LatestConfirmedSwingHigh.AlgorithmVersion);
             Assert.Equal(2, await verifyContext.Opportunities.CountAsync(item => item.Symbol == symbol));
+            Assert.Equal(2, await verifyContext.TradePlans.CountAsync(item => item.Symbol == symbol));
+            var storedPlanJson = await verifyContext.TradePlans
+                .Where(item => item.Id == confirmed.TradePlan.Id)
+                .Select(item => item.TradePlanJson)
+                .SingleAsync();
+            var storedPlan = JsonSerializer.Deserialize<TradePlan>(
+                storedPlanJson, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.NotNull(storedPlan);
+            Assert.Equal(confirmed.TradePlan.Id, storedPlan.Id);
+            Assert.Equal(confirmed.TradePlan.RiskPerShare, storedPlan.RiskPerShare);
+            Assert.Equal(confirmed.TradePlan.Evidence, storedPlan.Evidence);
             Assert.Equal(events.Length, await verifyContext.MarketEvents.CountAsync(item => item.Symbol == symbol));
         }
         finally
@@ -177,6 +194,9 @@ public sealed class SqlServerPersistenceTests
             var storedOpportunities = await verifyContext.Opportunities
                 .Where(item => item.Symbol == symbol)
                 .ToListAsync();
+            var storedPlans = await verifyContext.TradePlans
+                .Where(item => item.Symbol == symbol)
+                .ToListAsync();
             var otherSymbolOpportunityCount = await verifyContext.Opportunities
                 .CountAsync(item => item.Symbol == otherSymbol && item.SessionId == sessionId);
             var storedEvidence = await verifyContext.OpportunityEvidence
@@ -192,6 +212,15 @@ public sealed class SqlServerPersistenceTests
             Assert.All(storedEvents.Where(item => item.SessionId == sessionId), item => Assert.Equal(symbol, item.Symbol));
             Assert.Equal(4, storedFeatures.Count);
             Assert.Equal(4, storedOpportunities.Count);
+            Assert.Equal(4, storedPlans.Count);
+            Assert.Equal(1, storedPlans.Count(item => item.Id == first.TradePlan.Id));
+            var storedFirstPlan = JsonSerializer.Deserialize<TradePlan>(
+                Assert.Single(storedPlans, item => item.Id == first.TradePlan.Id).TradePlanJson,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.NotNull(storedFirstPlan);
+            Assert.Equal(first.TradePlan.Id, storedFirstPlan.Id);
+            Assert.Equal(first.TradePlan.EntryZone, storedFirstPlan.EntryZone);
+            Assert.Equal(first.TradePlan.RewardRiskRatioTarget1, storedFirstPlan.RewardRiskRatioTarget1);
             Assert.Equal(1, otherSymbolOpportunityCount);
             Assert.Equal(2, storedConfigurations.Count);
             var originalConfiguration = Assert.Single(storedConfigurations,
@@ -346,7 +375,7 @@ public sealed class SqlServerPersistenceTests
         string connectionString,
         ScannerConfiguration configuration,
         IReadOnlyCollection<MarketEvent> events,
-        (FeatureSnapshot Features, Opportunity Opportunity) result)
+        (FeatureSnapshot Features, Opportunity Opportunity, TradePlan TradePlan) result)
     {
         await using var context = CreateContext(connectionString);
         var store = new EfScannerStore(context);
@@ -355,10 +384,11 @@ public sealed class SqlServerPersistenceTests
             events,
             result.Features,
             result.Opportunity,
+            result.TradePlan,
             CancellationToken.None);
     }
 
-    private static (FeatureSnapshot Features, Opportunity Opportunity) Analyze(
+    private static (FeatureSnapshot Features, Opportunity Opportunity, TradePlan TradePlan) Analyze(
         IReadOnlyCollection<MarketEvent> events,
         ScannerConfiguration configuration)
     {
@@ -382,7 +412,8 @@ public sealed class SqlServerPersistenceTests
                 true,
                 true));
         var opportunity = new MomentumContinuationDetector().Evaluate(features, configuration);
-        return (features, opportunity);
+        var tradePlan = new TradePlanBuilder().Build(features, opportunity);
+        return (features, opportunity, tradePlan);
     }
 
     private static MarketEvent[] CreateEvents(string symbol, string sessionId, decimal startPrice = 100m)
@@ -405,6 +436,7 @@ public sealed class SqlServerPersistenceTests
         string changedConfigurationVersion)
     {
         await using var context = CreateContext(connectionString);
+        await context.TradePlans.Where(item => symbols.Contains(item.Symbol)).ExecuteDeleteAsync();
         await context.Opportunities.Where(item => symbols.Contains(item.Symbol)).ExecuteDeleteAsync();
         await context.FeatureSnapshots.Where(item => symbols.Contains(item.Symbol)).ExecuteDeleteAsync();
         await context.MarketEvents.Where(item => symbols.Contains(item.Symbol)).ExecuteDeleteAsync();

@@ -145,7 +145,8 @@ app.MapGet("/api/v1/opportunities", (ScannerState scanner) =>
     Results.Ok(scanner.Read().Results
         .Select(result => new OpportunityPublicationReadModel(
             result.Opportunity,
-            result.Publication))
+            result.Publication,
+            result.TradePlan))
         .OrderByDescending(result => result.Opportunity.AsOfUtc)
         .ThenBy(result => result.Opportunity.Symbol, StringComparer.Ordinal)
         .ThenBy(result => result.Opportunity.SessionId, StringComparer.Ordinal)
@@ -156,7 +157,10 @@ app.MapGet("/api/v1/opportunities/{id:guid}", (Guid id, ScannerState scanner) =>
         .SingleOrDefault(item => item.Opportunity.Id == id);
     return result is null
         ? Results.NotFound()
-        : Results.Ok(new OpportunityPublicationReadModel(result.Opportunity, result.Publication));
+        : Results.Ok(new OpportunityPublicationReadModel(
+            result.Opportunity,
+            result.Publication,
+            result.TradePlan));
 });
 app.MapGet("/api/v1/symbols/{symbol}/snapshot", (string symbol, string? sessionId, ScannerState scanner) =>
 {

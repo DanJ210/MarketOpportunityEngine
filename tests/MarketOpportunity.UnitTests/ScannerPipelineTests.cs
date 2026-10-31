@@ -51,6 +51,9 @@ public sealed class ScannerPipelineTests
                 Assert.Equal(run.Features.SessionId, marketEvent.SessionId);
             });
             Assert.Equal(run.Features.SessionId, run.Opportunity.SessionId);
+            Assert.Equal(run.Opportunity.Id, run.TradePlan.OpportunityId);
+            Assert.Equal(run.Features.Symbol, run.TradePlan.Symbol);
+            Assert.Equal(run.Features.SessionId, run.TradePlan.SessionId);
         });
     }
 
@@ -74,6 +77,7 @@ public sealed class ScannerPipelineTests
         var secondRun = Assert.Single(secondStore.Runs);
         Assert.Equal(firstRun.Features, secondRun.Features);
         Assert.Equal(firstRun.Opportunity.Id, secondRun.Opportunity.Id);
+        Assert.Equal(firstRun.TradePlan.Id, secondRun.TradePlan.Id);
         Assert.Equal(
             firstRun.Events.Select(MarketEventIdentity.Create),
             secondRun.Events.Select(MarketEventIdentity.Create));
@@ -526,16 +530,17 @@ public sealed class ScannerPipelineTests
 
     private sealed class RecordingStore : IScannerStore
     {
-        public List<(IReadOnlyCollection<MarketEvent> Events, FeatureSnapshot Features, Opportunity Opportunity)> Runs { get; } = [];
+        public List<(IReadOnlyCollection<MarketEvent> Events, FeatureSnapshot Features, Opportunity Opportunity, TradePlan TradePlan)> Runs { get; } = [];
 
         public Task PersistRunAsync(
             ScannerConfiguration configuration,
             IReadOnlyCollection<MarketEvent> marketEvents,
             FeatureSnapshot featureSnapshot,
             Opportunity opportunity,
+            TradePlan tradePlan,
             CancellationToken cancellationToken)
         {
-            Runs.Add((marketEvents.ToArray(), featureSnapshot, opportunity));
+            Runs.Add((marketEvents.ToArray(), featureSnapshot, opportunity, tradePlan));
             return Task.CompletedTask;
         }
     }

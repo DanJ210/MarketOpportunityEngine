@@ -394,6 +394,50 @@ Fixture HTTP/persisted JSON values were independently derived from event-time-or
 
 The preceding descriptive trend-direction slice advanced `features-v11` / `scanner-config-v11` to `features-v12` / `scanner-config-v12`; the non-null `TrendDirectionContext` output and detailed rules remain in the README and source. That slice passed focused replay **123/123**, offline units **187/187**, hosted fixture **1/1 twice**, persistence/migrations **3/3**, and solution build. Its browser/live-provider/Azure checks were not run. This historical evidence is retained separately from the current `features-v13` results above.
 
+## Milestone A.2.1 - provider-neutral universe and market structure (2026-10-30)
+
+The scanner owns the live symbol universe through `Scanner:Universe:Symbols`; Alpaca and Massive share trim/uppercase/empty-entry validation and case-insensitive first-occurrence deduplication. No fallback or merge reads the deprecated provider-specific symbol keys. Fixture replay remains independent of the live universe. Launcher symbol discovery and the User Secrets migration documentation use the scanner-owned key.
+
+Market structure reuses the established two-sided, two-observation trade-point fractal. A candidate is confirmed by the second subsequent eligible canonical trade, and only events at or before snapshot `AsOfUtc` participate. Feature snapshots now retain latest and previous confirmed highs/lows, independent higher/lower/equal relationships, a combined Bullish/Bearish/Mixed/Range/Insufficient state, nearest support/resistance candidates sourced mechanically from confirmed lows/highs, and absolute/percent distances to the nearest confirmed high and low. Swing/level provenance and all new values participate in deterministic feature identity. The feature-set version is `features-v16`; configuration remains `scanner-config-v16`, and `momentum-continuation-v1` and its decisions are unchanged. Existing versioned snapshot JSON is sufficient; no SQL schema migration was added.
+
+**Passing offline validation:**
+
+| Scope | Command | Result |
+|---|---|---|
+| Focused structure | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj --filter FullyQualifiedName~MarketStructureTests --no-restore` | **13 passed, 0 failed, 0 skipped** |
+| Complete offline units | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj --no-restore` | **262 passed, 0 failed, 0 skipped** |
+| Momentum Continuation regression | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj --filter FullyQualifiedName~MomentumContinuationTests --no-restore` | **22 passed, 0 failed, 0 skipped** |
+| Hosted fixture/API/dashboard | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter FullyQualifiedName~StructureWebApplicationTests --no-restore` | **2 passed, 0 failed, 0 skipped**; fixture and synthetic sources use a capturing store and do not open SQL |
+| Offline validation launcher | `pwsh -NoLogo -NoProfile -File scripts\Test-AlpacaValidation.ps1` | **17 passed; no app, SQL, Docker, or provider connection started** |
+| Solution build | `dotnet build MarketOpportunityEngine.sln --no-restore` | **Succeeded, 0 warnings, 0 errors** |
+
+The focused replay, universe, and provider-option run used:
+
+```powershell
+dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj --filter "FullyQualifiedName~ScannerReplayTests|FullyQualifiedName~ScannerUniverseTests|FullyQualifiedName~AlpacaMarketDataTests|FullyQualifiedName~MassiveMarketDataOptionsTests" --no-restore
+```
+
+It passed **169/169**.
+
+The SQL target guard variable was absent. SQL-backed hosted-fixture and persistence tests were not run, and no SQL server/database was started, retargeted, or modified. No live-provider test or User Secrets inspection was performed. Fixture independence and deterministic replay were verified offline; Momentum Continuation regression tests passed as part of the complete unit suite.
+
+## Milestone A.2.2 - trade plan foundation (2026-10-30)
+
+`trade-plan-v1` creates an immutable provider-independent candidate plan from the existing directional opportunity and confirmed swing structure. Long entry zones span confirmed support to the reference price; short zones span the reference price to confirmed resistance. The midpoint is the exact decimal entry reference. Numeric invalidation uses a separate confirmed swing beyond the entry structure, and Target 1 uses the nearest confirmed opposing level. Incomplete geometry remains insufficient/forming; inconsistent geometry is rejected. Reward/risk is reported without a minimum-ratio veto. The plan does not alter Momentum Continuation qualification, score, classification, or vetoes.
+
+Each plan has a deterministic ID and is persisted separately in the SQL Server `trade_plan` table with symbol/session/as-of indexes. Identical replay content is idempotent; conflicting content for an existing ID fails rather than updating history. API opportunity list/detail responses include the plan, while Blazor labels the section **TRADE PLAN** and keeps publication health distinct. ADR-006 records the persistence decision.
+
+**Passing offline validation:**
+
+| Scope | Command | Result |
+|---|---|---|
+| Trade plan + structure + Momentum Continuation | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj --filter "FullyQualifiedName~TradePlanBuilderTests|FullyQualifiedName~MarketStructureTests|FullyQualifiedName~MomentumContinuationTests" --no-restore` | **52 passed, 0 failed, 0 skipped** |
+| Complete offline units | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj --no-restore` | **279 passed, 0 failed, 0 skipped** |
+| Hosted API/dashboard | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter FullyQualifiedName~StructureWebApplicationTests --no-restore` | **2 passed, 0 failed, 0 skipped**; in-process fixture/capturing store, no SQL or provider connection |
+| Full solution build | `dotnet build MarketOpportunityEngine.sln --no-restore` | **Succeeded, 0 warnings, 0 errors** |
+
+`MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was unset. SQL persistence and migration tests were **not run / unavailable**; no SQL server/database was started or modified. No live-provider validation or User Secrets inspection was performed.
+
 ## Historical Analysis Snapshot - retained-session trade-point ADX (2026-10-26)
 This is an explicit **trade-point ADX variant**, not bar-based ADX. The canonical events expose trades and quotes but no OHLC bars, so the calculator does not synthesize bars. Each eligible trade price is one observation. For consecutive prices `P[t-1]`, `P[t]`: `TR = abs(P[t] - P[t-1])`; `up = P[t] - P[t-1]`; `down = P[t-1] - P[t]`; `+DM = up` only when `up > down && up > 0`; `-DM = down` only when `down > up && down > 0`; otherwise the respective DM is zero. Equal consecutive prices have zero TR/DM.
 

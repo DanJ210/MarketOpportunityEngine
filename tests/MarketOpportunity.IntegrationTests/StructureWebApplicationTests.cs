@@ -15,6 +15,48 @@ namespace MarketOpportunity.IntegrationTests;
 public sealed class StructureWebApplicationTests
 {
     [Fact]
+    public async Task Hosted_fixture_api_and_dashboard_keep_structure_descriptive_and_offline()
+    {
+        await using var factory = new StructureApplicationFactory(useFixtureSource: true);
+        using var client = factory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        HttpResponseMessage? response = null;
+        while (!timeout.IsCancellationRequested)
+        {
+            response?.Dispose();
+            response = await client.GetAsync(
+                "/api/v1/symbols/MOE/snapshot?sessionId=fixture-2026-10-22", timeout.Token);
+            if (response.StatusCode == HttpStatusCode.OK)
+            {
+                break;
+            }
+
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token);
+        }
+
+        Assert.NotNull(response);
+        using (response)
+        using (var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token)))
+        {
+            var root = json.RootElement;
+            Assert.Equal("MOE", root.GetProperty("symbol").GetString());
+            Assert.Equal("fixture-2026-10-22", root.GetProperty("sessionId").GetString());
+            Assert.Equal("features-v16", root.GetProperty("featureSetVersion").GetString());
+            Assert.Equal("Available", root.GetProperty("marketStructureStatus").GetString());
+            Assert.Equal("Insufficient", root.GetProperty("structureState").GetString());
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("nearestSupportCandidate").ValueKind);
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("nearestResistanceCandidate").ValueKind);
+        }
+
+        var html = await client.GetStringAsync("/", timeout.Token);
+        Assert.Contains("MARKET STRUCTURE", html);
+        Assert.Contains("TRADE PLAN", html);
+        Assert.Contains("Insufficient", html);
+        Assert.Contains("not a probability of profit or a trading recommendation", html);
+    }
+
+    [Fact]
     public async Task Dashboard_and_snapshot_api_display_confirmed_structure_from_the_scanner()
     {
         await using var factory = new StructureApplicationFactory();
@@ -49,7 +91,7 @@ public sealed class StructureWebApplicationTests
             Assert.Equal(104m, low.GetProperty("price").GetDecimal());
             Assert.Equal("STRUCT", high.GetProperty("symbol").GetString());
             Assert.Equal("hosted-structure", high.GetProperty("sessionId").GetString());
-            Assert.Equal("features-v15", high.GetProperty("featureSetVersion").GetString());
+            Assert.Equal("features-v16", high.GetProperty("featureSetVersion").GetString());
             Assert.Equal("session-swing-fractal-v1", high.GetProperty("algorithmVersion").GetString());
             Assert.NotEqual(Guid.Empty, high.GetProperty("id").GetGuid());
             Assert.Equal(new DateTimeOffset(2026, 10, 23, 14, 30, 7, TimeSpan.Zero),
@@ -69,19 +111,50 @@ public sealed class StructureWebApplicationTests
                 "RecordedFixture", "hosted-009", 104m, 10)),
                 high.GetProperty("confirmationEventIdentity").GetString());
             Assert.Equal(factory.Store.Snapshot!.Id, root.GetProperty("id").GetGuid());
+            Assert.NotNull(factory.Store.TradePlan);
+            Assert.Equal("Bullish", root.GetProperty("structureState").GetString());
+            Assert.Equal("Higher", root.GetProperty("highSwingRelationship").GetString());
+            Assert.Equal("Higher", root.GetProperty("lowSwingRelationship").GetString());
+            Assert.Equal(105m, root.GetProperty("previousConfirmedSwingHigh").GetProperty("price").GetDecimal());
+            Assert.Equal(102m, root.GetProperty("previousConfirmedSwingLow").GetProperty("price").GetDecimal());
+            Assert.Equal(0m, root.GetProperty("distanceToNearestConfirmedSwingHigh").GetDecimal());
+            Assert.Equal(1m, root.GetProperty("distanceToNearestConfirmedSwingLow").GetDecimal());
+            Assert.Equal(104m, root.GetProperty("nearestSupportCandidate").GetProperty("price").GetDecimal());
+            Assert.Equal(105m, root.GetProperty("nearestResistanceCandidate").GetProperty("price").GetDecimal());
+        }
+
+        using (var opportunities = await client.GetAsync("/api/v1/opportunities", timeout.Token))
+        using (var json = JsonDocument.Parse(await opportunities.Content.ReadAsStringAsync(timeout.Token)))
+        {
+            Assert.Equal(HttpStatusCode.OK, opportunities.StatusCode);
+            var plan = Assert.Single(json.RootElement.EnumerateArray())
+                .GetProperty("tradePlan");
+            Assert.Equal("trade-plan-v1", plan.GetProperty("planDefinitionVersion").GetString());
+            Assert.Equal(factory.Store.TradePlan!.Id, plan.GetProperty("id").GetGuid());
+            Assert.Equal(factory.Store.TradePlan.Status.ToString(), plan.GetProperty("status").GetString());
+            Assert.Equal(factory.Store.TradePlan.AsOfUtc, plan.GetProperty("asOfUtc").GetDateTimeOffset());
         }
 
         var html = await client.GetStringAsync("/", timeout.Token);
-        Assert.Contains("Confirmed swing observations:", html);
-        Assert.Contains("Latest high: 107", html);
-        Assert.Contains("Latest low: 104", html);
-        Assert.Contains("class=\"structure-observations\"", html);
-        Assert.Contains("confirmation event", html);
+        Assert.Contains("Latest swing high: $107.00", html);
+        Assert.Contains("TRADE PLAN", html);
+        Assert.Contains("Candidate geometry only", html);
+        Assert.Contains("Latest swing low: $104.00", html);
+        Assert.Contains("MARKET STRUCTURE", html);
+        Assert.Contains("Nearest resistance candidate: $105.00 · support candidate: $104.00", html);
+        Assert.Contains("structure-observations", html);
         Assert.Contains("not a probability of profit or a trading recommendation", html);
     }
 
     private sealed class StructureApplicationFactory : WebApplicationFactory<Program>
     {
+        private readonly bool _useFixtureSource;
+
+        public StructureApplicationFactory(bool useFixtureSource = false)
+        {
+            _useFixtureSource = useFixtureSource;
+        }
+
         private static string WebProjectPath => Path.GetFullPath(Path.Combine(
             AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "MarketOpportunity.Web"));
 
@@ -102,8 +175,11 @@ public sealed class StructureWebApplicationTests
                 configuration.AddInMemoryCollection(Settings()));
             builder.ConfigureServices(services =>
             {
-                services.RemoveAll<IMarketDataSource>();
-                services.AddScoped<IMarketDataSource>(_ => new SyntheticStructureSource());
+                if (!_useFixtureSource)
+                {
+                    services.RemoveAll<IMarketDataSource>();
+                    services.AddScoped<IMarketDataSource>(_ => new SyntheticStructureSource());
+                }
                 services.RemoveAll<IScannerStore>();
                 services.AddSingleton<IScannerStore>(Store);
             });
@@ -120,15 +196,18 @@ public sealed class StructureWebApplicationTests
     private sealed class CapturingStore : IScannerStore
     {
         public FeatureSnapshot? Snapshot { get; private set; }
+        public TradePlan? TradePlan { get; private set; }
 
         public Task PersistRunAsync(
             ScannerConfiguration configuration,
             IReadOnlyCollection<MarketEvent> marketEvents,
             FeatureSnapshot featureSnapshot,
             Opportunity opportunity,
+            TradePlan tradePlan,
             CancellationToken cancellationToken)
         {
             Snapshot = featureSnapshot;
+            TradePlan = tradePlan;
             return Task.CompletedTask;
         }
     }

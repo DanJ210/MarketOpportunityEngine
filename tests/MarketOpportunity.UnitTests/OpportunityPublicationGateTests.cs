@@ -1,4 +1,5 @@
 using MarketOpportunity.Application;
+using MarketOpportunity.Analytics;
 using MarketOpportunity.Domain;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -46,7 +47,9 @@ public sealed class OpportunityPublicationGateTests
         var gate = new OpportunityPublicationGate();
         var state = new ScannerState(gate);
         var candidate = Candidate();
-        var result = new ScannerAnalysisResult(Features(), candidate, PendingPublication());
+        var features = Features();
+        var result = new ScannerAnalysisResult(
+            features, candidate, PendingPublication(), Plan(features, candidate));
 
         state.SetResults(Status(MarketDataHealthStatus.Live), [result], AsOfUtc);
         var active = Assert.Single(state.Read().Results);
@@ -58,6 +61,7 @@ public sealed class OpportunityPublicationGateTests
         Assert.Equal(OpportunityLifecycleState.Suspended, suspended.Publication.State);
         Assert.Equal("MarketDataStale", suspended.Publication.ReasonCode);
         Assert.Equal(candidate, suspended.Opportunity);
+        Assert.Equal(result.TradePlan, suspended.TradePlan);
         Assert.Equal(candidate.SupportingEvidence, suspended.Opportunity.SupportingEvidence);
         Assert.Equal(candidate.ContradictoryEvidence, suspended.Opportunity.ContradictoryEvidence);
         Assert.Empty(suspended.Opportunity.ActiveVetoes);
@@ -83,7 +87,9 @@ public sealed class OpportunityPublicationGateTests
         var candidate = Candidate();
         var first = new ScannerState();
         var second = new ScannerState();
-        var result = new ScannerAnalysisResult(Features(), candidate, PendingPublication());
+        var features = Features();
+        var result = new ScannerAnalysisResult(
+            features, candidate, PendingPublication(), Plan(features, candidate));
 
         first.SetResults(Status(MarketDataHealthStatus.Recorded), [result]);
         second.SetResults(Status(MarketDataHealthStatus.Recorded), [result]);
@@ -99,9 +105,12 @@ public sealed class OpportunityPublicationGateTests
     public void Publication_state_and_reason_are_part_of_the_application_read_model()
     {
         var state = new ScannerState();
+        var features = Features();
+        var opportunity = Candidate();
         state.SetResults(
             Status(MarketDataHealthStatus.Offline),
-            [new ScannerAnalysisResult(Features(), Candidate(), PendingPublication())],
+            [new ScannerAnalysisResult(
+                features, opportunity, PendingPublication(), Plan(features, opportunity))],
             AsOfUtc);
 
         var readModel = state.Read();
@@ -119,7 +128,11 @@ public sealed class OpportunityPublicationGateTests
             "MarketDataStale",
             "Market data is stale.",
             AsOfUtc);
-        var apiModel = new OpportunityPublicationReadModel(Candidate(), publication);
+        var opportunity = Candidate();
+        var apiModel = new OpportunityPublicationReadModel(
+            opportunity,
+            publication,
+            Plan(Features(), opportunity));
         var json = JsonSerializer.Serialize(
             apiModel,
             new JsonSerializerOptions(JsonSerializerDefaults.Web)
@@ -138,6 +151,9 @@ public sealed class OpportunityPublicationGateTests
             "Unknown",
             document.RootElement.GetProperty("opportunity").GetProperty("marketData")
                 .GetProperty("provider").GetString());
+        Assert.Equal(
+            TradePlanBuilder.DefinitionVersion,
+            document.RootElement.GetProperty("tradePlan").GetProperty("planDefinitionVersion").GetString());
     }
 
     [Fact]
@@ -161,6 +177,9 @@ public sealed class OpportunityPublicationGateTests
             "PendingPublication",
             "Pending.",
             AsOfUtc);
+
+    private static TradePlan Plan(FeatureSnapshot features, Opportunity opportunity) =>
+        new TradePlanBuilder().Build(features, opportunity);
 
     private static FeatureSnapshot Features() =>
         new(

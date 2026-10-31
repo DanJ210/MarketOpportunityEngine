@@ -136,25 +136,15 @@
                             <strong>@features.SessionTrendDirection</strong>
                             <small>VWAP slope: @features.SessionVwapSlopeDirection · EMA fast/medium: @FormatPrice(features.FastEma) / @FormatPrice(features.MediumEma)</small>
                             <small>Price structure: @(features.SessionPriceStructure?.ToString() ?? "Insufficient") · ADX: @FormatPrice(features.SessionAdx) (@features.SessionAdxStatus)</small>
-                            <div class="structure-observations" aria-label="Confirmed swing observations">
-                                <small>Confirmed swing observations: @features.MarketStructureStatus @(features.HasCompleteSessionData ? "" : "(partial retained state)")</small>
-                                @if (features.LatestConfirmedSwingHigh is { } swingHigh)
-                                {
-                                    <small>Latest high: @FormatSwingPrice(swingHigh.Price) · pivot event <time class="local-time" data-local-time datetime="@ToUtcIso(swingHigh.EventTimeUtc)">@FormatUtc(swingHigh.EventTimeUtc)</time> · confirmation event <time class="local-time" data-local-time datetime="@ToUtcIso(swingHigh.ConfirmedAtEventTimeUtc)">@FormatUtc(swingHigh.ConfirmedAtEventTimeUtc)</time></small>
-                                }
-                                else
-                                {
-                                    <small>Latest confirmed high: unavailable</small>
-                                }
-                                @if (features.LatestConfirmedSwingLow is { } swingLow)
-                                {
-                                    <small>Latest low: @FormatSwingPrice(swingLow.Price) · pivot event <time class="local-time" data-local-time datetime="@ToUtcIso(swingLow.EventTimeUtc)">@FormatUtc(swingLow.EventTimeUtc)</time> · confirmation event <time class="local-time" data-local-time datetime="@ToUtcIso(swingLow.ConfirmedAtEventTimeUtc)">@FormatUtc(swingLow.ConfirmedAtEventTimeUtc)</time></small>
-                                }
-                                else
-                                {
-                                    <small>Latest confirmed low: unavailable</small>
-                                }
-                            </div>
+                        </article>
+                        <article class="metric-card structure-observations" aria-label="Market Structure">
+                            <span>MARKET STRUCTURE</span>
+                            <strong>@features.StructureState</strong>
+                            <small>Current price: @FormatStructurePrice(features.ReferencePrice) · availability: @features.MarketStructureStatus @(features.HasCompleteSessionData ? "" : "(partial retained state)")</small>
+                            <small>Latest swing high: @FormatStructurePrice(features.LatestConfirmedSwingHigh?.Price) · previous: @FormatStructurePrice(features.PreviousConfirmedSwingHigh?.Price) · @features.HighSwingRelationship</small>
+                            <small>Latest swing low: @FormatStructurePrice(features.LatestConfirmedSwingLow?.Price) · previous: @FormatStructurePrice(features.PreviousConfirmedSwingLow?.Price) · @features.LowSwingRelationship</small>
+                            <small>Nearest resistance candidate: @FormatStructurePrice(features.NearestResistanceCandidate?.Price) · support candidate: @FormatStructurePrice(features.NearestSupportCandidate?.Price)</small>
+                            <small>Distance to nearest confirmed high/low: @FormatStructurePrice(features.DistanceToNearestConfirmedSwingHigh) / @FormatStructurePrice(features.DistanceToNearestConfirmedSwingLow) (@FormatPercent(features.DistanceToNearestConfirmedSwingHighPercent) / @FormatPercent(features.DistanceToNearestConfirmedSwingLowPercent))</small>
                         </article>
                         <article class="metric-card">
                             <span>QUALITY / RANGE</span>
@@ -162,6 +152,44 @@
                             <small>Range position: @FormatPercent(features.SessionRangePositionPercent) · realized volatility: @FormatPercent(features.SessionRealizedVolatilityPercent)</small>
                             <small>Data quality: @features.DataQuality · complete session: @features.HasCompleteSessionData</small>
                         </article>
+                    </section>
+
+                    <section class="invalidation-panel trade-plan-panel" aria-label="Trade plan">
+                        <h3>TRADE PLAN</h3>
+                        <p>
+                            <strong>@PlanTitle(result.TradePlan) · @result.TradePlan.Status</strong>
+                            · current publication: @result.Publication.State
+                        </p>
+                        <p>
+                            Entry zone: @FormatZone(result.TradePlan.EntryZone) ·
+                            entry reference: @FormatStructurePrice(result.TradePlan.EntryReferencePrice)
+                        </p>
+                        <p>
+                            Invalidation: @FormatStructurePrice(result.TradePlan.InvalidationPrice) ·
+                            Target 1: @FormatStructurePrice(result.TradePlan.Target1?.Price) ·
+                            Target 2: @FormatStructurePrice(result.TradePlan.Target2?.Price)
+                        </p>
+                        <p>
+                            Risk/share: @FormatStructurePrice(result.TradePlan.RiskPerShare) ·
+                            Reward/share: @FormatStructurePrice(result.TradePlan.RewardPerShareToTarget1) ·
+                            Reward / Risk: @FormatRewardRisk(result.TradePlan.RewardRiskRatioTarget1)
+                        </p>
+                        <p>
+                            As of @FormatUtc(result.TradePlan.AsOfUtc) ·
+                            expires @FormatUtc(result.TradePlan.ValidUntilUtc) ·
+                            version @result.TradePlan.PlanDefinitionVersion
+                        </p>
+                        @if (result.TradePlan.Evidence.Count > 0)
+                        {
+                            <h4>Structural reasoning</h4>
+                            <ul class="evidence-list">
+                                @foreach (var evidence in result.TradePlan.Evidence)
+                                {
+                                    <li><strong>@evidence.Code</strong><span>@evidence.Description</span></li>
+                                }
+                            </ul>
+                        }
+                        <p class="muted">Candidate geometry only; it is not an instruction to trade.</p>
                     </section>
 
                     <div class="evidence-grid">
@@ -334,7 +362,24 @@
         _ => "avoid"
     };
 
+    private static string PlanTitle(TradePlan plan) => plan.Direction switch
+    {
+        TradeDirection.Long => "Potential Long Plan",
+        TradeDirection.Short => "Potential Short Plan",
+        _ => "No Directional Plan"
+    };
+
+    private static string FormatZone(PriceZone? zone) =>
+        zone is null
+            ? "--"
+            : $"{FormatStructurePrice(zone.Low)} - {FormatStructurePrice(zone.High)}";
+
+    private static string FormatRewardRisk(decimal? ratio) =>
+        ratio is null ? "--" : $"{ratio.Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)} : 1";
+
     private static string FormatPrice(decimal? price) => price?.ToString("F2") ?? "--";
+    private static string FormatStructurePrice(decimal? price) =>
+        price is null ? "--" : $"${price.Value:F2}";
     private static string FormatSwingPrice(decimal price) =>
         price.ToString("G29", System.Globalization.CultureInfo.InvariantCulture);
     private static string FormatPercent(decimal? value) => value is null ? "--" : $"{value.Value:F2}%";

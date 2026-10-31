@@ -222,7 +222,18 @@ public sealed record FeatureSnapshot(
     MarketDataCapabilities MarketData,
     ConfirmedSwing? LatestConfirmedSwingHigh = null,
     ConfirmedSwing? LatestConfirmedSwingLow = null,
-    MarketStructureStatus MarketStructureStatus = MarketStructureStatus.NotComputed);
+    MarketStructureStatus MarketStructureStatus = MarketStructureStatus.NotComputed,
+    ConfirmedSwing? PreviousConfirmedSwingHigh = null,
+    ConfirmedSwing? PreviousConfirmedSwingLow = null,
+    MarketStructureState StructureState = MarketStructureState.NotComputed,
+    SwingRelationship HighSwingRelationship = SwingRelationship.NotComputed,
+    SwingRelationship LowSwingRelationship = SwingRelationship.NotComputed,
+    StructuralLevelCandidate? NearestSupportCandidate = null,
+    StructuralLevelCandidate? NearestResistanceCandidate = null,
+    decimal? DistanceToNearestConfirmedSwingHigh = null,
+    decimal? DistanceToNearestConfirmedSwingHighPercent = null,
+    decimal? DistanceToNearestConfirmedSwingLow = null,
+    decimal? DistanceToNearestConfirmedSwingLowPercent = null);
 
 public enum OpportunityClassification
 {
@@ -279,7 +290,7 @@ public sealed record Opportunity(
 public sealed record ScannerConfiguration
 {
     public string Version { get; init; } = "scanner-config-v16";
-    public string FeatureSetVersion { get; init; } = "features-v15";
+    public string FeatureSetVersion { get; init; } = "features-v16";
     public string SetupDefinitionVersion { get; init; } = "momentum-continuation-v1";
     public int MaximumStateEvents { get; init; } = 10_000;
     public int MomentumWindowSeconds { get; init; } = 60;

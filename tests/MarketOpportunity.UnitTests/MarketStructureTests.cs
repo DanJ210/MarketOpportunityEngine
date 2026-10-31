@@ -40,7 +40,7 @@ public sealed class MarketStructureTests
         Assert.Equal(trades[4].EventTimeUtc, firstHigh.ConfirmedAtEventTimeUtc);
         Assert.Equal(MarketEventIdentity.Create(trades[2]), firstHigh.OriginEventIdentity);
         Assert.Equal(MarketEventIdentity.Create(trades[4]), firstHigh.ConfirmationEventIdentity);
-        Assert.Equal("features-v15", firstHigh.FeatureSetVersion);
+        Assert.Equal("features-v16", firstHigh.FeatureSetVersion);
         Assert.Equal("session-swing-fractal-v1", firstHigh.AlgorithmVersion);
         Assert.Equal(ExpectedId(firstHigh), firstHigh.Id);
         Assert.Null(atConfirmation.LatestConfirmedSwingLow);
@@ -57,7 +57,61 @@ public sealed class MarketStructureTests
         Assert.Equal(trades[11].EventTimeUtc, low.ConfirmedAtEventTimeUtc);
         Assert.Equal(ExpectedId(low), low.Id);
         Assert.NotEqual(high.Id, low.Id);
+        Assert.Equal(5m, final.PreviousConfirmedSwingHigh!.Price);
+        Assert.Equal(2m, final.PreviousConfirmedSwingLow!.Price);
+        Assert.Equal(SwingRelationship.Higher, final.HighSwingRelationship);
+        Assert.Equal(SwingRelationship.Higher, final.LowSwingRelationship);
+        Assert.Equal(MarketStructureState.Bullish, final.StructureState);
+        Assert.Equal(0m, final.DistanceToNearestConfirmedSwingHigh);
+        Assert.Equal(0m, final.DistanceToNearestConfirmedSwingHighPercent);
+        Assert.Equal(1m, final.DistanceToNearestConfirmedSwingLow);
+        Assert.Equal(20m, final.DistanceToNearestConfirmedSwingLowPercent);
+        Assert.Equal(StructuralLevelType.Support, final.NearestSupportCandidate!.Type);
+        Assert.Equal(4m, final.NearestSupportCandidate.Price);
+        Assert.Equal(low.Id, final.NearestSupportCandidate.SourceSwingId);
         Assert.Equal(PriceStructure.HigherHighHigherLow, final.SessionPriceStructure);
+    }
+
+    [Fact]
+    public void Derives_bearish_mixed_and_range_states_from_confirmed_swing_relationships()
+    {
+        var bearishTrades = CreateTrades([18.5m, 19m, 15m, 17m, 18m, 16m, 17m, 13m, 15m, 16m, 14m, 15m]);
+        var mixedTrades = CreateTrades([1m, 2m, 5m, 3m, 2m, 4m, 3m, 6m, 5m, 1m, 2m, 3m]);
+        var rangeTrades = CreateTrades([1m, 2m, 5m, 3m, 1m, 2m, 5m, 3m, 1m, 2m, 4m]);
+
+        var bearish = _calculator.Calculate(State(bearishTrades), bearishTrades[^1].EventTimeUtc, _configuration);
+        var mixed = _calculator.Calculate(State(mixedTrades), mixedTrades[^1].EventTimeUtc, _configuration);
+        var range = _calculator.Calculate(State(rangeTrades), rangeTrades[^1].EventTimeUtc, _configuration);
+
+        Assert.Equal(MarketStructureState.Bearish, bearish.StructureState);
+        Assert.Equal(SwingRelationship.Lower, bearish.HighSwingRelationship);
+        Assert.Equal(SwingRelationship.Lower, bearish.LowSwingRelationship);
+        Assert.Equal(MarketStructureState.Mixed, mixed.StructureState);
+        Assert.Equal(SwingRelationship.Higher, mixed.HighSwingRelationship);
+        Assert.Equal(SwingRelationship.Lower, mixed.LowSwingRelationship);
+        Assert.Equal(MarketStructureState.Range, range.StructureState);
+        Assert.Equal(SwingRelationship.Equal, range.HighSwingRelationship);
+        Assert.Equal(SwingRelationship.Equal, range.LowSwingRelationship);
+    }
+
+    [Fact]
+    public void Derives_nearest_support_and_resistance_with_swing_provenance()
+    {
+        var trades = CreateTrades(Prices);
+        var snapshot = _calculator.Calculate(State(trades), trades[^1].EventTimeUtc, _configuration);
+        var support = Assert.IsType<StructuralLevelCandidate>(snapshot.NearestSupportCandidate);
+        var resistance = Assert.IsType<StructuralLevelCandidate>(snapshot.NearestResistanceCandidate);
+
+        Assert.Equal(StructuralLevelType.Support, support.Type);
+        Assert.Equal(snapshot.LatestConfirmedSwingLow!.Price, support.Price);
+        Assert.Equal(snapshot.LatestConfirmedSwingLow.Id, support.SourceSwingId);
+        Assert.Equal(snapshot.LatestConfirmedSwingLow.OriginEventIdentity, support.OriginEventIdentity);
+        Assert.Equal(snapshot.LatestConfirmedSwingLow.ConfirmationEventIdentity, support.ConfirmationEventIdentity);
+        Assert.Equal(StructuralLevelType.Resistance, resistance.Type);
+        Assert.Equal(5m, resistance.Price);
+        Assert.Equal(snapshot.PreviousConfirmedSwingHigh!.Id, resistance.SourceSwingId);
+        Assert.NotEqual(Guid.Empty, support.Id);
+        Assert.NotEqual(Guid.Empty, resistance.Id);
     }
 
     [Fact]
@@ -152,6 +206,7 @@ public sealed class MarketStructureTests
         var invalid = CreateTrades([1m, 2m, 0m, 4m, 5m]);
 
         Assert.Equal(MarketStructureStatus.Insufficient, noTrades.MarketStructureStatus);
+        Assert.Equal(MarketStructureState.Insufficient, noTrades.StructureState);
         Assert.Equal(MarketStructureStatus.Insufficient,
             _calculator.Calculate(State(tooFew), tooFew[^1].EventTimeUtc, _configuration).MarketStructureStatus);
         var monotonic = _calculator.Calculate(State(rising), rising[^1].EventTimeUtc, _configuration);
@@ -160,6 +215,7 @@ public sealed class MarketStructureTests
         Assert.Null(monotonic.LatestConfirmedSwingLow);
         var invalidSnapshot = _calculator.Calculate(State(invalid), invalid[^1].EventTimeUtc, _configuration);
         Assert.Equal(MarketStructureStatus.InvalidPriceData, invalidSnapshot.MarketStructureStatus);
+        Assert.Equal(MarketStructureState.Insufficient, invalidSnapshot.StructureState);
         Assert.Null(invalidSnapshot.LatestConfirmedSwingHigh);
         Assert.Null(invalidSnapshot.LatestConfirmedSwingLow);
     }
@@ -263,6 +319,10 @@ public sealed class MarketStructureTests
         Assert.Equal((int)ConfirmedSwingType.ConfirmedSwingHigh, persistedHigh.GetProperty("type").GetInt32());
         Assert.Equal((int)MarketStructureStatus.Available,
             persisted.RootElement.GetProperty("marketStructureStatus").GetInt32());
+        Assert.Equal((int)MarketStructureState.Bullish,
+            persisted.RootElement.GetProperty("structureState").GetInt32());
+        Assert.Equal((int)StructuralLevelType.Support,
+            persisted.RootElement.GetProperty("nearestSupportCandidate").GetProperty("type").GetInt32());
         Assert.Equal(snapshot, JsonSerializer.Deserialize<FeatureSnapshot>(persistedJson, persistedOptions));
 
         var apiOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
@@ -272,17 +332,32 @@ public sealed class MarketStructureTests
         Assert.Equal("ConfirmedSwingHigh",
             api.RootElement.GetProperty("latestConfirmedSwingHigh").GetProperty("type").GetString());
         Assert.Equal("Available", api.RootElement.GetProperty("marketStructureStatus").GetString());
+        Assert.Equal("Bullish", api.RootElement.GetProperty("structureState").GetString());
+        Assert.Equal("Support",
+            api.RootElement.GetProperty("nearestSupportCandidate").GetProperty("type").GetString());
         Assert.Equal(snapshot, JsonSerializer.Deserialize<FeatureSnapshot>(apiJson, apiOptions));
 
         var legacy = JsonNode.Parse(persistedJson)!.AsObject();
         legacy.Remove("latestConfirmedSwingHigh");
         legacy.Remove("latestConfirmedSwingLow");
         legacy.Remove("marketStructureStatus");
+        legacy.Remove("previousConfirmedSwingHigh");
+        legacy.Remove("previousConfirmedSwingLow");
+        legacy.Remove("structureState");
+        legacy.Remove("highSwingRelationship");
+        legacy.Remove("lowSwingRelationship");
+        legacy.Remove("nearestSupportCandidate");
+        legacy.Remove("nearestResistanceCandidate");
+        legacy.Remove("distanceToNearestConfirmedSwingHigh");
+        legacy.Remove("distanceToNearestConfirmedSwingHighPercent");
+        legacy.Remove("distanceToNearestConfirmedSwingLow");
+        legacy.Remove("distanceToNearestConfirmedSwingLowPercent");
         var legacySnapshot = legacy.Deserialize<FeatureSnapshot>(persistedOptions);
         Assert.NotNull(legacySnapshot);
         Assert.Null(legacySnapshot.LatestConfirmedSwingHigh);
         Assert.Null(legacySnapshot.LatestConfirmedSwingLow);
         Assert.Equal(MarketStructureStatus.NotComputed, legacySnapshot.MarketStructureStatus);
+        Assert.Equal(MarketStructureState.NotComputed, legacySnapshot.StructureState);
 
         var detector = new MomentumContinuationDetector();
         var baseline = detector.Evaluate(snapshot, _configuration);

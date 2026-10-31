@@ -14,8 +14,19 @@ public sealed class EfScannerStore(MarketOpportunityDbContext dbContext) : IScan
         IReadOnlyCollection<MarketEvent> marketEvents,
         FeatureSnapshot featureSnapshot,
         Opportunity opportunity,
+        TradePlan tradePlan,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(tradePlan);
+        if (tradePlan.OpportunityId != opportunity.Id
+            || tradePlan.Symbol != featureSnapshot.Symbol
+            || tradePlan.SessionId != featureSnapshot.SessionId
+            || tradePlan.AsOfUtc != featureSnapshot.AsOfUtc)
+        {
+            throw new InvalidOperationException(
+                "The candidate trade plan must match its persisted feature snapshot and opportunity.");
+        }
+
         var configurationJson = JsonSerializer.Serialize(configuration, JsonOptions);
         var existingConfiguration = await dbContext.ConfigurationSnapshots
             .SingleOrDefaultAsync(item => item.Version == configuration.Version, cancellationToken);
@@ -113,6 +124,28 @@ public sealed class EfScannerStore(MarketOpportunityDbContext dbContext) : IScan
             opportunityEntity.Evidence.Add(
                 ToEvidenceEntity(opportunity.Id, "Invalidation", "InvalidationCondition", opportunity.InvalidationCondition));
             dbContext.Opportunities.Add(opportunityEntity);
+        }
+
+        var tradePlanJson = JsonSerializer.Serialize(tradePlan, JsonOptions);
+        var existingTradePlan = await dbContext.TradePlans
+            .SingleOrDefaultAsync(item => item.Id == tradePlan.Id, cancellationToken);
+        if (existingTradePlan is null)
+        {
+            dbContext.TradePlans.Add(new TradePlanEntity
+            {
+                Id = tradePlan.Id,
+                Symbol = tradePlan.Symbol,
+                SessionId = tradePlan.SessionId,
+                AsOfUtc = tradePlan.AsOfUtc,
+                OpportunityId = tradePlan.OpportunityId,
+                PlanDefinitionVersion = tradePlan.PlanDefinitionVersion,
+                TradePlanJson = tradePlanJson
+            });
+        }
+        else if (!string.Equals(existingTradePlan.TradePlanJson, tradePlanJson, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Trade plan '{tradePlan.Id}' is immutable and already has different values.");
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);

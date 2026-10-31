@@ -111,6 +111,7 @@ public sealed class FeatureCalculator
 {
     private const int SwingPivotStrength = 2;
     private const string SwingAlgorithmVersion = "session-swing-fractal-v1";
+    private const string StructureAlgorithmVersion = "session-market-structure-v1";
 
     public FeatureSnapshot Calculate(
         SymbolEventState state,
@@ -143,9 +144,13 @@ public sealed class FeatureCalculator
                     / (sessionHighPrice.Value - sessionLowPrice.Value)
                     * 100m
                 : null;
-        var (sessionPriceStructure, latestConfirmedSwingHigh, latestConfirmedSwingLow, marketStructureStatus) =
-            CalculateMarketStructure(
-                trades, hasValidSessionPrices, state.Symbol, state.SessionId, configuration.FeatureSetVersion);
+        var structure = CalculateMarketStructure(
+            trades,
+            hasValidSessionPrices,
+            latestTrade?.Price,
+            state.Symbol,
+            state.SessionId,
+            configuration.FeatureSetVersion);
         var (sessionAdx, sessionAdxStatus) = CalculateAdx(
             trades,
             configuration.TrendStrengthPeriod,
@@ -235,7 +240,7 @@ public sealed class FeatureCalculator
             mediumEmaSlopePerMinute,
             sessionVwapSlopePerMinute,
             sessionVwapSlopeDirection,
-            sessionPriceStructure,
+            structure.PriceStructure,
             sessionAdx,
             sessionAdxStatus);
 
@@ -303,7 +308,7 @@ public sealed class FeatureCalculator
             Format(sessionHighPrice),
             Format(sessionLowPrice),
             Format(sessionRangePositionPercent),
-            sessionPriceStructure?.ToString() ?? "",
+            structure.PriceStructure?.ToString() ?? "",
             Format(sessionAdx),
             sessionAdxStatus.ToString(),
             Format(sessionRealizedVolatilityPercent),
@@ -321,9 +326,20 @@ public sealed class FeatureCalculator
             (!state.HasEvictedEvents).ToString(),
             quality.ToString(),
             JsonSerializer.Serialize(marketData),
-            JsonSerializer.Serialize(latestConfirmedSwingHigh),
-            JsonSerializer.Serialize(latestConfirmedSwingLow),
-            marketStructureStatus.ToString()
+            JsonSerializer.Serialize(structure.LatestHigh),
+            JsonSerializer.Serialize(structure.LatestLow),
+            structure.Status.ToString(),
+            JsonSerializer.Serialize(structure.PreviousHigh),
+            JsonSerializer.Serialize(structure.PreviousLow),
+            structure.State.ToString(),
+            structure.HighRelationship.ToString(),
+            structure.LowRelationship.ToString(),
+            JsonSerializer.Serialize(structure.NearestSupport),
+            JsonSerializer.Serialize(structure.NearestResistance),
+            Format(structure.DistanceToNearestHigh),
+            Format(structure.DistanceToNearestHighPercent),
+            Format(structure.DistanceToNearestLow),
+            Format(structure.DistanceToNearestLowPercent)
         };
         var inputIdentity = string.Join(
             "\u001f",
@@ -356,7 +372,7 @@ public sealed class FeatureCalculator
             sessionHighPrice,
             sessionLowPrice,
             sessionRangePositionPercent,
-            sessionPriceStructure,
+            structure.PriceStructure,
             sessionAdx,
             sessionAdxStatus,
             sessionRealizedVolatilityPercent,
@@ -374,9 +390,20 @@ public sealed class FeatureCalculator
             !state.HasEvictedEvents,
             quality,
             marketData,
-            latestConfirmedSwingHigh,
-            latestConfirmedSwingLow,
-            marketStructureStatus);
+            structure.LatestHigh,
+            structure.LatestLow,
+            structure.Status,
+            structure.PreviousHigh,
+            structure.PreviousLow,
+            structure.State,
+            structure.HighRelationship,
+            structure.LowRelationship,
+            structure.NearestSupport,
+            structure.NearestResistance,
+            structure.DistanceToNearestHigh,
+            structure.DistanceToNearestHighPercent,
+            structure.DistanceToNearestLow,
+            structure.DistanceToNearestLowPercent);
     }
 
     private static (decimal? Value, ShortHorizonDollarVolumeStatus Status) CalculateShortHorizonDollarVolume(
@@ -590,36 +617,31 @@ public sealed class FeatureCalculator
         return (ema, slopePerMinute);
     }
 
-    private static (
-        PriceStructure? PriceStructure,
-        ConfirmedSwing? LatestHigh,
-        ConfirmedSwing? LatestLow,
-        MarketStructureStatus Status) CalculateMarketStructure(
+    private static CalculatedMarketStructure CalculateMarketStructure(
         IReadOnlyList<TradeEvent> trades,
         bool pricesAreValid,
+        decimal? referencePrice,
         string symbol,
         string sessionId,
         string featureSetVersion)
     {
         if (trades.Count == 0)
         {
-            return (null, null, null, MarketStructureStatus.Insufficient);
+            return CalculatedMarketStructure.Insufficient;
         }
 
         if (!pricesAreValid)
         {
-            return (null, null, null, MarketStructureStatus.InvalidPriceData);
+            return CalculatedMarketStructure.InvalidPriceData;
         }
 
         if (trades.Count < (SwingPivotStrength * 2) + 1)
         {
-            return (null, null, null, MarketStructureStatus.Insufficient);
+            return CalculatedMarketStructure.Insufficient;
         }
 
-        var previousHighIndex = -1;
-        var latestHighIndex = -1;
-        var previousLowIndex = -1;
-        var latestLowIndex = -1;
+        var highIndexes = new List<int>();
+        var lowIndexes = new List<int>();
         for (var index = SwingPivotStrength; index < trades.Count - SwingPivotStrength; index++)
         {
             var price = trades[index].Price;
@@ -650,36 +672,144 @@ public sealed class FeatureCalculator
 
             if (isHigh)
             {
-                previousHighIndex = latestHighIndex;
-                latestHighIndex = index;
+                highIndexes.Add(index);
             }
 
             if (isLow)
             {
-                previousLowIndex = latestLowIndex;
-                latestLowIndex = index;
+                lowIndexes.Add(index);
             }
         }
 
-        var latestHigh = CreateConfirmedSwing(
-            trades, latestHighIndex, ConfirmedSwingType.ConfirmedSwingHigh, symbol, sessionId, featureSetVersion);
-        var latestLow = CreateConfirmedSwing(
-            trades, latestLowIndex, ConfirmedSwingType.ConfirmedSwingLow, symbol, sessionId, featureSetVersion);
+        var highs = highIndexes
+            .Select(index => CreateConfirmedSwing(
+                trades, index, ConfirmedSwingType.ConfirmedSwingHigh, symbol, sessionId, featureSetVersion)!)
+            .ToArray();
+        var lows = lowIndexes
+            .Select(index => CreateConfirmedSwing(
+                trades, index, ConfirmedSwingType.ConfirmedSwingLow, symbol, sessionId, featureSetVersion)!)
+            .ToArray();
+        var latestHigh = highs.LastOrDefault();
+        var previousHigh = highs.Length > 1 ? highs[^2] : null;
+        var latestLow = lows.LastOrDefault();
+        var previousLow = lows.Length > 1 ? lows[^2] : null;
         PriceStructure? priceStructure = null;
-        if (previousHighIndex >= 0 && previousLowIndex >= 0)
+        var highRelationship = SwingRelationship.Insufficient;
+        var lowRelationship = SwingRelationship.Insufficient;
+        var structureState = MarketStructureState.Insufficient;
+        if (latestHigh is not null && previousHigh is not null)
         {
-            var highDirection = trades[latestHighIndex].Price.CompareTo(trades[previousHighIndex].Price);
-            var lowDirection = trades[latestLowIndex].Price.CompareTo(trades[previousLowIndex].Price);
-            priceStructure = (highDirection, lowDirection) switch
+            highRelationship = CompareSwingPrices(latestHigh.Price, previousHigh.Price);
+        }
+
+        if (latestLow is not null && previousLow is not null)
+        {
+            lowRelationship = CompareSwingPrices(latestLow.Price, previousLow.Price);
+        }
+
+        if (latestHigh is not null
+            && previousHigh is not null
+            && latestLow is not null
+            && previousLow is not null)
+        {
+            priceStructure = (highRelationship, lowRelationship) switch
             {
-                (0, _) or (_, 0) => PriceStructure.Flat,
-                (> 0, > 0) => PriceStructure.HigherHighHigherLow,
-                (< 0, < 0) => PriceStructure.LowerHighLowerLow,
+                (SwingRelationship.Equal, _) or (_, SwingRelationship.Equal) => PriceStructure.Flat,
+                (SwingRelationship.Higher, SwingRelationship.Higher) => PriceStructure.HigherHighHigherLow,
+                (SwingRelationship.Lower, SwingRelationship.Lower) => PriceStructure.LowerHighLowerLow,
                 _ => PriceStructure.Mixed
+            };
+            structureState = (highRelationship, lowRelationship) switch
+            {
+                (SwingRelationship.Higher, SwingRelationship.Higher) => MarketStructureState.Bullish,
+                (SwingRelationship.Lower, SwingRelationship.Lower) => MarketStructureState.Bearish,
+                (SwingRelationship.Equal, SwingRelationship.Equal) => MarketStructureState.Range,
+                _ => MarketStructureState.Mixed
             };
         }
 
-        return (priceStructure, latestHigh, latestLow, MarketStructureStatus.Available);
+        var nearestHigh = referencePrice is > 0 && highs.Length > 0
+            ? highs.MinBy(swing => Math.Abs(swing.Price - referencePrice.Value))
+            : null;
+        var nearestLow = referencePrice is > 0 && lows.Length > 0
+            ? lows.MinBy(swing => Math.Abs(swing.Price - referencePrice.Value))
+            : null;
+        var nearestSupport = referencePrice is > 0
+            ? lows.Where(swing => swing.Price <= referencePrice.Value)
+                .OrderByDescending(swing => swing.Price)
+                .ThenByDescending(swing => swing.EventTimeUtc)
+                .ThenBy(swing => swing.Id)
+                .Select(swing => CreateStructuralLevel(swing, StructuralLevelType.Support))
+                .FirstOrDefault()
+            : null;
+        var nearestResistance = referencePrice is > 0
+            ? highs.Where(swing => swing.Price >= referencePrice.Value)
+                .OrderBy(swing => swing.Price)
+                .ThenByDescending(swing => swing.EventTimeUtc)
+                .ThenBy(swing => swing.Id)
+                .Select(swing => CreateStructuralLevel(swing, StructuralLevelType.Resistance))
+                .FirstOrDefault()
+            : null;
+
+        return new CalculatedMarketStructure(
+            priceStructure,
+            latestHigh,
+            latestLow,
+            previousHigh,
+            previousLow,
+            structureState,
+            highRelationship,
+            lowRelationship,
+            nearestSupport,
+            nearestResistance,
+            Distance(referencePrice, nearestHigh?.Price),
+            DistancePercent(referencePrice, nearestHigh?.Price),
+            Distance(referencePrice, nearestLow?.Price),
+            DistancePercent(referencePrice, nearestLow?.Price),
+            MarketStructureStatus.Available);
+    }
+
+    private static SwingRelationship CompareSwingPrices(decimal latest, decimal previous) =>
+        latest.CompareTo(previous) switch
+        {
+            > 0 => SwingRelationship.Higher,
+            < 0 => SwingRelationship.Lower,
+            _ => SwingRelationship.Equal
+        };
+
+    private static decimal? Distance(decimal? referencePrice, decimal? levelPrice) =>
+        referencePrice is > 0 && levelPrice.HasValue
+            ? Math.Abs(referencePrice.Value - levelPrice.Value)
+            : null;
+
+    private static decimal? DistancePercent(decimal? referencePrice, decimal? levelPrice) =>
+        referencePrice is > 0 && levelPrice.HasValue
+            ? Math.Abs(referencePrice.Value - levelPrice.Value) / referencePrice.Value * 100m
+            : null;
+
+    private static StructuralLevelCandidate CreateStructuralLevel(
+        ConfirmedSwing swing,
+        StructuralLevelType type)
+    {
+        var identity = string.Join(
+            "\u001f",
+            "structural-level",
+            type.ToString(),
+            swing.Id.ToString("N"),
+            StructureAlgorithmVersion);
+        return new StructuralLevelCandidate(
+            DeterministicId.From(identity),
+            type,
+            swing.Symbol,
+            swing.SessionId,
+            swing.Price,
+            swing.EventTimeUtc,
+            swing.ConfirmedAtEventTimeUtc,
+            swing.Id,
+            swing.OriginEventIdentity,
+            swing.ConfirmationEventIdentity,
+            swing.FeatureSetVersion,
+            StructureAlgorithmVersion);
     }
 
     private static ConfirmedSwing? CreateConfirmedSwing(
@@ -728,6 +858,40 @@ public sealed class FeatureCalculator
 
     private static string Format(decimal? value) =>
         value?.ToString("G29", CultureInfo.InvariantCulture) ?? "";
+
+    private sealed record CalculatedMarketStructure(
+        PriceStructure? PriceStructure,
+        ConfirmedSwing? LatestHigh,
+        ConfirmedSwing? LatestLow,
+        ConfirmedSwing? PreviousHigh,
+        ConfirmedSwing? PreviousLow,
+        MarketStructureState State,
+        SwingRelationship HighRelationship,
+        SwingRelationship LowRelationship,
+        StructuralLevelCandidate? NearestSupport,
+        StructuralLevelCandidate? NearestResistance,
+        decimal? DistanceToNearestHigh,
+        decimal? DistanceToNearestHighPercent,
+        decimal? DistanceToNearestLow,
+        decimal? DistanceToNearestLowPercent,
+        MarketStructureStatus Status)
+    {
+        public static CalculatedMarketStructure Insufficient { get; } = new(
+            null, null, null, null, null,
+            MarketStructureState.Insufficient,
+            SwingRelationship.Insufficient,
+            SwingRelationship.Insufficient,
+            null, null, null, null, null, null,
+            MarketStructureStatus.Insufficient);
+
+        public static CalculatedMarketStructure InvalidPriceData { get; } = new(
+            null, null, null, null, null,
+            MarketStructureState.Insufficient,
+            SwingRelationship.Insufficient,
+            SwingRelationship.Insufficient,
+            null, null, null, null, null, null,
+            MarketStructureStatus.InvalidPriceData);
+    }
 }
 
 internal static class DeterministicId

@@ -549,7 +549,7 @@ public sealed class LiveValidationDiagnosticsTests
 
         public Task PersistRunAsync(ScannerConfiguration configuration,
             IReadOnlyCollection<MarketEvent> marketEvents, FeatureSnapshot featureSnapshot,
-            Opportunity opportunity, CancellationToken cancellationToken)
+            Opportunity opportunity, TradePlan tradePlan, CancellationToken cancellationToken)
         {
             Feature = featureSnapshot;
             Opportunity = opportunity;
@@ -566,7 +566,7 @@ public sealed class LiveValidationDiagnosticsTests
 
         public async Task PersistRunAsync(ScannerConfiguration configuration,
             IReadOnlyCollection<MarketEvent> marketEvents, FeatureSnapshot featureSnapshot,
-            Opportunity opportunity, CancellationToken cancellationToken)
+            Opportunity opportunity, TradePlan tradePlan, CancellationToken cancellationToken)
         {
             Started.TrySetResult();
             await Release.Task;

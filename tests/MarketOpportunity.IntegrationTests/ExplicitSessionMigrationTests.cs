@@ -8,6 +8,7 @@ public sealed class ExplicitSessionMigrationTests
 {
     private const string MigrationId = "20261023190000_AddExplicitSessionIdentity";
     private const string ProvenanceMigrationId = "20261024232400_AddOpportunityMarketDataProvenance";
+    private const string TradePlansMigrationId = "20261030210000_AddImmutableTradePlans";
 
     [Fact]
     public async Task Clean_schema_accepts_explicit_session_migration()
@@ -22,9 +23,11 @@ public sealed class ExplicitSessionMigrationTests
 
                 Assert.Contains(MigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(ProvenanceMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(TradePlansMigrationId, await context.Database.GetAppliedMigrationsAsync());
             }
 
             await AssertSessionColumnsAndIndexesAsync(database.ConnectionString);
+            await AssertTradePlanSchemaAsync(database.ConnectionString);
         }
         finally
         {
@@ -66,6 +69,7 @@ public sealed class ExplicitSessionMigrationTests
                 await context.Database.MigrateAsync();
 
                 Assert.Contains(MigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(TradePlansMigrationId, await context.Database.GetAppliedMigrationsAsync());
 
                 var marketEvent = await context.MarketEvents.AsNoTracking().SingleAsync(item => item.Id == eventId);
                 Assert.Equal("legacy-unknown", marketEvent.SessionId);
@@ -108,6 +112,7 @@ public sealed class ExplicitSessionMigrationTests
             }
 
             await AssertSessionColumnsAndIndexesAsync(database.ConnectionString);
+            await AssertTradePlanSchemaAsync(database.ConnectionString);
         }
         finally
         {
@@ -278,7 +283,11 @@ public sealed class ExplicitSessionMigrationTests
             ("market_event", "IX_market_event_Symbol_SessionId_EventTimeUtc", "EventTimeUtc"),
             ("opportunity", "IX_opportunity_Symbol_SessionId_AsOfUtc", "Symbol"),
             ("opportunity", "IX_opportunity_Symbol_SessionId_AsOfUtc", "SessionId"),
-            ("opportunity", "IX_opportunity_Symbol_SessionId_AsOfUtc", "AsOfUtc")
+            ("opportunity", "IX_opportunity_Symbol_SessionId_AsOfUtc", "AsOfUtc"),
+            ("trade_plan", "IX_trade_plan_OpportunityId", "OpportunityId"),
+            ("trade_plan", "IX_trade_plan_Symbol_SessionId_AsOfUtc", "Symbol"),
+            ("trade_plan", "IX_trade_plan_Symbol_SessionId_AsOfUtc", "SessionId"),
+            ("trade_plan", "IX_trade_plan_Symbol_SessionId_AsOfUtc", "AsOfUtc")
         };
         var actualIndexColumns = new List<(string Table, string Index, string Column)>();
         await using var connection = new SqlConnection(connectionString);
@@ -330,7 +339,9 @@ public sealed class ExplicitSessionMigrationTests
                 WHERE i.name IN (
                     N'IX_market_event_Symbol_SessionId_EventTimeUtc',
                     N'IX_feature_snapshot_Symbol_SessionId_AsOfUtc',
-                    N'IX_opportunity_Symbol_SessionId_AsOfUtc')
+                    N'IX_opportunity_Symbol_SessionId_AsOfUtc',
+                    N'IX_trade_plan_Symbol_SessionId_AsOfUtc',
+                    N'IX_trade_plan_OpportunityId')
                   AND ic.key_ordinal > 0
                 ORDER BY t.name, i.name, ic.key_ordinal;
                 """;
@@ -342,6 +353,25 @@ public sealed class ExplicitSessionMigrationTests
         }
 
         Assert.Equal(expectedIndexColumns, actualIndexColumns);
+    }
+
+    private static async Task AssertTradePlanSchemaAsync(string connectionString)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT COUNT(*)
+            FROM sys.columns AS c
+            INNER JOIN sys.tables AS t ON c.object_id = t.object_id
+            WHERE t.schema_id = SCHEMA_ID(N'dbo')
+              AND t.name = N'trade_plan'
+              AND c.name IN (
+                N'Id', N'Symbol', N'SessionId', N'AsOfUtc', N'OpportunityId',
+                N'PlanDefinitionVersion', N'TradePlanJson');
+            """;
+        Assert.Equal(7, Convert.ToInt32(await command.ExecuteScalarAsync()));
     }
 
     private sealed record IsolatedDatabase(string Name, string ConnectionString);

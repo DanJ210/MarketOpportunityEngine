@@ -11,6 +11,7 @@ public sealed class MarketOpportunityDbContext(DbContextOptions<MarketOpportunit
     public DbSet<OpportunityEntity> Opportunities => Set<OpportunityEntity>();
     public DbSet<OpportunityEvidenceEntity> OpportunityEvidence => Set<OpportunityEvidenceEntity>();
     public DbSet<ConfigurationSnapshotEntity> ConfigurationSnapshots => Set<ConfigurationSnapshotEntity>();
+    public DbSet<TradePlanEntity> TradePlans => Set<TradePlanEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -77,6 +78,18 @@ public sealed class MarketOpportunityDbContext(DbContextOptions<MarketOpportunit
             entity.HasKey(item => item.Version);
             entity.Property(item => item.Version).HasMaxLength(64);
             entity.Property(item => item.ConfigurationJson).IsRequired();
+        });
+
+        modelBuilder.Entity<TradePlanEntity>(entity =>
+        {
+            entity.ToTable("trade_plan");
+            entity.HasKey(item => item.Id);
+            entity.Property(item => item.Symbol).HasMaxLength(32).IsRequired();
+            entity.Property(item => item.SessionId).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.PlanDefinitionVersion).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.TradePlanJson).IsRequired();
+            entity.HasIndex(item => new { item.Symbol, item.SessionId, item.AsOfUtc });
+            entity.HasIndex(item => item.OpportunityId);
         });
     }
 }
@@ -148,4 +161,15 @@ public sealed class ConfigurationSnapshotEntity
     public string Version { get; set; } = "";
     public DateTimeOffset CreatedAtUtc { get; set; }
     public string ConfigurationJson { get; set; } = "";
+}
+
+public sealed class TradePlanEntity
+{
+    public Guid Id { get; set; }
+    public string Symbol { get; set; } = "";
+    public string SessionId { get; set; } = "";
+    public DateTimeOffset AsOfUtc { get; set; }
+    public Guid OpportunityId { get; set; }
+    public string PlanDefinitionVersion { get; set; } = "";
+    public string TradePlanJson { get; set; } = "";
 }

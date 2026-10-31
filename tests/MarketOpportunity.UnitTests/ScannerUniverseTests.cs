@@ -135,6 +135,7 @@ public sealed class ScannerUniverseTests
             IReadOnlyCollection<MarketEvent> marketEvents,
             FeatureSnapshot featureSnapshot,
             Opportunity opportunity,
+            TradePlan tradePlan,
             CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
