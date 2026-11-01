@@ -1448,3 +1448,25 @@ All final tests had zero failures/skips. Existing tests prove long/short TradePl
 Read-only SQL confirmed `trade_plan`, applied migration `20261030210000_AddImmutableTradePlans`, `IX_trade_plan_OpportunityId`, and ordered `IX_trade_plan_Symbol_SessionId_AsOfUtc` keys (`Symbol`, `SessionId`, `AsOfUtc`); migration tests also validated clean and legacy schemas and related symbol/session/as-of indexes.
 
 Row counts after each final hosted run were identical: events **86**, features **95**, opportunities **95**, evidence **517**, configurations **14**, plans **5**. Final counts after the full suite were **90/96/96/526/14/6** respectively, reflecting the additional uniquely scoped offline diagnostic run. No existing records or configured database were reset/deleted. Persistence tests performed only their designed unique-test-row cleanup; migration tests created/dropped only their uniquely named temporary databases. SQL remained healthy. **Remaining blocker: none. A.2.3 was not started.**
+
+## Milestone A.2.3a - Prior-Session Market Context (2026-10-31)
+
+**Status:** COMPLETE. Implemented the separate `prior-session-context-v1` contract and fixture-only historical path. Historical inspection found no REST/history adapter in either live WebSocket adapter, no `IHistoricalMarketDataSource` before this slice, no market-session calendar, and no application read/replay interface over persisted `market_event` rows. Provider historical entitlements, licensing, and retention were not reviewed or verified. `SessionId` remains explicit but is not assumed to be a real market-session identity.
+
+The fixture calendar explicitly identifies the preceding fixture session and UTC boundaries corresponding to U.S. equity regular trading hours in `America/New_York`; no date subtraction or guessed holiday logic is used. Fixture history does not cover the full exchange session, so only observed extrema/last trade are shown and prior-session high/low/close remain unavailable. For complete histories, close is the final eligible trade by event time at or before session end, not necessarily an official closing print. Confirmed swings reuse `FeatureCalculator` / `session-swing-fractal-v1` on prior-session events only. Context is deterministically rebuilt, cached per symbol/current session, and not persisted; no migration or feature/configuration/Momentum/TradePlan version change was made. Non-fixture live history and an authoritative live calendar remain unavailable/unverified; current scanning continues with explicit unavailable context.
+
+**Validation (sequential):**
+
+| Check | Result |
+|---|---|
+| Focused prior-context unit tests | **10/10 passed** |
+| A.2.1 market-structure regression | **13/13 passed** |
+| A.2.2 TradePlan regression | **17/17 passed** |
+| Momentum Continuation regression | **22/22 passed** |
+| Full offline unit suite | **289/289 passed** |
+| Hosted fixture/API/dashboard tests (`StructureWebApplicationTests`) | **2/2 passed**; no SQL or provider connection |
+| `dotnet build MarketOpportunityEngine.sln --no-restore` | Succeeded; **0 warnings, 0 errors** |
+
+No schema change was made. SQL persistence/migration and full SQL integration suites were **not run** because `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was not configured; no live provider was connected and User Secrets were not inspected.
+
+The exact remaining prerequisite for A.2.3b is an approved historical market-data source with verified access, retention/licensing terms, plus an authoritative session calendar for live sessions. Until then, A.2.3b remains **NOT STARTED** and incomplete prior context must not drive readiness.

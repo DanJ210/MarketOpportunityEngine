@@ -88,14 +88,28 @@ if (diagnosticEnabled)
 builder.Services.AddSingleton<IOpportunityPublicationGate, OpportunityPublicationGate>();
 builder.Services.AddSingleton<ScannerState>();
 builder.Services.AddSingleton<FeatureCalculator>();
+builder.Services.AddSingleton<PriorSessionContextBuilder>();
 builder.Services.AddSingleton<MomentumContinuationDetector>();
-builder.Services.AddScoped<ScannerPipeline>();
 var marketDataProvider = builder.Configuration["MarketData:Provider"] ?? "Fixture";
+var fixturePath = Path.Combine(builder.Environment.ContentRootPath, "Fixtures", "momentum-continuation.json");
+if (string.Equals(marketDataProvider, "Fixture", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<IMarketSessionCalendar, FixtureMarketSessionCalendar>();
+    builder.Services.AddScoped<IHistoricalMarketDataSource>(_ =>
+        new FixtureHistoricalMarketDataSource(fixturePath));
+}
+builder.Services.AddScoped<IPriorSessionContextProvider>(serviceProvider =>
+    new PriorSessionContextProvider(
+        serviceProvider.GetService<IMarketSessionCalendar>(),
+        serviceProvider.GetService<IHistoricalMarketDataSource>(),
+        serviceProvider.GetRequiredService<PriorSessionContextBuilder>(),
+        serviceProvider.GetRequiredService<ScannerConfiguration>()));
+builder.Services.AddScoped<ScannerPipeline>();
 builder.Services.AddScoped<IMarketDataSource>(serviceProvider =>
     MarketDataSourceFactory.Create(
         marketDataProvider,
         builder.Configuration,
-        Path.Combine(builder.Environment.ContentRootPath, "Fixtures", "momentum-continuation.json"),
+        fixturePath,
         serviceProvider.GetRequiredService<TimeProvider>(),
         serviceProvider.GetService<LiveValidationDiagnostics>()));
 builder.Services.AddScoped<IScannerStore, EfScannerStore>();
@@ -171,6 +185,18 @@ app.MapGet("/api/v1/symbols/{symbol}/snapshot", (string symbol, string? sessionI
         .OrderByDescending(result => result.Features.AsOfUtc);
     var result = snapshots.FirstOrDefault();
     return result is null ? Results.NotFound() : Results.Ok(result.Features);
+});
+app.MapGet("/api/v1/symbols/{symbol}/prior-context", (string symbol, string? sessionId, ScannerState scanner) =>
+{
+    var results = scanner.Read().Results
+        .Where(result => result.Features.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
+        .Where(result => sessionId is null
+            || result.Features.SessionId.Equals(sessionId, StringComparison.Ordinal))
+        .OrderByDescending(result => result.Features.AsOfUtc);
+    var result = results.FirstOrDefault();
+    return result is null
+        ? Results.NotFound()
+        : Results.Ok(result.PriorSessionContext);
 });
 app.MapGet("/api/v1/configuration/effective", (ScannerConfiguration configuration) =>
     Results.Ok(configuration));

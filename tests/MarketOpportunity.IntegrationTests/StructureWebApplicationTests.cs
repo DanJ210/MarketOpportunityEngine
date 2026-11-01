@@ -49,9 +49,45 @@ public sealed class StructureWebApplicationTests
             Assert.Equal(JsonValueKind.Null, root.GetProperty("nearestResistanceCandidate").ValueKind);
         }
 
+        using (var priorResponse = await client.GetAsync(
+                   "/api/v1/symbols/MOE/prior-context?sessionId=fixture-2026-10-23",
+                   timeout.Token))
+        {
+            var priorJson = await priorResponse.Content.ReadAsStringAsync(timeout.Token);
+            using var json = JsonDocument.Parse(priorJson);
+            Assert.Equal(HttpStatusCode.OK, priorResponse.StatusCode);
+            var contextView = json.RootElement;
+            var context = contextView.GetProperty("context");
+            Assert.Equal("fixture-2026-10-22", context.GetProperty("priorSessionId").GetString());
+            Assert.Equal("Partial", context.GetProperty("completeness").GetString());
+            Assert.Equal("prior-session-context-v1", context.GetProperty("contextDefinitionVersion").GetString());
+            Assert.Equal("RecordedFixture", context.GetProperty("marketData").GetProperty("provider").GetString());
+            Assert.Equal("recorded-fixture-v1", context.GetProperty("historicalSource").GetString());
+            Assert.Equal(JsonValueKind.Null, context.GetProperty("priorSessionHigh").ValueKind);
+            Assert.Equal(JsonValueKind.Null, context.GetProperty("priorSessionClose").ValueKind);
+            Assert.True(context.GetProperty("observedHigh").GetDecimal() > 0);
+            Assert.Equal("MOE", context.GetProperty("symbol").GetString());
+            Assert.True(contextView.GetProperty("currentReferencePrice").GetDecimal() > 0);
+            Assert.DoesNotContain("BUY", priorJson, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("SELL", priorJson, StringComparison.OrdinalIgnoreCase);
+        }
+
+        using (var unavailableResponse = await client.GetAsync(
+                   "/api/v1/symbols/MOE/prior-context?sessionId=fixture-2026-10-22",
+                   timeout.Token))
+        using (var json = JsonDocument.Parse(await unavailableResponse.Content.ReadAsStringAsync(timeout.Token)))
+        {
+            Assert.Equal(HttpStatusCode.OK, unavailableResponse.StatusCode);
+            Assert.Equal(
+                "Unavailable",
+                json.RootElement.GetProperty("context").GetProperty("completeness").GetString());
+        }
+
         var html = await client.GetStringAsync("/", timeout.Token);
         Assert.Contains("MARKET STRUCTURE", html);
         Assert.Contains("TRADE PLAN", html);
+        Assert.Contains("PRIOR SESSION", html);
+        Assert.Contains("Support and resistance are historical reference areas, not guarantees.", html);
         Assert.Contains("Insufficient", html);
         Assert.Contains("not a probability of profit or a trading recommendation", html);
     }

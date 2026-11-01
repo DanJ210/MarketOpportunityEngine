@@ -59,7 +59,8 @@ public sealed record ScannerAnalysisResult(
     FeatureSnapshot Features,
     Opportunity Opportunity,
     PublicationDecision Publication,
-    TradePlan TradePlan);
+    TradePlan TradePlan,
+    PriorSessionContextView? PriorSessionContext = null);
 
 public sealed record OpportunityPublicationReadModel(
     Opportunity Opportunity,
@@ -225,7 +226,8 @@ public sealed class ScannerPipeline(
     LiveMarketDataRecoveryOptions? recoveryOptions = null,
     Action<string, string>? logReconnectFailure = null,
     LiveValidationDiagnostics? diagnostics = null,
-    LivePipelineOptions? livePipelineOptions = null)
+    LivePipelineOptions? livePipelineOptions = null,
+    IPriorSessionContextProvider? priorSessionContextProvider = null)
 {
     private static readonly TimeSpan LiveAnalysisInterval = TimeSpan.FromSeconds(5);
     private readonly TradePlanBuilder _tradePlanBuilder = new();
@@ -287,6 +289,14 @@ public sealed class ScannerPipeline(
                 source.Capabilities);
             var opportunity = detector.Evaluate(snapshot, configuration);
             var tradePlan = _tradePlanBuilder.Build(snapshot, opportunity);
+            var priorContext = priorSessionContextProvider is null
+                ? null
+                : await priorSessionContextProvider.GetContextAsync(
+                    snapshot.Symbol,
+                    snapshot.SessionId,
+                    snapshot.AsOfUtc,
+                    snapshot.ReferencePrice,
+                    cancellationToken);
             await store.PersistRunAsync(
                 configuration,
                 stateEvents,
@@ -302,7 +312,8 @@ public sealed class ScannerPipeline(
                     "PendingPublication",
                     "Publication status has not been evaluated.",
                     asOfUtc),
-                tradePlan));
+                tradePlan,
+                priorContext));
         }
 
         state.SetResults(
@@ -613,6 +624,7 @@ public sealed class ScannerPipeline(
                 FeatureSnapshot snapshot;
                 Opportunity opportunity;
                 TradePlan tradePlan;
+                PriorSessionContextView? priorContext;
                 try
                 {
                     snapshot = featureCalculator.Calculate(
@@ -622,6 +634,14 @@ public sealed class ScannerPipeline(
                         source.Capabilities);
                     opportunity = detector.Evaluate(snapshot, configuration);
                     tradePlan = _tradePlanBuilder.Build(snapshot, opportunity);
+                    priorContext = priorSessionContextProvider is null
+                        ? null
+                        : await priorSessionContextProvider.GetContextAsync(
+                            snapshot.Symbol,
+                            snapshot.SessionId,
+                            snapshot.AsOfUtc,
+                            snapshot.ReferencePrice,
+                            cancellationToken);
                 }
                 catch
                 {
@@ -669,7 +689,8 @@ public sealed class ScannerPipeline(
                         "PendingPublication",
                         "Publication status has not been evaluated.",
                         asOfUtc),
-                    tradePlan);
+                    tradePlan,
+                    priorContext);
             }
 
             lock (statusSync)

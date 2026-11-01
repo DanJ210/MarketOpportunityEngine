@@ -4,7 +4,7 @@ A .NET 10 modular-monolith decision-support scanner for US equities/ETFs. The ap
 
 ## Current milestone
 
-**Milestone A.2.2 - Trade Plan Foundation: COMPLETE.** A.1 live scanner validation, A.2.1 market structure, and A.2.2 immutable candidate TradePlans are complete. **Next: A.2.3 Pre-Trade Opportunity Readiness (NOT STARTED).** See [PROJECT_STATUS.md](./PROJECT_STATUS.md) for the concise checkpoint and [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md) for historical evidence.
+**Milestone A.2.3a - Prior-Session Market Context: COMPLETE.** A.1 live scanner validation, A.2.1 market structure, A.2.2 immutable candidate TradePlans, and A.2.3a prior-session context are complete. **Next: A.2.3b Pre-Trade Readiness (NOT STARTED).** See [PROJECT_STATUS.md](./PROJECT_STATUS.md) for the concise checkpoint and [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md) for historical evidence.
 
 ## Architecture overview
 
@@ -20,6 +20,12 @@ Recorded fixture (default) or optional read-only adapter
 ```
 
 The solution targets .NET 10, ASP.NET Core 10, Blazor Interactive Server, EF Core 10, and SQL Server locally / Azure SQL Database as the deployment target. Domain and analytics remain independent of provider DTOs and persistence. Blazor's circuit transport updates the UI; there is no separate application SignalR hub. See [the master specification](./Market_Opportunity_Engine_Final_Master_Spec.md) and [docs/adr/](./docs/adr/).
+
+## A.2.3a prior-session context
+
+The separate `prior-session-context-v1` contract reports prior-session trade-point pivots, structural references, completeness, and feed/source provenance at `/api/v1/symbols/{symbol}/prior-context`. The dashboard labels partial-session extrema as observed values and reports session high/low/close only when full, gap-free coverage is established. Close means the last eligible trade by event time at or before session end, not an asserted official exchange close.
+
+Only the recorded fixture currently supplies historical data and an explicit fixture calendar; that calendar maps session identities to U.S. equity regular-session boundaries in `America/New_York` semantics. It does not infer dates or holidays. Synthetic fixture coverage is partial. Live Alpaca/Massive history and an authoritative live calendar remain unavailable/unverified, so the scanner keeps running and shows prior context as unavailable. Context is deterministically rebuilt from approved fixture input, not stored in SQL; persisted live events are not currently exposed as an approved historical replay source. See [ADR-007](./docs/adr/ADR-007-prior-session-context.md). No readiness or trading-action state is introduced.
 
 ## Quick start
 

@@ -192,6 +192,75 @@
                         <p class="muted">Candidate geometry only; it is not an instruction to trade.</p>
                     </section>
 
+                    <section class="invalidation-panel prior-session-panel" aria-label="Prior session context">
+                        <h3>PRIOR SESSION</h3>
+                        @if (result.PriorSessionContext is { } priorView)
+                        {
+                            var prior = priorView.Context;
+                            <p>
+                                Prior session: @(prior.PriorSessionId ?? "Unavailable") ·
+                                completeness: @prior.Completeness ·
+                                structure: @prior.StructureState
+                            </p>
+                            <p>
+                                Prior high: @FormatStructurePrice(prior.PriorSessionHigh) ·
+                                prior low: @FormatStructurePrice(prior.PriorSessionLow) ·
+                                close: @FormatStructurePrice(prior.PriorSessionClose)
+                            </p>
+                            @if (prior.Completeness != PriorSessionContextStatus.Available)
+                            {
+                                <p>
+                                    Observed high/low: @FormatStructurePrice(prior.ObservedHigh) /
+                                    @FormatStructurePrice(prior.ObservedLow) ·
+                                    last observed trade: @FormatStructurePrice(prior.LastObservedTrade)
+                                </p>
+                            }
+                            <p>
+                                Swing high: @FormatStructurePrice(prior.LatestConfirmedSwingHigh?.Price)
+                                (previous @FormatStructurePrice(prior.PreviousConfirmedSwingHigh?.Price)) ·
+                                swing low: @FormatStructurePrice(prior.LatestConfirmedSwingLow?.Price)
+                                (previous @FormatStructurePrice(prior.PreviousConfirmedSwingLow?.Price))
+                                <span title="A confirmed local price peak or trough based on trade points, not OHLC candles.">
+                                    (trade-point pivots)
+                                </span>
+                            </p>
+                            <p>
+                                Nearest prior support: @FormatStructurePrice(priorView.NearestSupport?.Price)
+                                (@FormatDistance(priorView.DistanceToNearestSupport)) ·
+                                nearest prior resistance: @FormatStructurePrice(priorView.NearestResistance?.Price)
+                                (@FormatDistance(priorView.DistanceToNearestResistance))
+                            </p>
+                            <p>
+                                Distance from current price @FormatStructurePrice(priorView.CurrentReferencePrice):
+                                prior high @FormatDistance(priorView.DistanceToPriorHigh) ·
+                                prior low @FormatDistance(priorView.DistanceToPriorLow) ·
+                                observed high @FormatDistance(priorView.DistanceToObservedHigh) ·
+                                observed low @FormatDistance(priorView.DistanceToObservedLow) ·
+                                swing high @FormatDistance(priorView.DistanceToLatestSwingHigh) ·
+                                swing low @FormatDistance(priorView.DistanceToLatestSwingLow)
+                            </p>
+                            <p>
+                                Source: @(prior.HistoricalSource ?? "Unavailable") ·
+                                feed: @(prior.MarketData is null
+                                    ? "Unavailable"
+                                    : $"{prior.MarketData.Provider} / {prior.MarketData.Feed} / {prior.MarketData.Coverage}") ·
+                                definition: @prior.ContextDefinitionVersion
+                            </p>
+                            <p class="muted">
+                                @prior.CompletenessReason
+                                Support and resistance are historical reference areas, not guarantees.
+                                @if (prior.CloseSemantics == PriorSessionCloseSemantics.LastEligibleTradeAtOrBeforeSessionEnd)
+                                {
+                                    <span>Close means the final eligible trade by event time at or before session end; it is not an official exchange close.</span>
+                                }
+                            </p>
+                        }
+                        else
+                        {
+                            <p>Prior context unavailable. No historical source/calendar result is attached.</p>
+                        }
+                    </section>
+
                     <div class="evidence-grid">
                         <section>
                             <h3>Supporting evidence</h3>
@@ -380,6 +449,10 @@
     private static string FormatPrice(decimal? price) => price?.ToString("F2") ?? "--";
     private static string FormatStructurePrice(decimal? price) =>
         price is null ? "--" : $"${price.Value:F2}";
+    private static string FormatDistance(PriceDistance? distance) =>
+        distance is null
+            ? "Unavailable"
+            : $"{FormatStructurePrice(distance.AbsolutePriceDistance)} ({FormatPercent(distance.PercentDistance)})";
     private static string FormatSwingPrice(decimal price) =>
         price.ToString("G29", System.Globalization.CultureInfo.InvariantCulture);
     private static string FormatPercent(decimal? value) => value is null ? "--" : $"{value.Value:F2}%";
