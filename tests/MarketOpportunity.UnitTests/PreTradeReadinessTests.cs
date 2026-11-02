@@ -312,6 +312,57 @@ public sealed class PreTradeReadinessTests
         Assert.Contains(wideSpread.Evidence, item => item.Code == "SpreadTooWide");
     }
 
+    [Theory]
+    [InlineData(null, 0, false)]
+    [InlineData(-1, 0, false)]
+    [InlineData(0, -1, false)]
+    [InlineData(5, 10, true)]
+    [InlineData(5, 11, false)]
+    [InlineData(16, 0, false)]
+    public void Entry_confirmation_checks_quote_event_time_at_evaluation(
+        int? quoteAgeSeconds, int evaluationDelaySeconds, bool entryReady)
+    {
+        var snapshot = Features(99m) with
+        {
+            QuoteAge = quoteAgeSeconds is { } seconds ? TimeSpan.FromSeconds(seconds) : null
+        };
+        var assessment = Assess(
+            LongPlan(), 99m, snapshot: snapshot,
+            evaluatedAtUtc: AsOfUtc.AddSeconds(evaluationDelaySeconds));
+
+        Assert.Equal(
+            entryReady ? PreTradeReadinessState.EntryReady : PreTradeReadinessState.EntryZoneActive,
+            assessment.State);
+        Assert.Equal(!entryReady, assessment.Evidence.Any(item => item.Code == "InvalidQuote"));
+    }
+
+    [Fact]
+    public void Health_only_reevaluation_ages_the_quote_without_rewriting_the_snapshot()
+    {
+        var configuration = Config();
+        var state = new ScannerState(configuration: configuration);
+        var plan = LongPlan();
+        var snapshot = Features(99m);
+        var opportunity = Candidate();
+        var evaluation = new PreTradeReadinessTracker().Evaluate(
+            snapshot, opportunity, plan, Active(), null, configuration, AsOfUtc);
+        var status = new ScannerStatus(MarketDataHealthStatus.Live, "TestProvider", 1, AsOfUtc, null);
+        state.SetResults(status,
+            [new ScannerAnalysisResult(snapshot, opportunity, Active(), plan, null, evaluation.Projection)],
+            AsOfUtc);
+
+        var boundary = AsOfUtc.AddSeconds(configuration.MaximumQuoteAgeSeconds);
+        state.SetStatus(status, boundary);
+        Assert.Equal(PreTradeReadinessState.EntryReady, Assert.Single(state.Read().Results).Readiness!.Assessment.State);
+        state.SetStatus(status, boundary.AddTicks(1));
+        var stale = Assert.Single(state.Read().Results);
+        Assert.Equal(OpportunityLifecycleState.Active, stale.Publication.State);
+        Assert.Equal(PreTradeReadinessState.EntryZoneActive, stale.Readiness!.Assessment.State);
+        Assert.Contains(stale.Readiness.Assessment.Evidence, item => item.Code == "InvalidQuote");
+        Assert.Same(snapshot, stale.Features);
+        Assert.Equal(TimeSpan.Zero, stale.Features.QuoteAge);
+    }
+
     // ----- Suspension and health -----
 
     [Fact]
@@ -406,6 +457,51 @@ public sealed class PreTradeReadinessTests
         Assert.Equal(PreTradeReadinessReason.OpportunityExpired, assessment.Reason);
     }
 
+    [Theory]
+    [InlineData(95, TrackedOpportunityStatus.Invalidated)]
+    [InlineData(106, TrackedOpportunityStatus.TargetReachedBeforeEntry)]
+    [InlineData(97, TrackedOpportunityStatus.ExtendedBeyondEntry)]
+    public void Terminal_assessments_survive_health_and_publication_changes(
+        decimal price, TrackedOpportunityStatus terminalStatus)
+    {
+        var configuration = Config();
+        var plan = LongPlan();
+        var snapshot = Features(price);
+        var opportunity = Candidate();
+        var evaluation = new PreTradeReadinessTracker().Evaluate(
+            snapshot, opportunity, plan, Active(), null, configuration, AsOfUtc);
+        var projection = Assert.IsType<PreTradeReadinessProjection>(evaluation.Projection);
+        Assert.Equal(terminalStatus, projection.Tracked.Status);
+        var state = new ScannerState(configuration: configuration);
+        var status = new ScannerStatus(MarketDataHealthStatus.Live, "TestProvider", 1, AsOfUtc, null);
+        state.SetResults(status,
+            [new ScannerAnalysisResult(snapshot, opportunity, Active(), plan, null, projection)], AsOfUtc);
+
+        foreach (var health in new[] { MarketDataHealthStatus.Stale, MarketDataHealthStatus.Live, MarketDataHealthStatus.Error })
+        {
+            state.SetStatus(status with { FeedStatus = health }, AsOfUtc.AddSeconds(5));
+            Assert.Same(projection.Assessment, Assert.Single(state.Read().Results).Readiness!.Assessment);
+        }
+
+        state.SetStatus(status, plan.ValidUntilUtc);
+        var expiredPublication = Assert.Single(state.Read().Results);
+        Assert.Equal(OpportunityLifecycleState.Expired, expiredPublication.Publication.State);
+        Assert.Same(projection.Assessment, expiredPublication.Readiness!.Assessment);
+    }
+
+    [Fact]
+    public void Expiry_timestamp_is_the_pinned_validity_boundary_not_the_last_market_event()
+    {
+        var plan = LongPlan();
+        var tracker = new PreTradeReadinessTracker();
+        var evaluation = tracker.Evaluate(
+            Features(99m), Candidate(), plan, Active(), null, Config(), plan.ValidUntilUtc.AddMinutes(1));
+
+        Assert.Equal(TrackedOpportunityStatus.Expired, evaluation.PersistTracked!.Status);
+        Assert.Equal(plan.ValidUntilUtc, evaluation.PersistTracked.TerminalAtUtc);
+        Assert.Equal(AsOfUtc, evaluation.PersistAssessment!.AsOfUtc);
+    }
+
     [Fact]
     public void Session_change_is_terminal_for_the_tracked_candidate()
     {
@@ -431,12 +527,21 @@ public sealed class PreTradeReadinessTests
     // ----- Context mode -----
 
     [Fact]
-    public void Complete_prior_context_is_prior_session_enhanced()
+    public void Complete_prior_context_does_not_claim_to_participate_without_using_its_levels()
     {
-        var assessment = Assess(LongPlan(), 99m, priorContext: PriorContext(PriorSessionContextStatus.Available));
+        var context = PriorContext(PriorSessionContextStatus.Available);
+        var assessment = Assess(LongPlan(), 99m, priorContext: context);
+        var differentContext = context with
+        {
+            Context = context.Context with { ContextId = Guid.NewGuid(), PriorSessionLow = 90m }
+        };
+        var replay = Assess(LongPlan(), 99m, priorContext: differentContext);
 
-        Assert.Equal(ReadinessContextMode.PriorSessionEnhanced, assessment.ContextMode);
-        Assert.Contains(assessment.Evidence, item => item.Code == "PriorSessionContextUsed");
+        Assert.Equal(ReadinessContextMode.CurrentSessionOnly, assessment.ContextMode);
+        Assert.DoesNotContain(assessment.Evidence, item => item.Code == "PriorSessionContextUsed");
+        Assert.Contains(assessment.Evidence, item => item.Description.Contains("its levels are not used"));
+        Assert.Equal(assessment.Id, replay.Id);
+        Assert.Equal(assessment.Evidence, replay.Evidence);
         Assert.Equal(PreTradeReadinessState.EntryReady, assessment.State);
     }
 
@@ -466,6 +571,149 @@ public sealed class PreTradeReadinessTests
     }
 
     // ----- Restart -----
+
+    [Fact]
+    public void Reconciliation_expires_idle_restored_candidates_at_the_exact_boundary()
+    {
+        var plan = LongPlan();
+        var tracked = Tracked(plan);
+        var tracker = new PreTradeReadinessTracker();
+        tracker.Restore([new TrackedOpportunitySnapshot(tracked, plan)]);
+
+        Assert.Empty(tracker.Reconcile(plan.ValidUntilUtc.AddTicks(-1)));
+        var terminal = Assert.Single(tracker.Reconcile(plan.ValidUntilUtc));
+        Assert.Equal(tracked.Id, terminal.Id);
+        Assert.Equal(plan.Id, terminal.PlanId);
+        Assert.Equal(TrackedOpportunityStatus.Expired, terminal.Status);
+        Assert.Equal(plan.ValidUntilUtc, terminal.TerminalAtUtc);
+        Assert.Empty(tracker.Reconcile(plan.ValidUntilUtc.AddDays(1)));
+    }
+
+    [Fact]
+    public void Session_observation_reconciles_old_candidates_without_analysis_and_ignores_late_sessions()
+    {
+        var tracker = new PreTradeReadinessTracker();
+        var oldPlan = LongPlan();
+        var original = tracker.Evaluate(
+            Features(102m), Candidate(), oldPlan, Active(), null, Config(), AsOfUtc);
+        var nextSessionTime = AsOfUtc.AddSeconds(30);
+        tracker.ObserveSession(Symbol, "next-session", nextSessionTime);
+        var terminal = Assert.Single(tracker.Reconcile(nextSessionTime));
+        Assert.Equal(original.PersistTracked!.Id, terminal.Id);
+        Assert.Equal(TrackedOpportunityStatus.SessionEnded, terminal.Status);
+        Assert.Equal(nextSessionTime, terminal.TerminalAtUtc);
+
+        var nextPlan = oldPlan with { Id = Guid.NewGuid(), SessionId = "next-session", AsOfUtc = nextSessionTime };
+        var selected = tracker.Evaluate(
+            Features(102m, sessionId: "next-session", asOfUtc: nextSessionTime),
+            Candidate(sessionId: "next-session"), nextPlan, Active(), null, Config(), nextSessionTime);
+        Assert.NotNull(selected.Projection);
+
+        tracker.ObserveSession(Symbol, Session, AsOfUtc.AddSeconds(20));
+        var late = tracker.Evaluate(
+            Features(102m, asOfUtc: AsOfUtc.AddSeconds(20)),
+            Candidate(), oldPlan, Active(), null, Config(), nextSessionTime);
+        Assert.Null(late.Projection);
+        Assert.Empty(tracker.Reconcile(nextSessionTime));
+        Assert.Equal(nextPlan.Id, Assert.Single(tracker.Reconcile(nextPlan.ValidUntilUtc)).PlanId);
+    }
+
+    [Fact]
+    public async Task Live_health_timer_persists_idle_expiry_without_any_market_events()
+    {
+        var plan = LongPlan();
+        var tracker = new PreTradeReadinessTracker();
+        tracker.Restore([new TrackedOpportunitySnapshot(Tracked(plan), plan)]);
+        var clock = new MutableTimeProvider(AsOfUtc);
+        var source = new IdleLiveSource();
+        var store = new RecordingReadinessStore();
+        using var cancellation = new CancellationTokenSource();
+        var pipeline = new ScannerPipeline(
+            source, new NullScannerStore(), new ScannerState(configuration: Config()), Config(),
+            new FeatureCalculator(), new MomentumContinuationDetector(), clock,
+            readinessTracker: tracker, readinessStore: store);
+        var run = pipeline.RunAsync(cancellation.Token);
+        try
+        {
+            await source.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            clock.SetUtcNow(plan.ValidUntilUtc.AddSeconds(10));
+            var terminal = await store.TerminalPersisted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(TrackedOpportunityStatus.Expired, terminal.Status);
+            Assert.Equal(plan.ValidUntilUtc, terminal.TerminalAtUtc);
+            Assert.Empty(tracker.Reconcile(clock.GetUtcNow()));
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    public async Task Live_startup_persists_expiry_of_restored_candidates_before_reading_market_data()
+    {
+        var plan = LongPlan();
+        var tracker = new PreTradeReadinessTracker();
+        tracker.Restore([new TrackedOpportunitySnapshot(Tracked(plan), plan)]);
+        var clock = new MutableTimeProvider(plan.ValidUntilUtc.AddDays(1));
+        var source = new IdleLiveSource();
+        var store = new RecordingReadinessStore();
+        using var cancellation = new CancellationTokenSource();
+        var pipeline = new ScannerPipeline(
+            source, new NullScannerStore(), new ScannerState(configuration: Config()), Config(),
+            new FeatureCalculator(), new MomentumContinuationDetector(), clock,
+            readinessTracker: tracker, readinessStore: store);
+        var run = pipeline.RunAsync(cancellation.Token);
+        try
+        {
+            var terminal = await store.TerminalPersisted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(plan.ValidUntilUtc, terminal.TerminalAtUtc);
+            Assert.Null(Assert.Single(store.Persisted).Assessment);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    public async Task Live_session_events_end_old_candidates_without_needing_a_new_eligible_plan()
+    {
+        var plan = LongPlan();
+        var tracker = new PreTradeReadinessTracker();
+        tracker.Restore([new TrackedOpportunitySnapshot(Tracked(plan), plan)]);
+        var nextSessionTime = AsOfUtc.AddSeconds(30);
+        var source = new IdleLiveSource(
+        [
+            new TradeEvent(Symbol, "next-session", nextSessionTime, nextSessionTime,
+                "Synthetic", "next-session-trade", 100m, 10),
+            new TradeEvent(Symbol, Session, AsOfUtc.AddSeconds(10), nextSessionTime,
+                "Synthetic", "late-old-session-trade", 100m, 10)
+        ]);
+        var store = new RecordingReadinessStore();
+        using var cancellation = new CancellationTokenSource();
+        var pipeline = new ScannerPipeline(
+            source, new NullScannerStore(), new ScannerState(configuration: Config()), Config(),
+            new FeatureCalculator(), new MomentumContinuationDetector(), new MutableTimeProvider(nextSessionTime),
+            readinessTracker: tracker, readinessStore: store);
+        var run = pipeline.RunAsync(cancellation.Token);
+        try
+        {
+            var terminal = await store.TerminalPersisted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(TrackedOpportunityStatus.SessionEnded, terminal.Status);
+            Assert.Equal(plan.Id, terminal.PlanId);
+            Assert.Equal(nextSessionTime, terminal.TerminalAtUtc);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Single(store.Persisted);
+        Assert.Empty(tracker.Reconcile(plan.ValidUntilUtc));
+    }
 
     [Fact]
     public void Restored_tracked_candidate_is_reevaluated_not_blindly_restored()
@@ -693,6 +941,8 @@ public sealed class PreTradeReadinessTests
     private sealed class RecordingReadinessStore : IPreTradeReadinessStore
     {
         public List<(TrackedOpportunity Tracked, PreTradeReadinessAssessment? Assessment)> Persisted { get; } = [];
+        public TaskCompletionSource<TrackedOpportunity> TerminalPersisted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<IReadOnlyList<TrackedOpportunitySnapshot>> RestoreActiveAsync(
             CancellationToken cancellationToken) =>
@@ -704,7 +954,35 @@ public sealed class PreTradeReadinessTests
             CancellationToken cancellationToken)
         {
             Persisted.Add((tracked, assessment));
+            if (tracked.Status != TrackedOpportunityStatus.Active)
+            {
+                TerminalPersisted.TrySetResult(tracked);
+            }
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        private long _utcTicks = now.UtcTicks;
+        public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref _utcTicks), TimeSpan.Zero);
+        public void SetUtcNow(DateTimeOffset value) => Interlocked.Exchange(ref _utcTicks, value.UtcTicks);
+    }
+
+    private sealed class IdleLiveSource(IReadOnlyList<MarketEvent>? events = null) : ILiveMarketDataSource
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async IAsyncEnumerable<MarketEvent> ReadEventsAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            foreach (var marketEvent in events ?? [])
+            {
+                yield return marketEvent;
+            }
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            yield break;
         }
     }
 

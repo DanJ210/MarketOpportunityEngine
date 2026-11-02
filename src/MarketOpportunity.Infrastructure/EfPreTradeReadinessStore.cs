@@ -135,10 +135,15 @@ public sealed class EfPreTradeReadinessStore(MarketOpportunityDbContext dbContex
         }
 
         var existingStatus = Enum.Parse<TrackedOpportunityStatus>(existing.Status);
-        if (existingStatus != TrackedOpportunityStatus.Active && existingStatus != tracked.Status)
+        if (existingStatus != TrackedOpportunityStatus.Active
+            && (existingStatus != tracked.Status
+                || existing.HasEstablishedEntryReady != tracked.HasEstablishedEntryReady
+                || existing.TerminalAtUtc != tracked.TerminalAtUtc
+                || !string.Equals(existing.TerminalReasonCode, tracked.TerminalReasonCode, StringComparison.Ordinal)
+                || !string.Equals(existing.TerminalReason, tracked.TerminalReason, StringComparison.Ordinal)))
         {
             throw new InvalidOperationException(
-                $"Tracked opportunity '{tracked.Id}' is terminal ({existingStatus}) and cannot transition to {tracked.Status}.");
+                $"Tracked opportunity '{tracked.Id}' is terminal ({existingStatus}); its lifecycle is immutable.");
         }
 
         if (existing.HasEstablishedEntryReady && !tracked.HasEstablishedEntryReady)

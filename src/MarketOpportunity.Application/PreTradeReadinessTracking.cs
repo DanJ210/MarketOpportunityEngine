@@ -42,6 +42,8 @@ public sealed class PreTradeReadinessTracker
     private readonly object _sync = new();
     private readonly PreTradeReadinessEvaluator _evaluator = new();
     private readonly Dictionary<(string Symbol, string SessionId), (TrackedOpportunity Tracked, TradePlan? Plan)> _active = [];
+    private readonly Dictionary<string, (string SessionId, DateTimeOffset FirstEventTimeUtc, DateTimeOffset LatestEventTimeUtc)>
+        _latestSessions = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Restores persisted active tracked candidates after a restart. Prior readiness states are not
@@ -61,7 +63,71 @@ public sealed class PreTradeReadinessTracker
 
                 var key = Key(snapshot.Tracked.Symbol, snapshot.Tracked.SessionId);
                 _active.TryAdd(key, (snapshot.Tracked, snapshot.Plan));
+                ObserveSession(snapshot.Tracked.Symbol, snapshot.Tracked.SessionId, snapshot.Tracked.PlanAsOfUtc);
             }
+        }
+    }
+
+    public void ObserveSession(string symbol, string sessionId, DateTimeOffset eventTimeUtc)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        lock (_sync)
+        {
+            if (!_latestSessions.TryGetValue(symbol, out var latest))
+            {
+                _latestSessions[symbol] = (sessionId, eventTimeUtc, eventTimeUtc);
+            }
+            else if (eventTimeUtc > latest.LatestEventTimeUtc)
+            {
+                _latestSessions[symbol] = (
+                    sessionId,
+                    sessionId == latest.SessionId ? latest.FirstEventTimeUtc : eventTimeUtc,
+                    eventTimeUtc);
+            }
+        }
+    }
+
+    public IReadOnlyList<TrackedOpportunity> Reconcile(DateTimeOffset evaluatedAtUtc)
+    {
+        lock (_sync)
+        {
+            var terminalCandidates = new List<TrackedOpportunity>();
+            foreach (var (key, active) in _active.ToArray())
+            {
+                var (tracked, plan) = active;
+                var laterSession = _latestSessions[tracked.Symbol];
+                TrackedOpportunity? terminal = null;
+                if (laterSession.SessionId != tracked.SessionId
+                    && laterSession.FirstEventTimeUtc > tracked.PlanAsOfUtc
+                    && laterSession.FirstEventTimeUtc <= evaluatedAtUtc
+                    && (plan is null || laterSession.FirstEventTimeUtc < plan.ValidUntilUtc))
+                {
+                    terminal = EndCandidate(
+                        tracked, TrackedOpportunityStatus.SessionEnded, laterSession.FirstEventTimeUtc,
+                        PreTradeReadinessReason.SessionChanged);
+                }
+                else if (plan is null)
+                {
+                    terminal = EndCandidate(
+                        tracked, TrackedOpportunityStatus.PlanUnavailable, evaluatedAtUtc,
+                        PreTradeReadinessReason.PlanUnavailable);
+                }
+                else if (evaluatedAtUtc >= plan.ValidUntilUtc)
+                {
+                    terminal = EndCandidate(
+                        tracked, TrackedOpportunityStatus.Expired, plan.ValidUntilUtc,
+                        PreTradeReadinessReason.OpportunityExpired);
+                }
+
+                if (terminal is not null)
+                {
+                    terminalCandidates.Add(terminal);
+                    _active.Remove(key);
+                }
+            }
+
+            return terminalCandidates;
         }
     }
 
@@ -86,6 +152,14 @@ public sealed class PreTradeReadinessTracker
         ArgumentNullException.ThrowIfNull(configuration);
         lock (_sync)
         {
+            ObserveSession(snapshot.Symbol, snapshot.SessionId, snapshot.AsOfUtc);
+            var latest = _latestSessions[snapshot.Symbol];
+            if (latest.SessionId != snapshot.SessionId
+                && snapshot.AsOfUtc < latest.LatestEventTimeUtc)
+            {
+                return new PreTradeReadinessEvaluation(null, null, null);
+            }
+
             var key = Key(snapshot.Symbol, snapshot.SessionId);
             if (!_active.TryGetValue(key, out var active))
             {
@@ -114,14 +188,13 @@ public sealed class PreTradeReadinessTracker
             var tracked = active.Tracked;
             if (PreTradeReadinessEvaluator.TerminalStatus(assessment) is { } terminalStatus)
             {
-                tracked = tracked with
-                {
-                    Status = terminalStatus,
-                    TerminalAtUtc = assessment.AsOfUtc,
-                    TerminalReasonCode = assessment.Reason.ToString(),
-                    TerminalReason =
-                        "The tracked candidate reached a terminal readiness condition; a subsequent evaluation may select the newest eligible candidate."
-                };
+                tracked = EndCandidate(
+                    tracked,
+                    terminalStatus,
+                    terminalStatus == TrackedOpportunityStatus.Expired
+                        ? active.Plan!.ValidUntilUtc
+                        : assessment.AsOfUtc,
+                    assessment.Reason);
                 _active.Remove(key);
             }
             else if (assessment.State == PreTradeReadinessState.EntryReady
@@ -140,6 +213,20 @@ public sealed class PreTradeReadinessTracker
 
     private static (string Symbol, string SessionId) Key(string symbol, string sessionId) =>
         (symbol.ToUpperInvariant(), sessionId);
+
+    private static TrackedOpportunity EndCandidate(
+        TrackedOpportunity tracked,
+        TrackedOpportunityStatus status,
+        DateTimeOffset terminalAtUtc,
+        PreTradeReadinessReason reason) =>
+        tracked with
+        {
+            Status = status,
+            TerminalAtUtc = terminalAtUtc,
+            TerminalReasonCode = reason.ToString(),
+            TerminalReason =
+                "The tracked candidate reached a terminal readiness condition; a subsequent evaluation may select the newest eligible candidate."
+        };
 }
 
 /// <summary>

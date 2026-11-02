@@ -85,8 +85,8 @@ public enum PreTradeReadinessReason
 
 /// <summary>
 /// Which prior-session context participated in a readiness assessment.
-/// <see cref="PriorSessionEnhanced"/> requires complete prior-session context;
-/// partial, unavailable, or invalid prior context falls back to <see cref="CurrentSessionOnly"/>.
+/// <see cref="PriorSessionEnhanced"/> requires complete prior-session context to materially
+/// participate. Context availability alone does not qualify; v2 uses current-session inputs only.
 /// </summary>
 public enum ReadinessContextMode
 {

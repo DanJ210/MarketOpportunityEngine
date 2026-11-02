@@ -16,7 +16,7 @@ public sealed record TrackedOpportunitySelectionResult(
 /// </summary>
 public sealed class PreTradeReadinessEvaluator
 {
-    public const string DefinitionVersion = "pre-trade-readiness-v1";
+    public const string DefinitionVersion = "pre-trade-readiness-v2";
     public const string SelectionDefinitionVersion = "tracked-opportunity-selection-v1";
 
     /// <summary>
@@ -178,8 +178,8 @@ public sealed class PreTradeReadinessEvaluator
     /// <summary>
     /// Computes the current readiness of a tracked candidate from market state at the snapshot's
     /// AsOfUtc. Price geometry uses the pinned immutable plan and market event time only;
-    /// <paramref name="evaluatedAtUtc"/> is used solely for validity-period expiry (matching
-    /// publication semantics) and the audit timestamp.
+    /// <paramref name="evaluatedAtUtc"/> controls current quote freshness and validity-period
+    /// expiry (matching publication semantics), never analytical geometry.
     /// </summary>
     public PreTradeReadinessAssessment Evaluate(
         TrackedOpportunity tracked,
@@ -200,18 +200,12 @@ public sealed class PreTradeReadinessEvaluator
 
         var evidence = new List<PreTradeReadinessEvidence>();
         var completeness = priorContext?.Context.Completeness;
-        var contextMode = completeness == PriorSessionContextStatus.Available
-            ? ReadinessContextMode.PriorSessionEnhanced
-            : ReadinessContextMode.CurrentSessionOnly;
-        evidence.Add(contextMode == ReadinessContextMode.PriorSessionEnhanced
-            ? new PreTradeReadinessEvidence(
-                "PriorSessionContextUsed",
-                "Complete prior-session context participated in this assessment.")
-            : new PreTradeReadinessEvidence(
-                "CurrentSessionOnlyFallback",
-                completeness is null
-                    ? "No prior-session context is attached; readiness used current-session analysis only."
-                    : $"Prior-session context is {completeness}; readiness used current-session analysis only and did not treat partial history as confirmed support or resistance."));
+        var contextMode = ReadinessContextMode.CurrentSessionOnly;
+        evidence.Add(new PreTradeReadinessEvidence(
+            "CurrentSessionOnlyFallback",
+            completeness is null
+                ? "No prior-session context is attached; readiness used current-session analysis only."
+                : $"Prior-session context is {completeness}, but its levels are not used by this readiness definition; readiness used current-session analysis only and did not treat partial history as confirmed support or resistance."));
 
         PreTradeReadinessState state;
         PreTradeReadinessReason reason;
@@ -220,7 +214,26 @@ public sealed class PreTradeReadinessEvaluator
         decimal? distanceRiskMultiple = null;
         var insideEntryZone = false;
 
-        if (plan is null || plan.Id != tracked.PlanId)
+        if (tracked.Status != TrackedOpportunityStatus.Active)
+        {
+            reason = tracked.Status switch
+            {
+                TrackedOpportunityStatus.Expired => PreTradeReadinessReason.OpportunityExpired,
+                TrackedOpportunityStatus.Invalidated => PreTradeReadinessReason.InvalidationCrossed,
+                TrackedOpportunityStatus.TargetReachedBeforeEntry => PreTradeReadinessReason.TargetReachedBeforeEntry,
+                TrackedOpportunityStatus.ExtendedBeyondEntry => PreTradeReadinessReason.ExtendedBeyondEntry,
+                TrackedOpportunityStatus.SessionEnded => PreTradeReadinessReason.SessionChanged,
+                TrackedOpportunityStatus.PlanUnavailable => PreTradeReadinessReason.PlanUnavailable,
+                _ => throw new InvalidOperationException($"Unknown tracked lifecycle status: {tracked.Status}.")
+            };
+            state = tracked.Status == TrackedOpportunityStatus.PlanUnavailable
+                ? PreTradeReadinessState.Unavailable
+                : PreTradeReadinessState.NoLongerActionable;
+            evidence.Add(new PreTradeReadinessEvidence(
+                "TrackedCandidateTerminal",
+                $"The tracked candidate ended at {tracked.TerminalAtUtc:O}: {tracked.TerminalReason}"));
+        }
+        else if (plan is null || plan.Id != tracked.PlanId)
         {
             state = PreTradeReadinessState.Unavailable;
             reason = PreTradeReadinessReason.PlanUnavailable;
@@ -311,7 +324,8 @@ public sealed class PreTradeReadinessEvaluator
                 publication,
                 configuration,
                 price.Value,
-                evidence);
+                evidence,
+                evaluatedAtUtc);
         }
 
         var id = CreateIdentity(
@@ -363,7 +377,8 @@ public sealed class PreTradeReadinessEvaluator
         PublicationDecision publication,
         ScannerConfiguration configuration,
         decimal price,
-        List<PreTradeReadinessEvidence> evidence)
+        List<PreTradeReadinessEvidence> evidence,
+        DateTimeOffset evaluatedAtUtc)
     {
         var zone = plan.EntryZone!;
         var invalidation = plan.InvalidationPrice!.Value;
@@ -407,7 +422,7 @@ public sealed class PreTradeReadinessEvaluator
         if (insideZone)
         {
             var confirmationFailures = EvaluateConfirmation(
-                plan, snapshot, currentOpportunity, publication, configuration, tracked.Direction);
+                snapshot, currentOpportunity, publication, configuration, tracked.Direction, evaluatedAtUtc);
             if (confirmationFailures.Count == 0)
             {
                 evidence.Add(new PreTradeReadinessEvidence(
@@ -439,12 +454,12 @@ public sealed class PreTradeReadinessEvaluator
     }
 
     private static List<PreTradeReadinessEvidence> EvaluateConfirmation(
-        TradePlan plan,
         FeatureSnapshot snapshot,
         Opportunity currentOpportunity,
         PublicationDecision publication,
         ScannerConfiguration configuration,
-        TradeDirection direction)
+        TradeDirection direction,
+        DateTimeOffset evaluatedAtUtc)
     {
         var failures = new List<PreTradeReadinessEvidence>();
         if (DirectionFromBias(currentOpportunity.Bias) != direction)
@@ -478,7 +493,12 @@ public sealed class PreTradeReadinessEvaluator
                 $"The current publication is {publication.State} ({publication.ReasonCode}), not Active."));
         }
 
-        if (!snapshot.IsQuoteValid)
+        if (!snapshot.IsQuoteValid
+            || snapshot.QuoteAge is not { } quoteAge
+            || quoteAge < TimeSpan.Zero
+            || evaluatedAtUtc - snapshot.AsOfUtc + quoteAge < TimeSpan.Zero
+            || evaluatedAtUtc - snapshot.AsOfUtc + quoteAge
+                > TimeSpan.FromSeconds(configuration.MaximumQuoteAgeSeconds))
         {
             failures.Add(new PreTradeReadinessEvidence(
                 "InvalidQuote",

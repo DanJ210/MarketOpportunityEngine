@@ -218,7 +218,9 @@ public sealed class ScannerState(
                 evaluatedAtUtc,
                 status.HasUnresolvedDataGap);
             var readiness = result.Readiness;
-            if (readiness is not null && _configuration is not null)
+            if (readiness is not null
+                && readiness.Tracked.Status == TrackedOpportunityStatus.Active
+                && _configuration is not null)
             {
                 // Readiness is a current-state evaluation of the same pinned plan, not a restored
                 // prior state: health/publication changes re-derive it from the latest known
@@ -258,6 +260,7 @@ public sealed class ScannerPipeline(
 {
     private static readonly TimeSpan LiveAnalysisInterval = TimeSpan.FromSeconds(5);
     private readonly TradePlanBuilder _tradePlanBuilder = new();
+    private readonly PreTradeReadinessEvaluator _readinessEvaluator = new();
     private readonly IOpportunityPublicationGate _publicationGate =
         publicationGate ?? new OpportunityPublicationGate();
     private readonly LiveMarketDataRecoveryOptions _recoveryOptions =
@@ -302,7 +305,7 @@ public sealed class ScannerPipeline(
             throw new InvalidOperationException("The recorded market-data fixture contains no events.");
         }
 
-        var results = new List<ScannerAnalysisResult>(states.Count);
+        var results = new Dictionary<(string Symbol, string SessionId), ScannerAnalysisResult>();
         var eventCount = 0;
         foreach (var (key, symbolState) in states
                      .OrderBy(item => item.Key.SessionId, StringComparer.Ordinal)
@@ -311,6 +314,8 @@ public sealed class ScannerPipeline(
             var stateEvents = eventsByState[key];
             eventCount += stateEvents.Count;
             var asOfUtc = stateEvents.Max(marketEvent => marketEvent.EventTimeUtc).ToUniversalTime();
+            readinessTracker?.ObserveSession(key.Symbol, key.SessionId, asOfUtc);
+            await ReconcileReadinessAsync(asOfUtc, results, cancellationToken);
             var snapshot = featureCalculator.Calculate(
                 symbolState,
                 asOfUtc,
@@ -355,7 +360,7 @@ public sealed class ScannerPipeline(
                     cancellationToken);
             }
 
-            results.Add(new ScannerAnalysisResult(
+            results.Add(key, new ScannerAnalysisResult(
                 snapshot,
                 opportunity,
                 publication,
@@ -369,10 +374,44 @@ public sealed class ScannerPipeline(
                 MarketDataHealthStatus.Recorded,
                 source.Capabilities.Provider,
                 eventCount,
-                results.Max(result => result.Features.AsOfUtc).ToUniversalTime(),
+                results.Values.Max(result => result.Features.AsOfUtc).ToUniversalTime(),
                 null,
                 Capabilities: source.Capabilities),
-            results);
+            results.Values.ToArray());
+    }
+
+    private async Task ReconcileReadinessAsync(
+        DateTimeOffset evaluatedAtUtc,
+        IDictionary<(string Symbol, string SessionId), ScannerAnalysisResult> results,
+        CancellationToken cancellationToken)
+    {
+        if (readinessTracker is null)
+        {
+            return;
+        }
+
+        foreach (var terminal in readinessTracker.Reconcile(evaluatedAtUtc))
+        {
+            if (readinessStore is not null)
+            {
+                await readinessStore.PersistAsync(terminal, null, cancellationToken);
+            }
+
+            var key = (terminal.Symbol, terminal.SessionId);
+            if (results.TryGetValue(key, out var result)
+                && result.Readiness is { } readiness
+                && readiness.Tracked.Id == terminal.Id)
+            {
+                // Lifecycle-only reconciliation has no new market observation to persist.
+                var assessment = _readinessEvaluator.Evaluate(
+                    terminal, readiness.Plan, result.Features, result.Opportunity, result.Publication,
+                    result.PriorSessionContext, configuration, evaluatedAtUtc);
+                results[key] = result with
+                {
+                    Readiness = readiness with { Tracked = terminal, Assessment = assessment }
+                };
+            }
+        }
     }
 
     private async Task RunLiveAsync(CancellationToken cancellationToken)
@@ -395,6 +434,7 @@ public sealed class ScannerPipeline(
         var pendingEvents = new Dictionary<(string Symbol, string SessionId), List<MarketEvent>>();
         var lastAnalysisAt = new Dictionary<(string Symbol, string SessionId), DateTimeOffset>();
         var results = new Dictionary<(string Symbol, string SessionId), ScannerAnalysisResult>();
+        await ReconcileReadinessAsync(timeProvider.GetUtcNow(), results, cancellationToken);
         var eventCount = 0;
         long producedEvents = 0;
         long acceptedEvents = 0;
@@ -581,6 +621,8 @@ public sealed class ScannerPipeline(
                         break;
                     }
 
+                    await ReconcileReadinessAsync(
+                        timeProvider.GetUtcNow(), results, persistenceCancellation.Token);
                     SetLiveStatus(latestReceivedTime);
                     healthTickTask = healthTimer.WaitForNextTickAsync(consumerCancellation.Token).AsTask();
                     continue;
@@ -629,6 +671,8 @@ public sealed class ScannerPipeline(
 
                     diagnostics?.Dequeued(channel.Reader.Count, duplicate: false);
                     pendingEvents[key].Add(marketEvent);
+                    readinessTracker?.ObserveSession(
+                        marketEvent.Symbol, marketEvent.SessionId, marketEvent.EventTimeUtc);
                     eventCount++;
                     latestEventTime = latestEventTime is null || marketEvent.EventTimeUtc > latestEventTime
                         ? marketEvent.EventTimeUtc
@@ -652,6 +696,7 @@ public sealed class ScannerPipeline(
         async Task AnalyzePendingAsync(bool force)
         {
             var now = timeProvider.GetUtcNow();
+            await ReconcileReadinessAsync(now, results, persistenceCancellation.Token);
             foreach (var (key, symbolState) in states)
             {
                 var pending = pendingEvents[key];
