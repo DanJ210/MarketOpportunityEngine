@@ -4,7 +4,7 @@ A .NET 10 modular-monolith decision-support scanner for US equities/ETFs. The ap
 
 ## Current milestone
 
-**Milestone A.2.3b - Tracked Opportunity + Pre-Trade Readiness: IMPLEMENTED; PR #2 review corrections require guarded SQL revalidation.** The original offline + guarded SQL closeout is recorded; the review corrections are separate validation work. A.1 live scanner validation, A.2.1 market structure, A.2.2 immutable candidate TradePlans, and A.2.3a prior-session context are complete. See [PROJECT_STATUS.md](./PROJECT_STATUS.md) for the concise checkpoint and [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md) for historical evidence.
+**Milestone A.2.3b - Tracked Opportunity + Pre-Trade Readiness: COMPLETE (offline + guarded SQL).** A.1 live scanner validation, A.2.1 market structure, A.2.2 immutable candidate TradePlans, and A.2.3a prior-session context are complete. A.2.3b adds tracked candidates and pre-trade readiness states over existing approved outputs. **Next: A.2.4a Structural Level Interaction (NOT STARTED).** See [PROJECT_STATUS.md](./PROJECT_STATUS.md) for the concise checkpoint and [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md) for historical evidence.
 
 ## Architecture overview
 
@@ -172,7 +172,6 @@ A tracked candidate pins one immutable `PlanDefined` plan per symbol/session; th
 ## Current limitations
 
 - A.2.3b readiness states describe market conditions only; Entry Ready is not an execution instruction, and no order/position capability exists.
-- The original A.2.3b guarded SQL closeout passed; PR #2 review corrections require guarded SQL revalidation.
 - The recorded fixture produces no confirmed structure, so it yields no tracked candidates; readiness reports no tracked candidate in fixture mode.
 - The `Scanner:PreTrade:ApproachDistanceRiskMultiple` default (1.0) is provisional and not market calibrated; it makes no profitability claim.
 - The scanner has no `PositionContext` and cannot infer whether a user entered a trade. `MANAGE`, `TAKE PROFIT`, and `EXIT` states are not implemented.

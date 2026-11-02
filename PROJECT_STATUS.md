@@ -1,7 +1,6 @@
 # Current Project Status
 
-**Current checkpoint:** Milestone A.2.3b - Tracked Opportunity + Pre-Trade Readiness
-**Updated:** 2026-11-02
+**Current checkpoint:** Milestone A.2.4a - Structural Level Interaction (NOT STARTED)
 
 ## Milestones
 
@@ -31,8 +30,8 @@ The scanner does not know the user's actual holdings; readiness states describe 
 
 ## Immediate next checkpoint
 
-**Close PR #2 review-correction validation before A.2.4a Structural Level Interaction.** The original SQL closeout does not validate these later fixes. A.2.4a has not started.
+**A.2.4a Structural Level Interaction (NOT STARTED).** Describe price relative to eligible structural support and resistance levels as parallel, descriptive evidence. Keep it separate from opportunities, TradePlans, and pre-trade readiness; reaction classifications remain future A.2.4b work. An observation is not a trade signal.
 
-**Current blockers:** Guarded SQL revalidation for the PR #2 corrections is unavailable without an already configured dedicated test connection.
+**Current blockers:** [The A.2.3b pull request](https://github.com/DanJ210/MarketOpportunityEngine/pull/2) has unresolved review findings involving quote freshness, terminal readiness/history, and context provenance. Resolve them before merging or beginning A.2.4a
 
 No live-provider validation, outcome tracking, backtesting, ML/ONNX inference, broker integration, or order execution is part of A.2.3. See the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md) for product and architecture contracts.
