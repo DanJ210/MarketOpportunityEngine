@@ -13,6 +13,16 @@ public sealed class ScannerRunnerService(
         var pipeline = scope.ServiceProvider.GetRequiredService<ScannerPipeline>();
         try
         {
+            // Restore persisted active tracked candidates before scanning so readiness is
+            // recomputed for the same pinned PlanId from current trustworthy market state.
+            // Prior readiness states are never restored blindly.
+            var tracker = scope.ServiceProvider.GetService<PreTradeReadinessTracker>();
+            var readinessStore = scope.ServiceProvider.GetService<IPreTradeReadinessStore>();
+            if (tracker is not null && readinessStore is not null)
+            {
+                tracker.Restore(await readinessStore.RestoreActiveAsync(stoppingToken));
+            }
+
             await pipeline.RunAsync(stoppingToken);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

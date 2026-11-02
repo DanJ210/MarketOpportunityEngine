@@ -60,12 +60,14 @@ public sealed record ScannerAnalysisResult(
     Opportunity Opportunity,
     PublicationDecision Publication,
     TradePlan TradePlan,
-    PriorSessionContextView? PriorSessionContext = null);
+    PriorSessionContextView? PriorSessionContext = null,
+    PreTradeReadinessProjection? Readiness = null);
 
 public sealed record OpportunityPublicationReadModel(
     Opportunity Opportunity,
     PublicationDecision Publication,
-    TradePlan TradePlan);
+    TradePlan TradePlan,
+    PreTradeReadinessReadModel? Readiness = null);
 
 public sealed record ScannerReadModel(
     ScannerStatus Status,
@@ -144,12 +146,15 @@ public sealed class OpportunityPublicationGate : IOpportunityPublicationGate
 
 public sealed class ScannerState(
     IOpportunityPublicationGate? publicationGate = null,
-    TimeProvider? timeProvider = null)
+    TimeProvider? timeProvider = null,
+    ScannerConfiguration? configuration = null)
 {
     private readonly object _sync = new();
     private readonly IOpportunityPublicationGate _publicationGate =
         publicationGate ?? new OpportunityPublicationGate();
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private readonly ScannerConfiguration? _configuration = configuration;
+    private readonly PreTradeReadinessEvaluator _readinessEvaluator = new();
     private IReadOnlyList<ScannerAnalysisResult> _results = [];
     private ScannerStatus _status = new(
         MarketDataHealthStatus.Connecting,
@@ -205,13 +210,34 @@ public sealed class ScannerState(
         ScannerStatus status,
         IReadOnlyList<ScannerAnalysisResult> results,
         DateTimeOffset evaluatedAtUtc) =>
-        results.Select(result => result with
+        results.Select(result =>
         {
-            Publication = _publicationGate.Evaluate(
+            var publication = _publicationGate.Evaluate(
                 result.Opportunity,
                 status.FeedStatus,
                 evaluatedAtUtc,
-                status.HasUnresolvedDataGap)
+                status.HasUnresolvedDataGap);
+            var readiness = result.Readiness;
+            if (readiness is not null
+                && readiness.Tracked.Status == TrackedOpportunityStatus.Active
+                && _configuration is not null)
+            {
+                // Readiness is a current-state evaluation of the same pinned plan, not a restored
+                // prior state: health/publication changes re-derive it from the latest known
+                // market state. This projection is not persisted lifecycle history.
+                var assessment = _readinessEvaluator.Evaluate(
+                    readiness.Tracked,
+                    readiness.Plan,
+                    result.Features,
+                    result.Opportunity,
+                    publication,
+                    result.PriorSessionContext,
+                    _configuration,
+                    evaluatedAtUtc);
+                readiness = readiness with { Assessment = assessment };
+            }
+
+            return result with { Publication = publication, Readiness = readiness };
         }).ToArray();
 }
 
@@ -227,10 +253,16 @@ public sealed class ScannerPipeline(
     Action<string, string>? logReconnectFailure = null,
     LiveValidationDiagnostics? diagnostics = null,
     LivePipelineOptions? livePipelineOptions = null,
-    IPriorSessionContextProvider? priorSessionContextProvider = null)
+    IPriorSessionContextProvider? priorSessionContextProvider = null,
+    IOpportunityPublicationGate? publicationGate = null,
+    PreTradeReadinessTracker? readinessTracker = null,
+    IPreTradeReadinessStore? readinessStore = null)
 {
     private static readonly TimeSpan LiveAnalysisInterval = TimeSpan.FromSeconds(5);
     private readonly TradePlanBuilder _tradePlanBuilder = new();
+    private readonly PreTradeReadinessEvaluator _readinessEvaluator = new();
+    private readonly IOpportunityPublicationGate _publicationGate =
+        publicationGate ?? new OpportunityPublicationGate();
     private readonly LiveMarketDataRecoveryOptions _recoveryOptions =
         recoveryOptions ?? new LiveMarketDataRecoveryOptions();
     private readonly LivePipelineOptions _livePipelineOptions =
@@ -273,7 +305,7 @@ public sealed class ScannerPipeline(
             throw new InvalidOperationException("The recorded market-data fixture contains no events.");
         }
 
-        var results = new List<ScannerAnalysisResult>(states.Count);
+        var results = new Dictionary<(string Symbol, string SessionId), ScannerAnalysisResult>();
         var eventCount = 0;
         foreach (var (key, symbolState) in states
                      .OrderBy(item => item.Key.SessionId, StringComparer.Ordinal)
@@ -282,6 +314,8 @@ public sealed class ScannerPipeline(
             var stateEvents = eventsByState[key];
             eventCount += stateEvents.Count;
             var asOfUtc = stateEvents.Max(marketEvent => marketEvent.EventTimeUtc).ToUniversalTime();
+            readinessTracker?.ObserveSession(key.Symbol, key.SessionId, asOfUtc);
+            await ReconcileReadinessAsync(asOfUtc, results, cancellationToken);
             var snapshot = featureCalculator.Calculate(
                 symbolState,
                 asOfUtc,
@@ -297,6 +331,20 @@ public sealed class ScannerPipeline(
                     snapshot.AsOfUtc,
                     snapshot.ReferencePrice,
                     cancellationToken);
+            // Recorded analysis evaluates publication and readiness at the analysis event time so
+            // that selection and the persisted assessment replay deterministically.
+            var publication = _publicationGate.Evaluate(
+                opportunity,
+                MarketDataHealthStatus.Recorded,
+                asOfUtc);
+            var readinessEvaluation = readinessTracker?.Evaluate(
+                snapshot,
+                opportunity,
+                tradePlan,
+                publication,
+                priorContext,
+                configuration,
+                asOfUtc);
             await store.PersistRunAsync(
                 configuration,
                 stateEvents,
@@ -304,16 +352,21 @@ public sealed class ScannerPipeline(
                 opportunity,
                 tradePlan,
                 cancellationToken);
-            results.Add(new ScannerAnalysisResult(
+            if (readinessStore is not null && readinessEvaluation?.PersistTracked is not null)
+            {
+                await readinessStore.PersistAsync(
+                    readinessEvaluation.PersistTracked,
+                    readinessEvaluation.PersistAssessment,
+                    cancellationToken);
+            }
+
+            results.Add(key, new ScannerAnalysisResult(
                 snapshot,
                 opportunity,
-                new PublicationDecision(
-                    OpportunityLifecycleState.NotQualified,
-                    "PendingPublication",
-                    "Publication status has not been evaluated.",
-                    asOfUtc),
+                publication,
                 tradePlan,
-                priorContext));
+                priorContext,
+                readinessEvaluation?.Projection));
         }
 
         state.SetResults(
@@ -321,10 +374,44 @@ public sealed class ScannerPipeline(
                 MarketDataHealthStatus.Recorded,
                 source.Capabilities.Provider,
                 eventCount,
-                results.Max(result => result.Features.AsOfUtc).ToUniversalTime(),
+                results.Values.Max(result => result.Features.AsOfUtc).ToUniversalTime(),
                 null,
                 Capabilities: source.Capabilities),
-            results);
+            results.Values.ToArray());
+    }
+
+    private async Task ReconcileReadinessAsync(
+        DateTimeOffset evaluatedAtUtc,
+        IDictionary<(string Symbol, string SessionId), ScannerAnalysisResult> results,
+        CancellationToken cancellationToken)
+    {
+        if (readinessTracker is null)
+        {
+            return;
+        }
+
+        foreach (var terminal in readinessTracker.Reconcile(evaluatedAtUtc))
+        {
+            if (readinessStore is not null)
+            {
+                await readinessStore.PersistAsync(terminal, null, cancellationToken);
+            }
+
+            var key = (terminal.Symbol, terminal.SessionId);
+            if (results.TryGetValue(key, out var result)
+                && result.Readiness is { } readiness
+                && readiness.Tracked.Id == terminal.Id)
+            {
+                // Lifecycle-only reconciliation has no new market observation to persist.
+                var assessment = _readinessEvaluator.Evaluate(
+                    terminal, readiness.Plan, result.Features, result.Opportunity, result.Publication,
+                    result.PriorSessionContext, configuration, evaluatedAtUtc);
+                results[key] = result with
+                {
+                    Readiness = readiness with { Tracked = terminal, Assessment = assessment }
+                };
+            }
+        }
     }
 
     private async Task RunLiveAsync(CancellationToken cancellationToken)
@@ -347,6 +434,7 @@ public sealed class ScannerPipeline(
         var pendingEvents = new Dictionary<(string Symbol, string SessionId), List<MarketEvent>>();
         var lastAnalysisAt = new Dictionary<(string Symbol, string SessionId), DateTimeOffset>();
         var results = new Dictionary<(string Symbol, string SessionId), ScannerAnalysisResult>();
+        await ReconcileReadinessAsync(timeProvider.GetUtcNow(), results, cancellationToken);
         var eventCount = 0;
         long producedEvents = 0;
         long acceptedEvents = 0;
@@ -533,6 +621,8 @@ public sealed class ScannerPipeline(
                         break;
                     }
 
+                    await ReconcileReadinessAsync(
+                        timeProvider.GetUtcNow(), results, persistenceCancellation.Token);
                     SetLiveStatus(latestReceivedTime);
                     healthTickTask = healthTimer.WaitForNextTickAsync(consumerCancellation.Token).AsTask();
                     continue;
@@ -581,6 +671,8 @@ public sealed class ScannerPipeline(
 
                     diagnostics?.Dequeued(channel.Reader.Count, duplicate: false);
                     pendingEvents[key].Add(marketEvent);
+                    readinessTracker?.ObserveSession(
+                        marketEvent.Symbol, marketEvent.SessionId, marketEvent.EventTimeUtc);
                     eventCount++;
                     latestEventTime = latestEventTime is null || marketEvent.EventTimeUtc > latestEventTime
                         ? marketEvent.EventTimeUtc
@@ -604,6 +696,7 @@ public sealed class ScannerPipeline(
         async Task AnalyzePendingAsync(bool force)
         {
             var now = timeProvider.GetUtcNow();
+            await ReconcileReadinessAsync(now, results, persistenceCancellation.Token);
             foreach (var (key, symbolState) in states)
             {
                 var pending = pendingEvents[key];
@@ -625,6 +718,8 @@ public sealed class ScannerPipeline(
                 Opportunity opportunity;
                 TradePlan tradePlan;
                 PriorSessionContextView? priorContext;
+                PublicationDecision publication;
+                PreTradeReadinessEvaluation? readinessEvaluation;
                 try
                 {
                     snapshot = featureCalculator.Calculate(
@@ -642,6 +737,20 @@ public sealed class ScannerPipeline(
                             snapshot.AsOfUtc,
                             snapshot.ReferencePrice,
                             cancellationToken);
+                    var currentStatus = CreateLiveStatus(null, now, latestReceivedTime, null);
+                    publication = _publicationGate.Evaluate(
+                        opportunity,
+                        currentStatus.FeedStatus,
+                        now,
+                        currentStatus.HasUnresolvedDataGap);
+                    readinessEvaluation = readinessTracker?.Evaluate(
+                        snapshot,
+                        opportunity,
+                        tradePlan,
+                        publication,
+                        priorContext,
+                        configuration,
+                        now);
                 }
                 catch
                 {
@@ -660,6 +769,13 @@ public sealed class ScannerPipeline(
                         opportunity,
                         tradePlan,
                         persistenceCancellation.Token);
+                    if (readinessStore is not null && readinessEvaluation?.PersistTracked is not null)
+                    {
+                        await readinessStore.PersistAsync(
+                            readinessEvaluation.PersistTracked,
+                            readinessEvaluation.PersistAssessment,
+                            persistenceCancellation.Token);
+                    }
                 }
                 catch (OperationCanceledException) when (persistenceCancellation.IsCancellationRequested)
                 {
@@ -684,13 +800,10 @@ public sealed class ScannerPipeline(
                 results[key] = new ScannerAnalysisResult(
                     snapshot,
                     opportunity,
-                    new PublicationDecision(
-                        OpportunityLifecycleState.NotQualified,
-                        "PendingPublication",
-                        "Publication status has not been evaluated.",
-                        asOfUtc),
+                    publication,
                     tradePlan,
-                    priorContext);
+                    priorContext,
+                    readinessEvaluation?.Projection);
             }
 
             lock (statusSync)

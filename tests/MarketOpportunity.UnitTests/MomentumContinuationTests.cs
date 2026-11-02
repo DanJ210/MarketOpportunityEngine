@@ -230,11 +230,12 @@ public sealed class MomentumContinuationTests
         var configuration = new ScannerConfiguration();
         configuration.Validate();
 
-        Assert.Equal("scanner-config-v16", configuration.Version);
+        Assert.Equal("scanner-config-v17", configuration.Version);
         Assert.Equal("features-v16", configuration.FeatureSetVersion);
         Assert.Equal("momentum-continuation-v1", configuration.SetupDefinitionVersion);
         Assert.Equal(1.00m, configuration.MaximumSessionRealizedVolatilityPercent);
         Assert.Equal(100_000m, configuration.MinimumShortHorizonDollarVolumeUsd);
+        Assert.Equal(1.0m, configuration.PreTrade.ApproachDistanceRiskMultiple);
         Assert.Equal(configuration, JsonSerializer.Deserialize<ScannerConfiguration>(
             JsonSerializer.Serialize(configuration)));
         Assert.Throws<InvalidOperationException>(() =>

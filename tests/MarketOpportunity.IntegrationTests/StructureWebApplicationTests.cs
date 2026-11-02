@@ -87,9 +87,15 @@ public sealed class StructureWebApplicationTests
         Assert.Contains("MARKET STRUCTURE", html);
         Assert.Contains("TRADE PLAN", html);
         Assert.Contains("PRIOR SESSION", html);
+        Assert.Contains("PRE-TRADE READINESS", html);
+        Assert.Contains("No tracked candidate opportunity", html);
         Assert.Contains("Support and resistance are historical reference areas, not guarantees.", html);
         Assert.Contains("Insufficient", html);
         Assert.Contains("not a probability of profit or a trading recommendation", html);
+        Assert.DoesNotContain("Buy now", html);
+        Assert.DoesNotContain("Sell now", html);
+        Assert.DoesNotContain("Short now", html);
+        Assert.DoesNotContain("Guaranteed", html);
     }
 
     [Fact]
@@ -175,6 +181,7 @@ public sealed class StructureWebApplicationTests
         Assert.Contains("Latest swing high: $107.00", html);
         Assert.Contains("TRADE PLAN", html);
         Assert.Contains("Candidate geometry only", html);
+        Assert.Contains("PRE-TRADE READINESS", html);
         Assert.Contains("Latest swing low: $104.00", html);
         Assert.Contains("MARKET STRUCTURE", html);
         Assert.Contains("Nearest resistance candidate: $105.00 · support candidate: $104.00", html);
@@ -195,6 +202,8 @@ public sealed class StructureWebApplicationTests
             AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "MarketOpportunity.Web"));
 
         public CapturingStore Store { get; } = new();
+
+        public InMemoryReadinessStore ReadinessStore { get; } = new();
 
         protected override IHost CreateHost(IHostBuilder builder)
         {
@@ -218,6 +227,8 @@ public sealed class StructureWebApplicationTests
                 }
                 services.RemoveAll<IScannerStore>();
                 services.AddSingleton<IScannerStore>(Store);
+                services.RemoveAll<IPreTradeReadinessStore>();
+                services.AddSingleton<IPreTradeReadinessStore>(ReadinessStore);
             });
         }
 
@@ -244,6 +255,24 @@ public sealed class StructureWebApplicationTests
         {
             Snapshot = featureSnapshot;
             TradePlan = tradePlan;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class InMemoryReadinessStore : IPreTradeReadinessStore
+    {
+        public List<(TrackedOpportunity Tracked, PreTradeReadinessAssessment? Assessment)> Persisted { get; } = [];
+
+        public Task<IReadOnlyList<TrackedOpportunitySnapshot>> RestoreActiveAsync(
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<TrackedOpportunitySnapshot>>([]);
+
+        public Task PersistAsync(
+            TrackedOpportunity tracked,
+            PreTradeReadinessAssessment? assessment,
+            CancellationToken cancellationToken)
+        {
+            Persisted.Add((tracked, assessment));
             return Task.CompletedTask;
         }
     }

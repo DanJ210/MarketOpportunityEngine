@@ -82,22 +82,13 @@ public sealed class PriorSessionContextBuilder(FeatureCalculator featureCalculat
                 "At least one eligible prior-session trade has a non-positive price; session levels are invalid.",
             _ => "No eligible prior-session trades are available."
         };
-        var confirmedHighs = new[]
-            {
-                features?.LatestConfirmedSwingHigh,
-                features?.PreviousConfirmedSwingHigh
-            }
-            .OfType<ConfirmedSwing>()
-            .DistinctBy(swing => swing.Id)
-            .ToArray();
-        var confirmedLows = new[]
-            {
-                features?.LatestConfirmedSwingLow,
-                features?.PreviousConfirmedSwingLow
-            }
-            .OfType<ConfirmedSwing>()
-            .DistinctBy(swing => swing.Id)
-            .ToArray();
+        // Candidate selection uses every eligible confirmed pivot from the shared swing
+        // calculation; latest/previous swings remain only the structure summary.
+        var (confirmedHighs, confirmedLows) = FeatureCalculator.CalculateConfirmedSwings(
+            trades,
+            symbol,
+            priorSession.SessionId,
+            configuration.FeatureSetVersion);
         var supportCandidates = confirmedLows
             .Select(ToCandidate)
             .ToArray();

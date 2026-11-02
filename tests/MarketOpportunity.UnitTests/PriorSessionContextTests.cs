@@ -107,6 +107,47 @@ public sealed class PriorSessionContextTests
     }
 
     [Fact]
+    public void Candidate_selection_uses_all_confirmed_pivots_not_only_the_latest_two()
+    {
+        // Confirmed swing highs are 10, 8, 6 in event-time order; the nearest
+        // resistance at or above a reference price of 9 is the oldest pivot, 10.
+        var resistanceContext = _builder.Build(
+            "MOE",
+            CurrentSession.SessionId,
+            PriorSession,
+            Historical(
+                CreateTrades([1m, 2m, 10m, 3m, 2m, 8m, 4m, 3m, 6m, 2m, 3m]),
+                complete: true),
+            new ScannerConfiguration());
+        var resistanceView = PriorSessionContextBuilder.CreateView(resistanceContext, 9m);
+
+        // Confirmed swing lows are 15, 13, 11 in event-time order; the nearest
+        // support at or below a reference price of 16 is the oldest pivot, 15.
+        var supportContext = _builder.Build(
+            "MOE",
+            CurrentSession.SessionId,
+            PriorSession,
+            Historical(
+                CreateTrades([20m, 19m, 15m, 18m, 19m, 13m, 17m, 18m, 11m, 19m, 18m]),
+                complete: true),
+            new ScannerConfiguration());
+        var supportView = PriorSessionContextBuilder.CreateView(supportContext, 16m);
+
+        Assert.Equal(
+            new[] { 10m, 8m, 6m },
+            resistanceContext.ResistanceCandidates.Select(candidate => candidate.Price));
+        Assert.Equal(10m, resistanceView.NearestResistance?.Price);
+        Assert.Equal(6m, resistanceContext.LatestConfirmedSwingHigh?.Price);
+        Assert.Equal(8m, resistanceContext.PreviousConfirmedSwingHigh?.Price);
+        Assert.Equal(
+            new[] { 15m, 13m, 11m },
+            supportContext.SupportCandidates.Select(candidate => candidate.Price));
+        Assert.Equal(15m, supportView.NearestSupport?.Price);
+        Assert.Equal(11m, supportContext.LatestConfirmedSwingLow?.Price);
+        Assert.Equal(13m, supportContext.PreviousConfirmedSwingLow?.Price);
+    }
+
+    [Fact]
     public void Partial_coverage_reports_observed_values_but_not_prior_session_levels_or_close()
     {
         var context = _builder.Build(

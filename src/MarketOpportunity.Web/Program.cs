@@ -87,6 +87,7 @@ if (diagnosticEnabled)
 }
 builder.Services.AddSingleton<IOpportunityPublicationGate, OpportunityPublicationGate>();
 builder.Services.AddSingleton<ScannerState>();
+builder.Services.AddSingleton<PreTradeReadinessTracker>();
 builder.Services.AddSingleton<FeatureCalculator>();
 builder.Services.AddSingleton<PriorSessionContextBuilder>();
 builder.Services.AddSingleton<MomentumContinuationDetector>();
@@ -113,6 +114,7 @@ builder.Services.AddScoped<IMarketDataSource>(serviceProvider =>
         serviceProvider.GetRequiredService<TimeProvider>(),
         serviceProvider.GetService<LiveValidationDiagnostics>()));
 builder.Services.AddScoped<IScannerStore, EfScannerStore>();
+builder.Services.AddScoped<IPreTradeReadinessStore, EfPreTradeReadinessStore>();
 
 var connectionString = builder.Configuration.GetConnectionString("MarketOpportunity")
     ?? throw new InvalidOperationException(
@@ -160,7 +162,8 @@ app.MapGet("/api/v1/opportunities", (ScannerState scanner) =>
         .Select(result => new OpportunityPublicationReadModel(
             result.Opportunity,
             result.Publication,
-            result.TradePlan))
+            result.TradePlan,
+            PreTradeReadinessReadModel.From(result)))
         .OrderByDescending(result => result.Opportunity.AsOfUtc)
         .ThenBy(result => result.Opportunity.Symbol, StringComparer.Ordinal)
         .ThenBy(result => result.Opportunity.SessionId, StringComparer.Ordinal)
@@ -174,7 +177,8 @@ app.MapGet("/api/v1/opportunities/{id:guid}", (Guid id, ScannerState scanner) =>
         : Results.Ok(new OpportunityPublicationReadModel(
             result.Opportunity,
             result.Publication,
-            result.TradePlan));
+            result.TradePlan,
+            PreTradeReadinessReadModel.From(result)));
 });
 app.MapGet("/api/v1/symbols/{symbol}/snapshot", (string symbol, string? sessionId, ScannerState scanner) =>
 {

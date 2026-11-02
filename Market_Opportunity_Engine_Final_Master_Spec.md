@@ -211,7 +211,7 @@ Track:
 - Consolidation boundaries.
 - Prior-session reference levels when historical data is available.
 
-**A.2.3a Prior-Session Market Context is a prerequisite to any A.2.3b pre-trade readiness behavior.** Readiness must consume an explicit, versioned context for the immediately preceding eligible session; it must not select a session by subtracting a calendar day. The context must preserve provider/feed provenance, structural-observation identity, and explicit completeness. Partial, unavailable, or invalid history must remain distinguishable and must not be presented as complete prior-session levels. Prior-session swings reuse the versioned two-left/two-right trade-point algorithm and cannot be confirmed by later-session events. If no approved historical source or authoritative calendar is configured, readiness must treat prior context as unavailable rather than infer it.
+**A.2.3a Prior-Session Market Context defines the only approved prior-session input to A.2.3b pre-trade readiness.** When readiness uses prior-session levels, it must consume an explicit, versioned context for the immediately preceding eligible session; it must not select a session by subtracting a calendar day. The context must preserve provider/feed provenance, structural-observation identity, and explicit completeness. Prior-session swings reuse the versioned two-left/two-right trade-point algorithm and cannot be confirmed by later-session events. Partial, unavailable, or invalid history must remain distinguishable, must not be presented as complete prior-session levels, and must not be used as confirmed historical support or resistance. If no approved historical source or authoritative calendar is configured, readiness must treat prior context as unavailable rather than infer it. Readiness may fall back to explicitly labeled current-session-only analysis when the current-session setup, TradePlan, publication health, and data-quality requirements remain satisfied, and must expose the context mode it used: `PriorSessionEnhanced` when complete prior-session context participated, or `CurrentSessionOnly` when readiness was derived without usable prior-session context (see [ADR-007](./docs/adr/ADR-007-prior-session-context.md)).
 
 A level crossing alone is insufficient. Breakout quality should consider participation, momentum, relative strength, liquidity, broader context, and whether price holds or rejects the level.
 
@@ -397,14 +397,18 @@ Material changes create a new version rather than rewriting historical reasoning
 
 Keep these concepts distinct:
 
+- **Market situation:** What is happening around a level or candidate right now? (Future scope; not implemented.)
 - **Analytical setup:** What pattern or condition exists?
 - **TradePlan:** If the setup were traded, what is its structural geometry?
 - **Publication:** Is current source health sufficient to present this result? Publication may suspend or expire a candidate without mutating its immutable analysis or plan.
-- **Future action lifecycle:** What should the user currently consider doing? This is not implemented and must not be conflated with setup classification or plan status.
+- **Tracked opportunity:** Which immutable TradePlan is currently being followed as the candidate for a symbol/session?
+- **Pre-trade readiness:** Where is that tracked candidate relative to current market conditions?
 
-Future pre-trade action states may include `NO TRADE`, `WATCHING`, `SETUP FORMING`, and `ENTRY READY`. `MANAGE`, `TAKE PROFIT`, and `EXIT` require a supplied `PositionContext` (or equivalent) confirming an actual position. The scanner can generate and monitor candidate plans without knowing a user's holdings; it must not imply that it does.
+These are separate contracts: Market Situation ≠ Opportunity ≠ TradePlan ≠ Publication Health ≠ Tracked Opportunity ≠ Pre-Trade Readiness. Do not collapse them into one enum or mutate TradePlan to express any of them.
 
-Future detector work follows `Detector -> TradePlan -> Action/readiness layer -> Outcome`. These are separate contracts and milestones; a detector does not itself produce a user action or outcome.
+A.2.3b implements the pre-trade readiness states `Unavailable`, `Suspended`, `Watching`, `SetupForming`, `EntryZoneActive`, `EntryReady`, and `NoLongerActionable` (`pre-trade-readiness-v2`) over a pinned tracked candidate (`tracked-opportunity-selection-v1`). Readiness is a deterministic current-state evaluation, not a linear workflow; active states may be skipped, while terminal assessments and terminal lifecycle fields remain final. A newer recalculated plan never moves a tracked candidate's geometry; terminal conditions end the candidate and a subsequent evaluation may pin the newest eligible plan. v2 checks quote freshness at evaluation time without rewriting analytical snapshots and always reports `CurrentSessionOnly` because no historical levels participate in its rules. Prior context remains separately available. Live startup and health ticks persist lifecycle reconciliation independently of analysis batches; expiry uses the pinned validity boundary and observed session changes use strictly later event time, not inferred calendar boundaries. Lifecycle-only updates do not manufacture readiness-history observations. `EntryReady` means candidate entry conditions are aligned; it must never be worded as "buy now", "sell now", "short now", or a guaranteed or probable outcome. The application does not need to know whether the user owns a position to describe potential market entry/opportunity conditions; readiness describes market conditions, never holdings. `MANAGE`, `TAKE PROFIT`, and `EXIT` still require a supplied `PositionContext` (or equivalent) confirming an actual position and remain out of scope.
+
+Future detector work follows `Detector -> TradePlan -> Readiness layer -> Outcome`. These are separate contracts and milestones; a detector does not itself produce a user action or outcome.
 
 ---
 
@@ -499,11 +503,13 @@ Provider Adapter -> Canonical Events -> Data Quality Gate -> Storage
                             Immutable Opportunity + TradePlan
                                            |
                              Publication-health projection
+                                           |
+                        Tracked candidate + readiness assessment
                                   |                 |
                                   v                 v
                               REST API      Blazor Interactive Server
 
-Future action/readiness and outcome/research layers consume immutable analytical records; neither is implemented in A.2.2.
+The A.2.3b readiness layer consumes immutable analytical records and persists tracked associations and immutable readiness history; outcome/research layers remain future scope.
 ```
 
 ## Required stack
@@ -720,9 +726,10 @@ Trace provider reception -> normalization -> state -> features -> setup detector
 - **A.1 Live Scanner Validation:** COMPLETE.
 - **A.2.1 Market Structure Foundation:** COMPLETE.
 - **A.2.2 Trade Plan Foundation:** COMPLETE.
-- **Next: A.2.3 Pre-Trade Opportunity Readiness:** NOT STARTED.
+- **A.2.3a Prior-Session Market Context:** COMPLETE.
+- **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** Original offline + guarded SQL closeout COMPLETE; PR #2 review corrections require guarded SQL revalidation.
 
-A.2.3 should initially define a user-facing pre-trade readiness/action contract over current setup and plan evidence. It must keep readiness separate from setup, TradePlan geometry, and current publication health. Position-management states remain out of scope unless a separate `PositionContext` contract is approved.
+A.2.3b defines the user-facing pre-trade readiness contract over current setup, pinned TradePlan, publication, and data-quality evidence. Readiness stays separate from setup, immutable TradePlan geometry, and current publication health, and does not require knowing the user's holdings. Position-management states remain out of scope unless a separate `PositionContext` contract is approved. Market-situation classifications (Potential Profit Area, Potential Reversal Area, breakout/breakdown) are later scope and are not implemented.
 
 ## Phase 0: Minimal foundations
 
@@ -825,7 +832,7 @@ No autonomous real-money execution is authorized by this phase.
 - Inject `TimeProvider`.
 - No future events in feature generation.
 - Never overwrite historical opportunity versions.
-- Keep setup, immutable TradePlan, publication health, future pre-trade readiness, position-management state, and outcomes conceptually and technically separate.
+- Keep setup, immutable TradePlan, publication health, tracked opportunity, pre-trade readiness, position-management state, and outcomes conceptually and technically separate.
 - Position-management states require supplied position context; do not infer holdings or add broker integration to obtain them.
 - Treat TradePlan reward/risk as descriptive until a separately approved threshold decision; do not invent a minimum or hard veto.
 - Link future outcomes to immutable `PlanId`; do not implement outcome tracking before the research milestone and retention decision.
