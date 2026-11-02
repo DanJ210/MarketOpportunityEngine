@@ -579,8 +579,34 @@ public sealed class SqlServerPersistenceTests
                 connectionString,
                 terminal with { Status = TrackedOpportunityStatus.Active, TerminalAtUtc = null },
                 null));
+            var terminalRewrites = new[]
+            {
+                terminal with { TerminalAtUtc = terminal.TerminalAtUtc!.Value.AddSeconds(1) },
+                terminal with { TerminalAtUtc = null },
+                terminal with { TerminalReasonCode = "RewrittenReason" },
+                terminal with { TerminalReasonCode = null },
+                terminal with { TerminalReason = "Rewritten terminal history." },
+                terminal with { TerminalReason = null },
+                terminal with { HasEstablishedEntryReady = false }
+            };
+            foreach (var rewrite in terminalRewrites)
+            {
+                await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    PersistReadiness(connectionString, rewrite, null));
+            }
+
+            var neverReady = terminal with { Id = Guid.NewGuid(), HasEstablishedEntryReady = false };
+            await PersistReadiness(connectionString, neverReady, null);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => PersistReadiness(
+                connectionString, neverReady with { HasEstablishedEntryReady = true }, null));
             await Assert.ThrowsAsync<InvalidOperationException>(() => PersistReadiness(
                 connectionString, terminal, assessment with { CurrentReferencePrice = 99.5m }));
+            await using var terminalContext = CreateContext(connectionString);
+            var unchanged = await terminalContext.TrackedOpportunities.AsNoTracking()
+                .SingleAsync(item => item.Id == terminal.Id);
+            Assert.Equal(terminal.TerminalAtUtc, unchanged.TerminalAtUtc);
+            Assert.Equal(terminal.TerminalReasonCode, unchanged.TerminalReasonCode);
+            Assert.Equal(terminal.TerminalReason, unchanged.TerminalReason);
         }
         finally
         {
@@ -649,6 +675,7 @@ public sealed class SqlServerPersistenceTests
             $"it-states-config-{token}",
             MarketDataCapabilities.Unknown,
             [new PreTradeReadinessEvidence(state.ToString(), $"Representative {state} assessment.")]);
+        // Historical v1 payloads remain readable; the v2 evaluator no longer claims prior enhancement.
         var assessments = new[]
         {
             Assessment(1, PreTradeReadinessState.Watching, PreTradeReadinessReason.ConfirmationNotAligned,
@@ -833,6 +860,14 @@ public sealed class SqlServerPersistenceTests
             Assert.Equal("EntryReady", storedAssessments[0].State);
             Assert.Equal("Watching", storedAssessments[1].State);
             Assert.All(storedAssessments, item => Assert.Equal(plan.Id, item.PlanId));
+
+            // A restart/idle tick can persist expiry without receiving another market event.
+            var expired = Assert.Single(restartedTracker.Reconcile(plan.ValidUntilUtc.AddDays(1)));
+            Assert.Equal(restored.Tracked.Id, expired.Id);
+            Assert.Equal(plan.ValidUntilUtc, expired.TerminalAtUtc);
+            await PersistReadiness(connectionString, expired, null);
+            Assert.DoesNotContain(await RestoreReadiness(connectionString), item => item.Tracked.Symbol == symbol);
+            Assert.Equal(2, await verifyContext.PreTradeReadinessAssessments.CountAsync(item => item.Symbol == symbol));
         }
         finally
         {
