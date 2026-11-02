@@ -20,4 +20,6 @@ A.2.3a needs stable, auditable historical reference levels for the immediately p
 
 - No SQL migration or provider-specific DTO is added.
 - Live Alpaca/Massive historical retrieval and authoritative session-calendar resolution remain unavailable/unverified.
-- Future readiness work must refuse incomplete historical context and may add persistence only with an approved source and its retention/entitlement decision.
+- Future readiness work must not treat incomplete or unavailable prior-session context as complete, and must not use unavailable prior-session levels as confirmed historical support or resistance. Readiness may fall back to explicitly labeled current-session-only analysis when the current-session setup, TradePlan, publication health, and data-quality requirements remain satisfied. Persistence of provider-backed prior-session context may be added only after the historical source and its retention/entitlement policy are approved.
+- Readiness must expose which context mode it used: PriorSessionEnhanced when complete prior-session context participated in the assessment, or CurrentSessionOnly when readiness was derived without usable prior-session context.
+

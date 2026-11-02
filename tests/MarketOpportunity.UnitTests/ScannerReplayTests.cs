@@ -1960,7 +1960,7 @@ public sealed class ScannerReplayTests
             document.RootElement.GetProperty("shortHorizonDollarVolumeStatus").GetInt32());
         Assert.Equal(features, JsonSerializer.Deserialize<FeatureSnapshot>(json, jsonOptions));
         Assert.Equal("features-v16", features.FeatureSetVersion);
-        Assert.Equal("scanner-config-v16", configuration.Version);
+        Assert.Equal("scanner-config-v17", configuration.Version);
         Assert.Equal("momentum-continuation-v1", configuration.SetupDefinitionVersion);
 
         var values = new[]

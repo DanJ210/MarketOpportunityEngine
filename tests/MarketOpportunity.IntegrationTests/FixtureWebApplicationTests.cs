@@ -140,6 +140,13 @@ public sealed class FixtureWebApplicationTests
             Assert.Equal(opportunity.Id, result.TradePlan.OpportunityId);
             Assert.Equal("trade-plan-v1", result.TradePlan.PlanDefinitionVersion);
             Assert.Equal(opportunity.AsOfUtc, result.TradePlan.AsOfUtc);
+            // The recorded fixture yields no confirmed structure, so no PlanDefined candidate is
+            // eligible for tracking and readiness honestly reports no tracked candidate.
+            Assert.Equal(TradePlanStatus.InsufficientStructure, result.TradePlan.Status);
+            Assert.Null(result.Readiness);
+            Assert.Equal(
+                JsonValueKind.Null,
+                item.GetProperty("readiness").ValueKind);
             httpTradePlans.Add(result.TradePlan.Id, result.TradePlan);
             httpOpportunities.Add(opportunity.Id, opportunity);
 
@@ -168,7 +175,7 @@ public sealed class FixtureWebApplicationTests
             Assert.Equal("features-v16", snapshot.FeatureSetVersion);
             Assert.Equal("features-v16", opportunity.FeatureSetVersion);
             Assert.Equal("momentum-continuation-v1", opportunity.SetupDefinitionVersion);
-            Assert.Equal("scanner-config-v16", opportunity.ConfigurationVersion);
+            Assert.Equal("scanner-config-v17", opportunity.ConfigurationVersion);
             var expectedRange = expectedGroups[(opportunity.Symbol, opportunity.SessionId)];
             Assert.Equal(expectedRange.High, snapshotJson.RootElement.GetProperty("sessionHighPrice").GetDecimal());
             Assert.Equal(expectedRange.Low, snapshotJson.RootElement.GetProperty("sessionLowPrice").GetDecimal());
@@ -279,6 +286,18 @@ public sealed class FixtureWebApplicationTests
         foreach (var persisted in persistedOpportunities)
         {
             AssertPersistedOpportunity(httpOpportunities[persisted.Id], persisted);
+        }
+
+        // The versioned configuration snapshot represents the pre-trade approach boundary.
+        var persistedConfiguration = await dbContext.ConfigurationSnapshots.AsNoTracking()
+            .SingleAsync(item => item.Version == configuration.Version);
+        Assert.Equal("scanner-config-v17", persistedConfiguration.Version);
+        using (var persistedConfigurationJson = JsonDocument.Parse(persistedConfiguration.ConfigurationJson))
+        {
+            Assert.Equal(1.0m, persistedConfigurationJson.RootElement
+                .GetProperty("preTrade")
+                .GetProperty("approachDistanceRiskMultiple")
+                .GetDecimal());
         }
 
         var planIds = httpTradePlans.Keys.ToArray();

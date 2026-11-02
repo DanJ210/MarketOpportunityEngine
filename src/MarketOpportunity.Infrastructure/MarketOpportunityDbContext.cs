@@ -12,6 +12,9 @@ public sealed class MarketOpportunityDbContext(DbContextOptions<MarketOpportunit
     public DbSet<OpportunityEvidenceEntity> OpportunityEvidence => Set<OpportunityEvidenceEntity>();
     public DbSet<ConfigurationSnapshotEntity> ConfigurationSnapshots => Set<ConfigurationSnapshotEntity>();
     public DbSet<TradePlanEntity> TradePlans => Set<TradePlanEntity>();
+    public DbSet<TrackedOpportunityEntity> TrackedOpportunities => Set<TrackedOpportunityEntity>();
+    public DbSet<PreTradeReadinessAssessmentEntity> PreTradeReadinessAssessments =>
+        Set<PreTradeReadinessAssessmentEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -90,6 +93,40 @@ public sealed class MarketOpportunityDbContext(DbContextOptions<MarketOpportunit
             entity.Property(item => item.TradePlanJson).IsRequired();
             entity.HasIndex(item => new { item.Symbol, item.SessionId, item.AsOfUtc });
             entity.HasIndex(item => item.OpportunityId);
+        });
+
+        modelBuilder.Entity<TrackedOpportunityEntity>(entity =>
+        {
+            entity.ToTable("tracked_opportunity");
+            entity.HasKey(item => item.Id);
+            entity.Property(item => item.Symbol).HasMaxLength(32).IsRequired();
+            entity.Property(item => item.SessionId).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.Direction).HasMaxLength(8).IsRequired();
+            entity.Property(item => item.SelectionDefinitionVersion).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.Status).HasMaxLength(32).IsRequired();
+            entity.Property(item => item.SelectionReasonCode).HasMaxLength(128).IsRequired();
+            entity.Property(item => item.SelectionReason).HasMaxLength(1024).IsRequired();
+            entity.Property(item => item.TerminalReasonCode).HasMaxLength(128);
+            entity.Property(item => item.TerminalReason).HasMaxLength(1024);
+            entity.HasIndex(item => new { item.Symbol, item.SessionId, item.Status });
+            entity.HasIndex(item => new { item.Symbol, item.SessionId, item.PlanAsOfUtc });
+            entity.HasIndex(item => item.PlanId);
+        });
+
+        modelBuilder.Entity<PreTradeReadinessAssessmentEntity>(entity =>
+        {
+            entity.ToTable("pre_trade_readiness_assessment");
+            entity.HasKey(item => item.Id);
+            entity.Property(item => item.Symbol).HasMaxLength(32).IsRequired();
+            entity.Property(item => item.SessionId).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.State).HasMaxLength(32).IsRequired();
+            entity.Property(item => item.Reason).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.ContextMode).HasMaxLength(32).IsRequired();
+            entity.Property(item => item.ReadinessDefinitionVersion).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.AssessmentJson).IsRequired();
+            entity.HasIndex(item => new { item.Symbol, item.SessionId, item.AsOfUtc });
+            entity.HasIndex(item => item.TrackedOpportunityId);
+            entity.HasIndex(item => item.PlanId);
         });
     }
 }
@@ -172,4 +209,47 @@ public sealed class TradePlanEntity
     public Guid OpportunityId { get; set; }
     public string PlanDefinitionVersion { get; set; } = "";
     public string TradePlanJson { get; set; } = "";
+}
+
+/// <summary>
+/// Tracked-candidate association and lifecycle. Only <c>Status</c>, <c>HasEstablishedEntryReady</c>,
+/// <c>TerminalAtUtc</c>, <c>TerminalReasonCode</c>, and <c>TerminalReason</c> may change after insert;
+/// every other column is immutable (see ADR-008).
+/// </summary>
+public sealed class TrackedOpportunityEntity
+{
+    public Guid Id { get; set; }
+    public Guid PlanId { get; set; }
+    public Guid OpportunityId { get; set; }
+    public string Symbol { get; set; } = "";
+    public string SessionId { get; set; } = "";
+    public string Direction { get; set; } = "";
+    public DateTimeOffset SelectedAtUtc { get; set; }
+    public DateTimeOffset PlanAsOfUtc { get; set; }
+    public string SelectionDefinitionVersion { get; set; } = "";
+    public string Status { get; set; } = "";
+    public string SelectionReasonCode { get; set; } = "";
+    public string SelectionReason { get; set; } = "";
+    public bool HasEstablishedEntryReady { get; set; }
+    public DateTimeOffset? TerminalAtUtc { get; set; }
+    public string? TerminalReasonCode { get; set; }
+    public string? TerminalReason { get; set; }
+}
+
+/// <summary>Immutable readiness history row; identical replay is idempotent and a different payload for the same identity fails.</summary>
+public sealed class PreTradeReadinessAssessmentEntity
+{
+    public Guid Id { get; set; }
+    public Guid TrackedOpportunityId { get; set; }
+    public Guid PlanId { get; set; }
+    public Guid OpportunityId { get; set; }
+    public string Symbol { get; set; } = "";
+    public string SessionId { get; set; } = "";
+    public DateTimeOffset AsOfUtc { get; set; }
+    public DateTimeOffset EvaluatedAtUtc { get; set; }
+    public string State { get; set; } = "";
+    public string Reason { get; set; } = "";
+    public string ContextMode { get; set; } = "";
+    public string ReadinessDefinitionVersion { get; set; } = "";
+    public string AssessmentJson { get; set; } = "";
 }

@@ -154,6 +154,65 @@
                         </article>
                     </section>
 
+                    <section class="invalidation-panel readiness-panel" aria-label="Pre-trade readiness">
+                        <h3>PRE-TRADE READINESS</h3>
+                        @if (result.Readiness is { } readiness)
+                        {
+                            var assessment = readiness.Assessment;
+                            <p>
+                                <strong class="readiness-state @ReadinessClass(assessment.State)">@ReadinessLabel(assessment.State)</strong>
+                            </p>
+                            <p>@ReadinessDescription(assessment.State)</p>
+                            <p>
+                                Current: @FormatStructurePrice(assessment.CurrentReferencePrice) ·
+                                Entry area: @FormatZone(readiness.Plan?.EntryZone) ·
+                                Distance: @FormatStructurePrice(assessment.DistanceToEntry)
+                                (@FormatRiskMultiple(assessment.DistanceToEntryRiskMultiple) of risk/share)
+                            </p>
+                            <p>
+                                Invalidation: @FormatStructurePrice(readiness.Plan?.InvalidationPrice) ·
+                                Target 1: @FormatStructurePrice(readiness.Plan?.Target1?.Price) ·
+                                Reward / Risk: @FormatRewardRisk(readiness.Plan?.RewardRiskRatioTarget1)
+                            </p>
+                            <p>
+                                Context:
+                                @(assessment.ContextMode == ReadinessContextMode.PriorSessionEnhanced
+                                    ? "Prior Session + Today"
+                                    : "Today Only")
+                                @if (assessment.ContextMode == ReadinessContextMode.CurrentSessionOnly)
+                                {
+                                    <span> · prior-session history unavailable or incomplete</span>
+                                }
+                            </p>
+                            <p>
+                                Reason: @assessment.Reason ·
+                                tracked plan @readiness.Tracked.PlanId.ToString("N")[..12] ·
+                                lifecycle: @readiness.Tracked.Status ·
+                                as of @FormatUtc(assessment.AsOfUtc) ·
+                                version @assessment.ReadinessDefinitionVersion
+                            </p>
+                            @if (assessment.Evidence.Count > 0)
+                            {
+                                <h4>Readiness evidence</h4>
+                                <ul class="evidence-list">
+                                    @foreach (var evidence in assessment.Evidence)
+                                    {
+                                        <li><strong>@evidence.Code</strong><span>@evidence.Description</span></li>
+                                    }
+                                </ul>
+                            }
+                            <p class="muted">
+                                Readiness describes market conditions around a tracked candidate opportunity.
+                                It is not a trade instruction and does not reflect any position or account.
+                            </p>
+                        }
+                        else
+                        {
+                            <p><strong>UNAVAILABLE</strong> · No tracked candidate opportunity (NoTrackedOpportunity).</p>
+                            <p>We cannot reliably assess this opportunity right now; no eligible candidate plan has been pinned for tracking.</p>
+                        }
+                    </section>
+
                     <section class="invalidation-panel trade-plan-panel" aria-label="Trade plan">
                         <h3>TRADE PLAN</h3>
                         <p>
@@ -437,6 +496,41 @@
         TradeDirection.Short => "Potential Short Plan",
         _ => "No Directional Plan"
     };
+
+    private static string ReadinessLabel(PreTradeReadinessState state) => state switch
+    {
+        PreTradeReadinessState.Unavailable => "UNAVAILABLE",
+        PreTradeReadinessState.Suspended => "SUSPENDED",
+        PreTradeReadinessState.Watching => "WATCHING",
+        PreTradeReadinessState.SetupForming => "SETUP FORMING",
+        PreTradeReadinessState.EntryZoneActive => "ENTRY AREA",
+        PreTradeReadinessState.EntryReady => "ENTRY READY",
+        _ => "NO LONGER ACTIONABLE"
+    };
+
+    private static string ReadinessDescription(PreTradeReadinessState state) => state switch
+    {
+        PreTradeReadinessState.Unavailable => "We cannot reliably assess this opportunity right now.",
+        PreTradeReadinessState.Suspended => "The opportunity exists, but current data health is insufficient to treat the assessment as current.",
+        PreTradeReadinessState.Watching => "A complete candidate opportunity exists, but price is not yet near the planned entry area.",
+        PreTradeReadinessState.SetupForming => "Price is approaching the candidate entry area.",
+        PreTradeReadinessState.EntryZoneActive => "Price has reached the candidate entry area, but the full confirmation rule is not currently satisfied.",
+        PreTradeReadinessState.EntryReady => "Candidate entry conditions are aligned.",
+        _ => "This particular candidate opportunity should no longer be presented as a fresh potential entry."
+    };
+
+    private static string ReadinessClass(PreTradeReadinessState state) => state switch
+    {
+        PreTradeReadinessState.EntryReady => "long",
+        PreTradeReadinessState.EntryZoneActive or PreTradeReadinessState.SetupForming => "watch",
+        PreTradeReadinessState.NoLongerActionable => "avoid",
+        _ => "neutral"
+    };
+
+    private static string FormatRiskMultiple(decimal? multiple) =>
+        multiple is null
+            ? "--"
+            : $"{multiple.Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}x";
 
     private static string FormatZone(PriceZone? zone) =>
         zone is null

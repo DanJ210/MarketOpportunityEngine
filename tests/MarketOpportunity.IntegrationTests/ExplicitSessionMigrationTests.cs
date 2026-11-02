@@ -9,6 +9,7 @@ public sealed class ExplicitSessionMigrationTests
     private const string MigrationId = "20261023190000_AddExplicitSessionIdentity";
     private const string ProvenanceMigrationId = "20261024232400_AddOpportunityMarketDataProvenance";
     private const string TradePlansMigrationId = "20261030210000_AddImmutableTradePlans";
+    private const string TrackedReadinessMigrationId = "20261101120000_AddTrackedOpportunityReadiness";
 
     [Fact]
     public async Task Clean_schema_accepts_explicit_session_migration()
@@ -24,10 +25,12 @@ public sealed class ExplicitSessionMigrationTests
                 Assert.Contains(MigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(ProvenanceMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(TradePlansMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(TrackedReadinessMigrationId, await context.Database.GetAppliedMigrationsAsync());
             }
 
             await AssertSessionColumnsAndIndexesAsync(database.ConnectionString);
             await AssertTradePlanSchemaAsync(database.ConnectionString);
+            await AssertTrackedReadinessSchemaAsync(database.ConnectionString);
         }
         finally
         {
@@ -70,6 +73,7 @@ public sealed class ExplicitSessionMigrationTests
 
                 Assert.Contains(MigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(TradePlansMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(TrackedReadinessMigrationId, await context.Database.GetAppliedMigrationsAsync());
 
                 var marketEvent = await context.MarketEvents.AsNoTracking().SingleAsync(item => item.Id == eventId);
                 Assert.Equal("legacy-unknown", marketEvent.SessionId);
@@ -372,6 +376,63 @@ public sealed class ExplicitSessionMigrationTests
                 N'PlanDefinitionVersion', N'TradePlanJson');
             """;
         Assert.Equal(7, Convert.ToInt32(await command.ExecuteScalarAsync()));
+    }
+
+    private static async Task AssertTrackedReadinessSchemaAsync(string connectionString)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using (var trackedCommand = connection.CreateCommand())
+        {
+            trackedCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.columns AS c
+                INNER JOIN sys.tables AS t ON c.object_id = t.object_id
+                WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                  AND t.name = N'tracked_opportunity'
+                  AND c.name IN (
+                    N'Id', N'PlanId', N'OpportunityId', N'Symbol', N'SessionId', N'Direction',
+                    N'SelectedAtUtc', N'PlanAsOfUtc', N'SelectionDefinitionVersion', N'Status',
+                    N'SelectionReasonCode', N'SelectionReason', N'HasEstablishedEntryReady',
+                    N'TerminalAtUtc', N'TerminalReasonCode', N'TerminalReason');
+                """;
+            Assert.Equal(16, Convert.ToInt32(await trackedCommand.ExecuteScalarAsync()));
+        }
+
+        await using (var assessmentCommand = connection.CreateCommand())
+        {
+            assessmentCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.columns AS c
+                INNER JOIN sys.tables AS t ON c.object_id = t.object_id
+                WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                  AND t.name = N'pre_trade_readiness_assessment'
+                  AND c.name IN (
+                    N'Id', N'TrackedOpportunityId', N'PlanId', N'OpportunityId', N'Symbol',
+                    N'SessionId', N'AsOfUtc', N'EvaluatedAtUtc', N'State', N'Reason',
+                    N'ContextMode', N'ReadinessDefinitionVersion', N'AssessmentJson');
+                """;
+            Assert.Equal(13, Convert.ToInt32(await assessmentCommand.ExecuteScalarAsync()));
+        }
+
+        await using (var indexCommand = connection.CreateCommand())
+        {
+            indexCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.indexes
+                WHERE name IN (
+                    N'IX_tracked_opportunity_Symbol_SessionId_Status',
+                    N'IX_tracked_opportunity_Symbol_SessionId_PlanAsOfUtc',
+                    N'IX_tracked_opportunity_PlanId',
+                    N'IX_pre_trade_readiness_assessment_Symbol_SessionId_AsOfUtc',
+                    N'IX_pre_trade_readiness_assessment_TrackedOpportunityId',
+                    N'IX_pre_trade_readiness_assessment_PlanId');
+                """;
+            Assert.Equal(6, Convert.ToInt32(await indexCommand.ExecuteScalarAsync()));
+        }
     }
 
     private sealed record IsolatedDatabase(string Name, string ConnectionString);

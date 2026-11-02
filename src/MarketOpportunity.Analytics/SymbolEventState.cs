@@ -617,27 +617,22 @@ public sealed class FeatureCalculator
         return (ema, slopePerMinute);
     }
 
-    private static CalculatedMarketStructure CalculateMarketStructure(
+    /// <summary>
+    /// Returns every confirmed swing pivot in event-time order from the shared
+    /// <c>session-swing-fractal-v1</c> calculation, or empty lists when trades are
+    /// insufficient or any eligible price is non-positive.
+    /// </summary>
+    public static (IReadOnlyList<ConfirmedSwing> Highs, IReadOnlyList<ConfirmedSwing> Lows) CalculateConfirmedSwings(
         IReadOnlyList<TradeEvent> trades,
-        bool pricesAreValid,
-        decimal? referencePrice,
         string symbol,
         string sessionId,
         string featureSetVersion)
     {
-        if (trades.Count == 0)
+        ArgumentNullException.ThrowIfNull(trades);
+        if (trades.Count < (SwingPivotStrength * 2) + 1
+            || trades.Any(trade => trade.Price <= 0))
         {
-            return CalculatedMarketStructure.Insufficient;
-        }
-
-        if (!pricesAreValid)
-        {
-            return CalculatedMarketStructure.InvalidPriceData;
-        }
-
-        if (trades.Count < (SwingPivotStrength * 2) + 1)
-        {
-            return CalculatedMarketStructure.Insufficient;
+            return ([], []);
         }
 
         var highIndexes = new List<int>();
@@ -689,10 +684,37 @@ public sealed class FeatureCalculator
             .Select(index => CreateConfirmedSwing(
                 trades, index, ConfirmedSwingType.ConfirmedSwingLow, symbol, sessionId, featureSetVersion)!)
             .ToArray();
-        var latestHigh = highs.LastOrDefault();
-        var previousHigh = highs.Length > 1 ? highs[^2] : null;
-        var latestLow = lows.LastOrDefault();
-        var previousLow = lows.Length > 1 ? lows[^2] : null;
+        return (highs, lows);
+    }
+
+    private static CalculatedMarketStructure CalculateMarketStructure(
+        IReadOnlyList<TradeEvent> trades,
+        bool pricesAreValid,
+        decimal? referencePrice,
+        string symbol,
+        string sessionId,
+        string featureSetVersion)
+    {
+        if (trades.Count == 0)
+        {
+            return CalculatedMarketStructure.Insufficient;
+        }
+
+        if (!pricesAreValid)
+        {
+            return CalculatedMarketStructure.InvalidPriceData;
+        }
+
+        if (trades.Count < (SwingPivotStrength * 2) + 1)
+        {
+            return CalculatedMarketStructure.Insufficient;
+        }
+
+        var (highs, lows) = CalculateConfirmedSwings(trades, symbol, sessionId, featureSetVersion);
+        var latestHigh = highs.Count > 0 ? highs[^1] : null;
+        var previousHigh = highs.Count > 1 ? highs[^2] : null;
+        var latestLow = lows.Count > 0 ? lows[^1] : null;
+        var previousLow = lows.Count > 1 ? lows[^2] : null;
         PriceStructure? priceStructure = null;
         var highRelationship = SwingRelationship.Insufficient;
         var lowRelationship = SwingRelationship.Insufficient;
@@ -728,10 +750,10 @@ public sealed class FeatureCalculator
             };
         }
 
-        var nearestHigh = referencePrice is > 0 && highs.Length > 0
+        var nearestHigh = referencePrice is > 0 && highs.Count > 0
             ? highs.MinBy(swing => Math.Abs(swing.Price - referencePrice.Value))
             : null;
-        var nearestLow = referencePrice is > 0 && lows.Length > 0
+        var nearestLow = referencePrice is > 0 && lows.Count > 0
             ? lows.MinBy(swing => Math.Abs(swing.Price - referencePrice.Value))
             : null;
         var nearestSupport = referencePrice is > 0

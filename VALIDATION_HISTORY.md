@@ -1470,3 +1470,61 @@ The fixture calendar explicitly identifies the preceding fixture session and UTC
 No schema change was made. SQL persistence/migration and full SQL integration suites were **not run** because `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was not configured; no live provider was connected and User Secrets were not inspected.
 
 The exact remaining prerequisite for A.2.3b is an approved historical market-data source with verified access, retention/licensing terms, plus an authoritative session calendar for live sessions. Until then, A.2.3b remains **NOT STARTED** and incomplete prior context must not drive readiness.
+
+## Milestone A.2.3a correction - Prior-context candidate truncation (2026-10-31)
+
+**Status:** COMPLETE. Corrected a prior-session candidate-selection defect in `PriorSessionContextBuilder`: support/resistance candidates were built from only the latest and previous confirmed swings, so the nearest confirmed prior-session level could be omitted (confirmed highs of 10, 8, 6 with a current reference price of 9 produced no resistance instead of 10; the same truncation affected support). `FeatureCalculator.CalculateConfirmedSwings` now exposes every confirmed pivot from the shared `session-swing-fractal-v1` calculation; `CalculateMarketStructure` reuses it, and the context builder selects candidates from all eligible confirmed pivots in event-time order. Latest/previous confirmed swings remain only the structure summary. Swing identities, `FeatureSnapshot` shape, `prior-session-context-v1`, and all persisted schemas are unchanged; context IDs differ only where candidate content changed, consistent with content-hash identity. A regression test covers both the 10/8/6 resistance case at reference 9 and the mirrored support case.
+
+**Validation (sequential):**
+
+| Check | Result |
+|---|---|
+| Focused prior-context unit tests (incl. new regression) | **11/11 passed** |
+| Full offline unit suite | **290/290 passed** |
+| `dotnet build MarketOpportunityEngine.sln` | Succeeded; **0 warnings, 0 errors** |
+| Hosted fixture/API/dashboard tests (`StructureWebApplicationTests`) | **2/2 passed**; no SQL or provider connection |
+
+SQL persistence/migration suites were **not run / unavailable** because `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was not configured; no schema or persisted-contract change required them. No live provider was connected and User Secrets were not inspected.
+
+## Milestone A.2.3b - Tracked Opportunity + Pre-Trade Readiness (2026-11-01)
+
+**Status: IMPLEMENTED; offline validation COMPLETE; guarded SQL validation NOT RUN.** A.2.3b adds `tracked-opportunity-selection-v1` (one immutable `PlanDefined` TradePlan pinned per symbol/session; newer plans never move tracked geometry; terminal conditions end the candidate and a later evaluation may pin the newest eligible plan) and `pre-trade-readiness-v1` (deterministic Unavailable / Suspended / Watching / SetupForming / EntryZoneActive / EntryReady / NoLongerActionable states with structured reasons, evidence, and explicit `PriorSessionEnhanced` / `CurrentSessionOnly` context modes). EntryReady confirmation combines only existing approved outputs; no new indicator was added. The approach boundary `Scanner:PreTrade:ApproachDistanceRiskMultiple` (provisional development default 1.0, not market calibrated) is normalized by the plan RiskPerShare and versioned via `scanner-config-v17`. Persistence adds the idempotent hand-written migration `20261101120000_AddTrackedOpportunityReadiness` (`tracked_opportunity` with documented mutable lifecycle fields only; immutable `pre_trade_readiness_assessment` history with audit-only `EvaluatedAtUtc` excluded from identity), restart restore of active tracked candidates, and reevaluation from current trustworthy market state (ADR-008). ADR-007 Consequences were amended to permit explicitly labeled current-session-only readiness fallback and require context-mode exposure; the master specification wording was aligned. Dashboard adds a PRE-TRADE READINESS section with plain-language states; the opportunity API read models expose tracked identity, readiness state/reason, context mode, entry geometry, distances, and versions. The recorded fixture yields no confirmed structure, so it produces no tracked candidates (verified by full fixture pipeline replay); readiness honestly reports no tracked candidate instead of inventing one.
+
+**Validation (sequential, offline):**
+
+| Check | Result |
+|---|---|
+| Focused pre-trade readiness tests (`PreTradeReadinessTests`, incl. selection, long/short geometry, suspension/recovery, context fallback, restart, identity, serialization, fixture wiring) | **55/55 passed** |
+| A.2.3a prior-context regressions (`PriorSessionContextTests`) | **11/11 passed** |
+| A.2.2 TradePlan regressions (`TradePlanBuilderTests`) | **17/17 passed** |
+| A.2.1 market-structure regressions (`MarketStructureTests`) | **13/13 passed** |
+| Momentum Continuation regressions (`MomentumContinuationTests`) | **22/22 passed** |
+| Publication-gate regressions (`OpportunityPublicationGateTests`) | **10/10 passed** |
+| Pipeline/replay regressions (`ScannerPipelineTests`, `ScannerReplayTests`) | **148/148 passed** |
+| Full offline unit suite | **345/345 passed** |
+| Hosted fixture/API/dashboard tests (`StructureWebApplicationTests`) | **2/2 passed**; no SQL or provider connection |
+| `dotnet build MarketOpportunityEngine.sln` | Succeeded; **0 warnings, 0 errors** |
+
+`scanner-config-v16` was superseded by `scanner-config-v17` solely to add the validated `PreTrade` readiness value; feature set (`features-v16`), `momentum-continuation-v1`, `trade-plan-v1`, and `prior-session-context-v1` behavior and decisions are unchanged.
+
+SQL migration/persistence/restart suites (`SqlServerPersistenceTests` including the new tracked/readiness round-trip, lifecycle, collision, and restore test; `ExplicitSessionMigrationTests` including the new schema assertions) and the SQL-backed hosted suite (`FixtureWebApplicationTests`, now asserting the readiness read model) were **not run / unavailable**: `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was not configured, no SQL Server was reachable on `localhost,1433`, and per the guarded procedure no server or database was started or created. The A.2.3b SQL validation closeout remains the immediate next checkpoint. No live provider was connected and User Secrets were not inspected.
+
+## Milestone A.2.3b - SQL validation closeout (2026-11-01)
+
+**Status: COMPLETE.** The guarded SQL validation gap above was closed against the dedicated `MarketOpportunityEngine_IntegrationTests` catalog on the existing Compose SQL Server (`marketopportunityengine-sqlserver-1`, restarted via the approved `docker compose up -d sqlserver` procedure and confirmed `healthy`). `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was absent; the connection was constructed in process memory from the running container credential, passed only through the per-run process environment, guarded by the tests' existing `SqlConnectionStringBuilder` catalog check, and cleared after each run. A read-only `sqlcmd` catalog listing verified the dedicated test database before and after; no database was created, dropped, or reset, no credentials or connection strings were printed, no live provider was connected, and User Secrets were not inspected. Migration tests used only uniquely named temporary databases, which were dropped.
+
+**Passing commands and results (sequential, 0 failed / 0 skipped):**
+
+| Order | Exact command | Result |
+|---|---|---|
+| SQL 1+2 | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter "FullyQualifiedName~SqlServerPersistenceTests\|FullyQualifiedName~ExplicitSessionMigrationTests"` | **9/9 passed** |
+| SQL 3 (focused tracked/readiness/restart) | Same project, filter on `Tracked_opportunity_and_readiness_history_round_trip_restart_and_reject_conflicts`, `Readiness_states_and_context_modes_round_trip_through_sql`, `Restart_restores_the_pinned_plan_and_reevaluates_readiness_from_current_state` | **3/3 passed** |
+| SQL 4 | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter FullyQualifiedName~FixtureWebApplicationTests` | **1/1 passed** |
+| SQL 5 | Same hosted fixture command, same database, no reset | **1/1 passed** |
+| Full integrations | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj` | **16/16 passed** |
+| Full offline units | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj` | **345/345 passed** |
+| Build | `dotnet build MarketOpportunityEngine.sln` | **Succeeded, 0 warnings, 0 errors** |
+
+**What the SQL runs proved.** `20261101120000_AddTrackedOpportunityReadiness` applied on both the clean-schema (`EnsureCreated` + migrate) and legacy existing-schema paths, creating `tracked_opportunity` and `pre_trade_readiness_assessment` with the expected columns and all six intended indexes (`Symbol/SessionId/Status`, `Symbol/SessionId/PlanAsOfUtc`, `PlanId` for tracked rows; `Symbol/SessionId/AsOfUtc`, `TrackedOpportunityId`, `PlanId` for assessments). A tracked candidate round-tripped through real SQL with every field exactly preserved (identity, pinned `PlanId`, `OpportunityId`, symbol/session, direction, `SelectedAtUtc`/`PlanAsOfUtc`, `tracked-opportunity-selection-v1`, selection provenance, status, `HasEstablishedEntryReady`, terminal fields). Lifecycle rules were enforced by SQL-backed writes: Active -> terminal and `HasEstablishedEntryReady` false -> true succeeded; terminal -> Active, `HasEstablishedEntryReady` true -> false, and immutable selection-field changes each failed loudly with `InvalidOperationException`. Readiness assessments round-tripped byte-identical JSON with exact decimals for representative Watching / SetupForming / EntryZoneActive / EntryReady / Suspended / NoLongerActionable states in both `PriorSessionEnhanced` and explicit `CurrentSessionOnly` fallback modes (no partial prior context persisted as confirmed prior-session levels). Identical replay was idempotent, an `EvaluatedAtUtc`-only difference was non-material per ADR-008, and a materially different payload for the same `AssessmentId` failed. The new restart test persisted plan + tracked + EntryReady readiness from one store/tracker instance, added a newer `PlanDefined` plan to SQL, then from a fresh instance restored the single active candidate, resolved the exact pinned immutable `PlanId` (not the newer plan), did not restore the historical EntryReady state, reevaluated current market state at a later `AsOfUtc` into Watching with `HasEstablishedEntryReady` retained, and persisted the second immutable assessment alongside the first. The hosted fixture suite passed twice against the same database without clearing records, asserting `scanner-config-v17` and the persisted configuration snapshot's `preTrade.approachDistanceRiskMultiple = 1.0` (still a provisional development default; not recalibrated).
+
+**Test-only corrections; no production code changed.** `FixtureWebApplicationTests` had a stale `scanner-config-v16` expectation left from before the A.2.3b version bump (its SQL-dependent run was unavailable in the implementing environment); it was corrected to `scanner-config-v17` and extended with the configuration-snapshot assertion. `SqlServerPersistenceTests` gained the explicit `HasEstablishedEntryReady` true -> false rejection, the representative readiness-state/context-mode round-trip test, and the restart-restoration test. No guard, immutability rule, lifecycle rule, restart semantic, or collision check was weakened, and no application, migration, or ADR behavior changed.

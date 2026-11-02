@@ -289,7 +289,7 @@ public sealed record Opportunity(
 
 public sealed record ScannerConfiguration
 {
-    public string Version { get; init; } = "scanner-config-v16";
+    public string Version { get; init; } = "scanner-config-v17";
     public string FeatureSetVersion { get; init; } = "features-v16";
     public string SetupDefinitionVersion { get; init; } = "momentum-continuation-v1";
     public int MaximumStateEvents { get; init; } = 10_000;
@@ -311,12 +311,19 @@ public sealed record ScannerConfiguration
     public int MomentumScoreWeight { get; init; } = 50;
     public int VwapScoreWeight { get; init; } = 35;
     public int ActivityScoreWeight { get; init; } = 15;
+    public PreTradeReadinessConfiguration PreTrade { get; init; } = new();
 
     public void Validate()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(Version);
         ArgumentException.ThrowIfNullOrWhiteSpace(FeatureSetVersion);
         ArgumentException.ThrowIfNullOrWhiteSpace(SetupDefinitionVersion);
+        if (PreTrade is null || PreTrade.ApproachDistanceRiskMultiple <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Scanner configuration '{Version}' requires PreTrade:ApproachDistanceRiskMultiple to be positive.");
+        }
+
         if (MaximumStateEvents < 1
             || MomentumWindowSeconds < 1
             || SecondaryMomentumWindowSeconds < 1
@@ -344,4 +351,16 @@ public sealed record ScannerConfiguration
                 $"Scanner configuration '{Version}' has invalid thresholds or scoring weights.");
         }
     }
+}
+
+/// <summary>
+/// Pre-trade readiness thresholds. The approach boundary is normalized by the tracked plan's
+/// RiskPerShare, never by a hard-coded stock-price percentage. The default of 1.0 is a PROVISIONAL
+/// development default chosen by engineering judgment; it is not market calibrated and makes no
+/// profitability claim. Changing it requires a new scanner-configuration version, which participates
+/// in readiness assessment identity.
+/// </summary>
+public sealed record PreTradeReadinessConfiguration
+{
+    public decimal ApproachDistanceRiskMultiple { get; init; } = 1.0m;
 }

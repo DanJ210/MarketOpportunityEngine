@@ -425,6 +425,424 @@ public sealed class SqlServerPersistenceTests
         }
     }
 
+    [Fact]
+    public async Task Tracked_opportunity_and_readiness_history_round_trip_restart_and_reject_conflicts()
+    {
+        var connectionString = GetTestConnectionString();
+        var token = Guid.NewGuid().ToString("N")[..16];
+        var symbol = $"IT{token}";
+        var sessionId = $"it-readiness-session-{token}";
+        var asOfUtc = new DateTimeOffset(2026, 11, 1, 14, 30, 0, TimeSpan.Zero);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var plan = new TradePlan(
+            Guid.NewGuid(),
+            symbol,
+            sessionId,
+            asOfUtc,
+            asOfUtc.AddMinutes(2),
+            TradeDirection.Long,
+            TradePlanStatus.PlanDefined,
+            new PriceZone(98m, 100m),
+            99m,
+            96m,
+            new TradeTarget(106m, Guid.NewGuid(), "origin-event", "confirmation-event", "session-swing-fractal-v1"),
+            null,
+            3m,
+            7m,
+            7m / 3m,
+            "Momentum Continuation",
+            Guid.NewGuid(),
+            "session-swing-fractal-v1",
+            $"it-readiness-features-{token}",
+            "momentum-continuation-v1",
+            $"it-readiness-config-{token}",
+            "trade-plan-v1",
+            MarketDataCapabilities.Unknown,
+            []);
+        var tracked = new TrackedOpportunity(
+            Guid.NewGuid(),
+            plan.Id,
+            plan.OpportunityId,
+            symbol,
+            sessionId,
+            TradeDirection.Long,
+            asOfUtc,
+            asOfUtc,
+            "tracked-opportunity-selection-v1",
+            TrackedOpportunityStatus.Active,
+            "EligiblePlanSelected",
+            "The newest eligible PlanDefined candidate plan was pinned for readiness tracking.",
+            false,
+            null,
+            null,
+            null);
+        var assessment = new PreTradeReadinessAssessment(
+            Guid.NewGuid(),
+            tracked.Id,
+            plan.Id,
+            plan.OpportunityId,
+            symbol,
+            sessionId,
+            asOfUtc,
+            asOfUtc,
+            PreTradeReadinessState.EntryReady,
+            PreTradeReadinessReason.InsideEntryZone,
+            TradeDirection.Long,
+            ReadinessContextMode.CurrentSessionOnly,
+            99m,
+            0m,
+            0m,
+            true,
+            "pre-trade-readiness-v1",
+            plan.FeatureSetVersion,
+            plan.ConfigurationVersion,
+            MarketDataCapabilities.Unknown,
+            [new PreTradeReadinessEvidence("EntryConditionsAligned", "Candidate entry conditions are aligned.")]);
+        var schemaReady = false;
+        try
+        {
+            await using (var setupContext = CreateContext(connectionString))
+            {
+                if (!await setupContext.Database.EnsureCreatedAsync())
+                {
+                    await setupContext.Database.MigrateAsync();
+                }
+
+                setupContext.TradePlans.Add(new TradePlanEntity
+                {
+                    Id = plan.Id,
+                    Symbol = plan.Symbol,
+                    SessionId = plan.SessionId,
+                    AsOfUtc = plan.AsOfUtc,
+                    OpportunityId = plan.OpportunityId,
+                    PlanDefinitionVersion = plan.PlanDefinitionVersion,
+                    TradePlanJson = JsonSerializer.Serialize(plan, options)
+                });
+                await setupContext.SaveChangesAsync();
+            }
+            schemaReady = true;
+
+            // Identical replay is idempotent, including a different audit-only EvaluatedAtUtc.
+            await PersistReadiness(connectionString, tracked, assessment);
+            await PersistReadiness(connectionString, tracked, assessment);
+            await PersistReadiness(
+                connectionString,
+                tracked,
+                assessment with { EvaluatedAtUtc = asOfUtc.AddSeconds(30) });
+
+            await using (var verifyContext = CreateContext(connectionString))
+            {
+                Assert.Equal(1, await verifyContext.TrackedOpportunities.CountAsync(item => item.Symbol == symbol));
+                var storedAssessment = Assert.Single(await verifyContext.PreTradeReadinessAssessments
+                    .AsNoTracking().Where(item => item.Symbol == symbol).ToListAsync());
+                Assert.Equal(assessment.Id, storedAssessment.Id);
+                Assert.Equal("EntryReady", storedAssessment.State);
+                Assert.Equal("InsideEntryZone", storedAssessment.Reason);
+                Assert.Equal("CurrentSessionOnly", storedAssessment.ContextMode);
+                var roundTripped = JsonSerializer.Deserialize<PreTradeReadinessAssessment>(
+                    storedAssessment.AssessmentJson, options);
+                Assert.NotNull(roundTripped);
+                Assert.Equal(assessment.Id, roundTripped.Id);
+                Assert.Equal(assessment.CurrentReferencePrice, roundTripped.CurrentReferencePrice);
+                Assert.Equal(assessment.Evidence, roundTripped.Evidence);
+            }
+
+            // Restart restores the active association and resolves the pinned immutable plan.
+            var restored = Assert.Single(await RestoreReadiness(connectionString));
+            Assert.Equal(tracked, restored.Tracked);
+            Assert.NotNull(restored.Plan);
+            Assert.Equal(plan.Id, restored.Plan.Id);
+            Assert.Equal(plan.EntryZone, restored.Plan.EntryZone);
+
+            // Only controlled lifecycle fields may change.
+            var entryReadyObserved = tracked with { HasEstablishedEntryReady = true };
+            await PersistReadiness(connectionString, entryReadyObserved, null);
+
+            // An established entry-ready observation can never be rewritten back to false.
+            await Assert.ThrowsAsync<InvalidOperationException>(() => PersistReadiness(
+                connectionString, tracked, null));
+            var terminal = entryReadyObserved with
+            {
+                Status = TrackedOpportunityStatus.Invalidated,
+                TerminalAtUtc = asOfUtc.AddMinutes(1),
+                TerminalReasonCode = "InvalidationCrossed",
+                TerminalReason = "The tracked candidate reached a terminal readiness condition."
+            };
+            await PersistReadiness(connectionString, terminal, null);
+            await PersistReadiness(connectionString, terminal, null);
+            Assert.Empty(await RestoreReadiness(connectionString));
+
+            // Immutable fields, terminal transitions, and assessment payloads reject conflicts.
+            await Assert.ThrowsAsync<InvalidOperationException>(() => PersistReadiness(
+                connectionString, terminal with { PlanId = Guid.NewGuid() }, null));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => PersistReadiness(
+                connectionString,
+                terminal with { Status = TrackedOpportunityStatus.Active, TerminalAtUtc = null },
+                null));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => PersistReadiness(
+                connectionString, terminal, assessment with { CurrentReferencePrice = 99.5m }));
+        }
+        finally
+        {
+            if (schemaReady)
+            {
+                await Cleanup(connectionString, [symbol], $"it-readiness-config-{token}", $"it-readiness-config-{token}");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Readiness_states_and_context_modes_round_trip_through_sql()
+    {
+        var connectionString = GetTestConnectionString();
+        var token = Guid.NewGuid().ToString("N")[..16];
+        var symbol = $"IT{token}";
+        var sessionId = $"it-states-session-{token}";
+        var asOfUtc = new DateTimeOffset(2026, 11, 1, 15, 0, 0, TimeSpan.Zero);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var planId = Guid.NewGuid();
+        var opportunityId = Guid.NewGuid();
+        var tracked = new TrackedOpportunity(
+            Guid.NewGuid(),
+            planId,
+            opportunityId,
+            symbol,
+            sessionId,
+            TradeDirection.Long,
+            asOfUtc,
+            asOfUtc,
+            "tracked-opportunity-selection-v1",
+            TrackedOpportunityStatus.Active,
+            "EligiblePlanSelected",
+            "The newest eligible PlanDefined candidate plan was pinned for readiness tracking.",
+            false,
+            null,
+            null,
+            null);
+        PreTradeReadinessAssessment Assessment(
+            int minute,
+            PreTradeReadinessState state,
+            PreTradeReadinessReason reason,
+            ReadinessContextMode contextMode,
+            decimal? currentReferencePrice,
+            decimal? distanceToEntry,
+            decimal? distanceToEntryRiskMultiple,
+            bool isInsideEntryZone) => new(
+            Guid.NewGuid(),
+            tracked.Id,
+            planId,
+            opportunityId,
+            symbol,
+            sessionId,
+            asOfUtc.AddMinutes(minute),
+            asOfUtc.AddMinutes(minute),
+            state,
+            reason,
+            TradeDirection.Long,
+            contextMode,
+            currentReferencePrice,
+            distanceToEntry,
+            distanceToEntryRiskMultiple,
+            isInsideEntryZone,
+            "pre-trade-readiness-v1",
+            $"it-states-features-{token}",
+            $"it-states-config-{token}",
+            MarketDataCapabilities.Unknown,
+            [new PreTradeReadinessEvidence(state.ToString(), $"Representative {state} assessment.")]);
+        var assessments = new[]
+        {
+            Assessment(1, PreTradeReadinessState.Watching, PreTradeReadinessReason.ConfirmationNotAligned,
+                ReadinessContextMode.CurrentSessionOnly, 104.5m, 4.5m, 1.5m, false),
+            Assessment(2, PreTradeReadinessState.SetupForming, PreTradeReadinessReason.ApproachingEntry,
+                ReadinessContextMode.PriorSessionEnhanced, 102.4m, 2.4m, 0.8m, false),
+            Assessment(3, PreTradeReadinessState.EntryZoneActive, PreTradeReadinessReason.ConfirmationNotAligned,
+                ReadinessContextMode.PriorSessionEnhanced, 99.750m, 0m, 0m, true),
+            Assessment(4, PreTradeReadinessState.EntryReady, PreTradeReadinessReason.InsideEntryZone,
+                ReadinessContextMode.PriorSessionEnhanced, 99.125m, 0m, 0m, true),
+            // Partial/unavailable prior context is persisted as the explicit CurrentSessionOnly
+            // fallback mode, never as confirmed prior-session levels.
+            Assessment(5, PreTradeReadinessState.Suspended, PreTradeReadinessReason.FeedNotLive,
+                ReadinessContextMode.CurrentSessionOnly, null, null, null, false),
+            Assessment(6, PreTradeReadinessState.NoLongerActionable, PreTradeReadinessReason.OpportunityExpired,
+                ReadinessContextMode.CurrentSessionOnly, 100.9m, 0.9m, 0.3m, false)
+        };
+        var schemaReady = false;
+        try
+        {
+            await using (var setupContext = CreateContext(connectionString))
+            {
+                if (!await setupContext.Database.EnsureCreatedAsync())
+                {
+                    await setupContext.Database.MigrateAsync();
+                }
+            }
+            schemaReady = true;
+
+            foreach (var assessment in assessments)
+            {
+                await PersistReadiness(connectionString, tracked, assessment);
+            }
+
+            await using var verifyContext = CreateContext(connectionString);
+            Assert.Equal(1, await verifyContext.TrackedOpportunities.CountAsync(item => item.Symbol == symbol));
+            var storedAssessments = await verifyContext.PreTradeReadinessAssessments.AsNoTracking()
+                .Where(item => item.Symbol == symbol)
+                .OrderBy(item => item.AsOfUtc)
+                .ToListAsync();
+            Assert.Equal(assessments.Length, storedAssessments.Count);
+            foreach (var (expected, stored) in assessments.Zip(storedAssessments))
+            {
+                Assert.Equal(expected.Id, stored.Id);
+                Assert.Equal(tracked.Id, stored.TrackedOpportunityId);
+                Assert.Equal(planId, stored.PlanId);
+                Assert.Equal(expected.AsOfUtc, stored.AsOfUtc);
+                Assert.Equal(expected.State.ToString(), stored.State);
+                Assert.Equal(expected.Reason.ToString(), stored.Reason);
+                Assert.Equal(expected.ContextMode.ToString(), stored.ContextMode);
+                Assert.Equal("pre-trade-readiness-v1", stored.ReadinessDefinitionVersion);
+                // The persisted JSON is the exact serialized assessment, preserving decimals.
+                Assert.Equal(JsonSerializer.Serialize(expected, options), stored.AssessmentJson);
+                var roundTripped = JsonSerializer.Deserialize<PreTradeReadinessAssessment>(
+                    stored.AssessmentJson, options);
+                Assert.NotNull(roundTripped);
+                Assert.Equal(expected.CurrentReferencePrice, roundTripped.CurrentReferencePrice);
+                Assert.Equal(expected.DistanceToEntry, roundTripped.DistanceToEntry);
+                Assert.Equal(expected.DistanceToEntryRiskMultiple, roundTripped.DistanceToEntryRiskMultiple);
+                Assert.Equal(expected.IsInsideEntryZone, roundTripped.IsInsideEntryZone);
+                Assert.Equal(expected.ContextMode, roundTripped.ContextMode);
+                Assert.Equal(expected.FeatureSetVersion, roundTripped.FeatureSetVersion);
+                Assert.Equal(expected.ConfigurationVersion, roundTripped.ConfigurationVersion);
+                Assert.Equal(expected.MarketData, roundTripped.MarketData);
+                Assert.Equal(expected.Evidence, roundTripped.Evidence);
+            }
+        }
+        finally
+        {
+            if (schemaReady)
+            {
+                await Cleanup(connectionString, [symbol], $"it-states-config-{token}", $"it-states-config-{token}");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Restart_restores_the_pinned_plan_and_reevaluates_readiness_from_current_state()
+    {
+        var connectionString = GetTestConnectionString();
+        var token = Guid.NewGuid().ToString("N")[..16];
+        var symbol = $"IT{token}";
+        var sessionId = $"it-restart-session-{token}";
+        var asOfUtc = new DateTimeOffset(2026, 11, 1, 16, 0, 0, TimeSpan.Zero);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var configuration = new ScannerConfiguration
+        {
+            Version = $"it-restart-config-{token}",
+            FeatureSetVersion = $"it-restart-features-{token}"
+        };
+        var opportunityId = Guid.NewGuid();
+        var plan = CreateReadinessPlan(symbol, sessionId, asOfUtc, opportunityId, configuration);
+        var candidate = CreateReadinessCandidate(opportunityId, symbol, sessionId, asOfUtc, configuration);
+        var schemaReady = false;
+        try
+        {
+            await using (var setupContext = CreateContext(connectionString))
+            {
+                if (!await setupContext.Database.EnsureCreatedAsync())
+                {
+                    await setupContext.Database.MigrateAsync();
+                }
+
+                setupContext.TradePlans.Add(ToPlanEntity(plan, options));
+                await setupContext.SaveChangesAsync();
+            }
+            schemaReady = true;
+
+            // Host instance A selects and pins the eligible plan and persists tracked + readiness.
+            var firstTracker = new PreTradeReadinessTracker();
+            var firstEvaluation = firstTracker.Evaluate(
+                CreateReadinessSnapshot(symbol, sessionId, 99m, asOfUtc, configuration),
+                candidate,
+                plan,
+                ActivePublication(asOfUtc),
+                null,
+                configuration,
+                asOfUtc);
+            Assert.NotNull(firstEvaluation.Projection);
+            Assert.Equal(PreTradeReadinessState.EntryReady, firstEvaluation.Projection.Assessment.State);
+            Assert.Equal(plan.Id, firstEvaluation.Projection.Tracked.PlanId);
+            await PersistReadiness(
+                connectionString, firstEvaluation.PersistTracked!, firstEvaluation.PersistAssessment);
+
+            // A newer PlanDefined plan exists in SQL before the restart; it must not be selected.
+            var newerPlan = plan with
+            {
+                Id = Guid.NewGuid(),
+                AsOfUtc = asOfUtc.AddMinutes(5),
+                ValidUntilUtc = asOfUtc.AddMinutes(7)
+            };
+            await using (var newerContext = CreateContext(connectionString))
+            {
+                newerContext.TradePlans.Add(ToPlanEntity(newerPlan, options));
+                await newerContext.SaveChangesAsync();
+            }
+
+            // Host instance B restores the association and resolves the exact pinned plan.
+            var restored = Assert.Single(
+                await RestoreReadiness(connectionString),
+                item => item.Tracked.Symbol == symbol);
+            Assert.Equal(firstEvaluation.PersistTracked, restored.Tracked);
+            Assert.True(restored.Tracked.HasEstablishedEntryReady);
+            Assert.NotNull(restored.Plan);
+            Assert.Equal(plan.Id, restored.Plan.Id);
+            Assert.NotEqual(newerPlan.Id, restored.Plan.Id);
+            Assert.Equal(plan.EntryZone, restored.Plan.EntryZone);
+            Assert.Equal(plan.InvalidationPrice, restored.Plan.InvalidationPrice);
+            Assert.Equal(plan.Target1, restored.Plan.Target1);
+
+            // Historical readiness is not blindly restored: the restored candidate is reevaluated
+            // from the current trustworthy market state, still against the pinned geometry.
+            var laterAsOfUtc = asOfUtc.AddSeconds(45);
+            var restartedTracker = new PreTradeReadinessTracker();
+            restartedTracker.Restore([restored]);
+            var reevaluated = restartedTracker.Evaluate(
+                CreateReadinessSnapshot(symbol, sessionId, 103.5m, laterAsOfUtc, configuration),
+                candidate,
+                newerPlan,
+                ActivePublication(laterAsOfUtc),
+                null,
+                configuration,
+                laterAsOfUtc);
+            Assert.NotNull(reevaluated.Projection);
+            Assert.Equal(restored.Tracked.Id, reevaluated.Projection.Tracked.Id);
+            Assert.Equal(plan.Id, reevaluated.Projection.Tracked.PlanId);
+            Assert.Equal(plan.Id, reevaluated.Projection.Assessment.PlanId);
+            Assert.Equal(laterAsOfUtc, reevaluated.Projection.Assessment.AsOfUtc);
+            Assert.Equal(PreTradeReadinessState.Watching, reevaluated.Projection.Assessment.State);
+            Assert.NotEqual(firstEvaluation.Projection.Assessment.Id, reevaluated.Projection.Assessment.Id);
+            Assert.True(reevaluated.Projection.Tracked.HasEstablishedEntryReady);
+            await PersistReadiness(
+                connectionString, reevaluated.PersistTracked!, reevaluated.PersistAssessment);
+
+            await using var verifyContext = CreateContext(connectionString);
+            Assert.Equal(1, await verifyContext.TrackedOpportunities.CountAsync(item => item.Symbol == symbol));
+            var storedAssessments = await verifyContext.PreTradeReadinessAssessments.AsNoTracking()
+                .Where(item => item.Symbol == symbol)
+                .OrderBy(item => item.AsOfUtc)
+                .ToListAsync();
+            Assert.Equal(2, storedAssessments.Count);
+            Assert.Equal("EntryReady", storedAssessments[0].State);
+            Assert.Equal("Watching", storedAssessments[1].State);
+            Assert.All(storedAssessments, item => Assert.Equal(plan.Id, item.PlanId));
+        }
+        finally
+        {
+            if (schemaReady)
+            {
+                await Cleanup(connectionString, [symbol], configuration.Version, configuration.Version);
+            }
+        }
+    }
+
     private static string GetTestConnectionString()
     {
         var connectionString = Environment.GetEnvironmentVariable("MARKETOPPORTUNITY_SQL_TEST_CONNECTION");
@@ -470,6 +888,24 @@ public sealed class SqlServerPersistenceTests
             CancellationToken.None);
     }
 
+    private static async Task PersistReadiness(
+        string connectionString,
+        TrackedOpportunity tracked,
+        PreTradeReadinessAssessment? assessment)
+    {
+        await using var context = CreateContext(connectionString);
+        var store = new EfPreTradeReadinessStore(context);
+        await store.PersistAsync(tracked, assessment, CancellationToken.None);
+    }
+
+    private static async Task<IReadOnlyList<TrackedOpportunitySnapshot>> RestoreReadiness(
+        string connectionString)
+    {
+        await using var context = CreateContext(connectionString);
+        var store = new EfPreTradeReadinessStore(context);
+        return await store.RestoreActiveAsync(CancellationToken.None);
+    }
+
     private static (FeatureSnapshot Features, Opportunity Opportunity, TradePlan TradePlan) Analyze(
         IReadOnlyCollection<MarketEvent> events,
         ScannerConfiguration configuration)
@@ -498,6 +934,126 @@ public sealed class SqlServerPersistenceTests
         return (features, opportunity, tradePlan);
     }
 
+    private static PublicationDecision ActivePublication(DateTimeOffset evaluatedAtUtc) => new(
+        OpportunityLifecycleState.Active,
+        "PublicationAllowed",
+        "Market data is healthy and the candidate remains within its validity period.",
+        evaluatedAtUtc);
+
+    private static TradePlan CreateReadinessPlan(
+        string symbol,
+        string sessionId,
+        DateTimeOffset asOfUtc,
+        Guid opportunityId,
+        ScannerConfiguration configuration) => new(
+        Guid.NewGuid(),
+        symbol,
+        sessionId,
+        asOfUtc,
+        asOfUtc.AddMinutes(2),
+        TradeDirection.Long,
+        TradePlanStatus.PlanDefined,
+        new PriceZone(98m, 100m),
+        99m,
+        96m,
+        new TradeTarget(106m, Guid.NewGuid(), "origin-event", "confirmation-event", "session-swing-fractal-v1"),
+        null,
+        3m,
+        7m,
+        7m / 3m,
+        "Momentum Continuation",
+        opportunityId,
+        "session-swing-fractal-v1",
+        configuration.FeatureSetVersion,
+        configuration.SetupDefinitionVersion,
+        configuration.Version,
+        "trade-plan-v1",
+        MarketDataCapabilities.Unknown,
+        []);
+
+    private static Opportunity CreateReadinessCandidate(
+        Guid opportunityId,
+        string symbol,
+        string sessionId,
+        DateTimeOffset asOfUtc,
+        ScannerConfiguration configuration) => new(
+        opportunityId,
+        symbol,
+        sessionId,
+        asOfUtc,
+        asOfUtc.AddMinutes(2),
+        "Momentum Continuation",
+        SetupBias.Long,
+        OpportunityClassification.ProbableLong,
+        90,
+        [new OpportunityEvidence("Momentum", "Positive momentum.")],
+        [],
+        [],
+        "Below session VWAP.",
+        100m,
+        configuration.FeatureSetVersion,
+        configuration.SetupDefinitionVersion,
+        configuration.Version,
+        MarketDataCapabilities.Unknown);
+
+    private static FeatureSnapshot CreateReadinessSnapshot(
+        string symbol,
+        string sessionId,
+        decimal price,
+        DateTimeOffset asOfUtc,
+        ScannerConfiguration configuration) => new(
+        Guid.NewGuid(),
+        symbol,
+        sessionId,
+        asOfUtc,
+        configuration.FeatureSetVersion,
+        price,
+        price - 0.01m,
+        price + 0.01m,
+        2m,
+        99.5m,
+        null,
+        VwapSlopeDirection.Insufficient,
+        0.5m,
+        0.1m,
+        null,
+        100,
+        100_000m,
+        ShortHorizonDollarVolumeStatus.Available,
+        100,
+        price,
+        price,
+        null,
+        null,
+        null,
+        AdxStatus.Insufficient,
+        null,
+        RealizedVolatilityStatus.Insufficient,
+        TrendDirectionContext.Insufficient,
+        null,
+        null,
+        null,
+        null,
+        null,
+        TimeSpan.Zero,
+        true,
+        true,
+        true,
+        true,
+        DataQualityStatus.Good,
+        MarketDataCapabilities.Unknown);
+
+    private static TradePlanEntity ToPlanEntity(TradePlan plan, JsonSerializerOptions options) => new()
+    {
+        Id = plan.Id,
+        Symbol = plan.Symbol,
+        SessionId = plan.SessionId,
+        AsOfUtc = plan.AsOfUtc,
+        OpportunityId = plan.OpportunityId,
+        PlanDefinitionVersion = plan.PlanDefinitionVersion,
+        TradePlanJson = JsonSerializer.Serialize(plan, options)
+    };
+
     private static MarketEvent[] CreateEvents(string symbol, string sessionId, decimal startPrice = 100m)
     {
         var asOfUtc = new DateTimeOffset(2026, 10, 23, 14, 30, 42, TimeSpan.Zero);
@@ -518,6 +1074,8 @@ public sealed class SqlServerPersistenceTests
         string changedConfigurationVersion)
     {
         await using var context = CreateContext(connectionString);
+        await context.PreTradeReadinessAssessments.Where(item => symbols.Contains(item.Symbol)).ExecuteDeleteAsync();
+        await context.TrackedOpportunities.Where(item => symbols.Contains(item.Symbol)).ExecuteDeleteAsync();
         await context.TradePlans.Where(item => symbols.Contains(item.Symbol)).ExecuteDeleteAsync();
         await context.Opportunities.Where(item => symbols.Contains(item.Symbol)).ExecuteDeleteAsync();
         await context.FeatureSnapshots.Where(item => symbols.Contains(item.Symbol)).ExecuteDeleteAsync();
