@@ -1,6 +1,6 @@
 # Current Project Status
 
-**Current checkpoint:** Milestone A.2.3b - Tracked Opportunity + Pre-Trade Readiness
+**Current checkpoint:** Milestone A.2.3b - PR #2 review-correction guarded SQL revalidation
 **Updated:** 2026-11-02
 
 ## Milestones
@@ -9,7 +9,7 @@
 - **A.2.1 Market Structure Foundation:** COMPLETE
 - **A.2.2 Trade Plan Foundation:** COMPLETE
 - **A.2.3a Prior-Session Market Context:** COMPLETE
-- **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** Original closeout COMPLETE; PR #2 review corrections require guarded SQL revalidation
+- **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** Implementation and original offline + guarded SQL closeout COMPLETE; PR #2 review-correction validation BLOCKED pending guarded SQL revalidation
 
 ## Current state
 
@@ -31,7 +31,7 @@ The scanner does not know the user's actual holdings; readiness states describe 
 
 ## Immediate next checkpoint
 
-**Close PR #2 review-correction validation before A.2.4a Structural Level Interaction.** The original SQL closeout does not validate these later fixes. A.2.4a has not started.
+**Close PR #2 review-correction validation before A.2.4a Structural Level Interaction.** The original SQL closeout does not validate these later fixes. A.2.4a has not started. Its approved initial scope is descriptive only: approaching, testing, or crossed support/resistance. It will not claim that a level will hold, a bounce/breakdown/rejection/breakout is confirmed, or that a profit area is assured.
 
 **Current blockers:** Guarded SQL revalidation for the PR #2 corrections is unavailable without an already configured dedicated test connection.
 
