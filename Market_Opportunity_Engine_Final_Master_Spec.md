@@ -269,7 +269,7 @@ The current `trade-plan-v1` derives these values from confirmed structure. `Plan
 
 Each setup owns required evidence, supporting evidence, contradictions, vetoes, and thresholds. Do not average all indicators into one generic signal.
 
-Momentum Continuation is the only implemented detector at the A.2.2 checkpoint. The other detectors below remain intended future scope and must not be described as complete.
+Momentum Continuation is the only implemented detector. The other detectors below remain intended future scope and must not be described as complete.
 
 ## 5.1 Momentum continuation
 
@@ -397,7 +397,7 @@ Material changes create a new version rather than rewriting historical reasoning
 
 Keep these concepts distinct:
 
-- **Market situation:** What is happening around a level or candidate right now? (Future scope; not implemented.)
+- **Market situation:** What is happening around a level or candidate right now? This is distinct from a setup, plan, tracking, readiness, or publication state. It is not implemented; the planned A.2.4a checkpoint is limited to descriptive level interaction.
 - **Analytical setup:** What pattern or condition exists?
 - **TradePlan:** If the setup were traded, what is its structural geometry?
 - **Publication:** Is current source health sufficient to present this result? Publication may suspend or expire a candidate without mutating its immutable analysis or plan.
@@ -406,7 +406,9 @@ Keep these concepts distinct:
 
 These are separate contracts: Market Situation ≠ Opportunity ≠ TradePlan ≠ Publication Health ≠ Tracked Opportunity ≠ Pre-Trade Readiness. Do not collapse them into one enum or mutate TradePlan to express any of them.
 
-A.2.3b implements the pre-trade readiness states `Unavailable`, `Suspended`, `Watching`, `SetupForming`, `EntryZoneActive`, `EntryReady`, and `NoLongerActionable` (`pre-trade-readiness-v2`) over a pinned tracked candidate (`tracked-opportunity-selection-v1`). Readiness is a deterministic current-state evaluation, not a linear workflow; active states may be skipped, while terminal assessments and terminal lifecycle fields remain final. A newer recalculated plan never moves a tracked candidate's geometry; terminal conditions end the candidate and a subsequent evaluation may pin the newest eligible plan. v2 checks quote freshness at evaluation time without rewriting analytical snapshots and always reports `CurrentSessionOnly` because no historical levels participate in its rules. Prior context remains separately available. Live startup and health ticks persist lifecycle reconciliation independently of analysis batches; expiry uses the pinned validity boundary and observed session changes use strictly later event time, not inferred calendar boundaries. Lifecycle-only updates do not manufacture readiness-history observations. `EntryReady` means candidate entry conditions are aligned; it must never be worded as "buy now", "sell now", "short now", or a guaranteed or probable outcome. The application does not need to know whether the user owns a position to describe potential market entry/opportunity conditions; readiness describes market conditions, never holdings. `MANAGE`, `TAKE PROFIT`, and `EXIT` still require a supplied `PositionContext` (or equivalent) confirming an actual position and remain out of scope.
+A.2.3b implements the pre-trade readiness states `Unavailable`, `Suspended`, `Watching`, `SetupForming`, `EntryZoneActive`, `EntryReady`, and `NoLongerActionable` (`pre-trade-readiness-v2`) over a pinned tracked candidate (`tracked-opportunity-selection-v1`). Readiness is a deterministic current-state evaluation, not a linear workflow; active states may be skipped, while terminal assessments and terminal lifecycle fields remain final. A newer recalculated plan never moves a tracked candidate's geometry; terminal conditions end the candidate and a subsequent evaluation may pin the newest eligible plan. v2 checks quote freshness at evaluation time without rewriting analytical snapshots and always reports `CurrentSessionOnly` because no historical levels participate in its rules. Prior context remains separately available. Live startup and health ticks persist lifecycle reconciliation independently of analysis batches; expiry uses the pinned validity boundary and observed session changes use strictly later event time, not inferred calendar boundaries. Lifecycle-only updates do not manufacture readiness-history observations. `EntryReady` means candidate entry conditions are aligned; it must never be worded as "buy now", "sell now", "short now", or a guaranteed or probable outcome. The application does not need to know whether the user owns a position to describe potential market entry/opportunity conditions; readiness describes market conditions, never holdings. Position/account management is a separate future concern if approved; it is not a prerequisite for market-opportunity analysis.
+
+The planned A.2.4a **Structural Level Interaction** checkpoint will keep `MarketSituation` distinct from the concepts above. Its initial descriptive scope is: approaching support, testing support, crossed support, approaching resistance, testing resistance, and crossed resistance. It must not claim that support will hold, a bounce is confirmed, a breakdown is confirmed, resistance rejection is confirmed, or a breakout is confirmed.
 
 Future detector work follows `Detector -> TradePlan -> Readiness layer -> Outcome`. These are separate contracts and milestones; a detector does not itself produce a user action or outcome.
 
@@ -727,9 +729,11 @@ Trace provider reception -> normalization -> state -> features -> setup detector
 - **A.2.1 Market Structure Foundation:** COMPLETE.
 - **A.2.2 Trade Plan Foundation:** COMPLETE.
 - **A.2.3a Prior-Session Market Context:** COMPLETE.
-- **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** Original offline + guarded SQL closeout COMPLETE; PR #2 review corrections require guarded SQL revalidation.
+- **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** Implementation and original offline + guarded SQL closeout COMPLETE; PR #2 review-correction validation BLOCKED pending guarded SQL revalidation.
 
-A.2.3b defines the user-facing pre-trade readiness contract over current setup, pinned TradePlan, publication, and data-quality evidence. Readiness stays separate from setup, immutable TradePlan geometry, and current publication health, and does not require knowing the user's holdings. Position-management states remain out of scope unless a separate `PositionContext` contract is approved. Market-situation classifications (Potential Profit Area, Potential Reversal Area, breakout/breakdown) are later scope and are not implemented.
+A.2.3b defines the user-facing pre-trade readiness contract over current setup, pinned TradePlan, publication, and data-quality evidence. Readiness stays separate from setup, immutable TradePlan geometry, and current publication health, and does not require knowing the user's holdings. Position/account management is a separate future concern if approved and is not required for market-opportunity analysis.
+
+**Immediate next checkpoint:** Close PR #2 guarded SQL revalidation; its original SQL closeout does not validate the review corrections. After that prerequisite, the planned A.2.4a **Structural Level Interaction** checkpoint is descriptive only: approaching/testing/crossed support and resistance. It will not assert a level will hold or that a bounce, breakdown, rejection, or breakout is confirmed. A.2.4a has not started.
 
 ## Phase 0: Minimal foundations
 

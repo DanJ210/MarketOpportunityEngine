@@ -1,39 +1,78 @@
 # MarketOpportunityEngine Copilot Instructions
 
-Treat [the master specification](../Market_Opportunity_Engine_Final_Master_Spec.md) as the product and architecture source of truth. Before each Milestone A slice, read [README](../README.md) and [PROJECT_STATUS](../PROJECT_STATUS.md), and inspect the current implementation. Use the status document as current-state and validation evidence, not as authorization to expand scope; do not mistake roadmap items for permission to build them now.
+## Sources of truth
+
+- **Implementation and tests:** what currently exists and behaves in this repository.
+- [PROJECT_STATUS](../PROJECT_STATUS.md): concise current checkpoint, completed checkpoints, blockers, latest validation summary, and immediate next step.
+- [Master specification](../Market_Opportunity_Engine_Final_Master_Spec.md): approved product direction, architecture contracts, milestone roadmap, and scope.
+- [ADRs](../docs/adr/): durable architectural decisions and their reasoning.
+- [README](../README.md): current developer/operator guide, including what the application is today, its capabilities and limitations, and how to configure, run, and test it.
+- [VALIDATION_HISTORY](../VALIDATION_HISTORY.md): chronological historical evidence.
+
+Older `VALIDATION_HISTORY.md` sections describe what was true at that checkpoint. Historical statements may be superseded; they do not override current implementation, `PROJECT_STATUS.md`, later validation evidence, or accepted ADRs.
+
+### Resolving conflicts
+
+When current documentation conflicts:
+
+1. Inspect implementation, tests, schema/migrations, and git state.
+2. Identify which document is stale.
+3. Do not expand scope based on the contradiction.
+4. Reconcile the stale current document before proceeding through a prerequisite gate.
+5. Never rewrite historical validation records merely to make them match current state.
+6. If implementation and approved architecture genuinely conflict, stop for architectural review instead of silently correcting either side.
+
+`PROJECT_STATUS.md` cannot override evidence that source or tests differ from its claim. Source existence alone does not establish a checkpoint as complete; required validation must also have passed.
 
 ## Scope and technology
 
-- Deliver Milestone A in small, tested vertical slices. The app defaults to a recorded-fixture scanner with one Momentum Continuation setup and supports optional read-only Alpaca and Massive market-data adapters; extend it incrementally rather than building the future platform.
-- Use .NET 10 (`net10.0`), ASP.NET Core 10, C#, Blazor, EF Core 10, and Microsoft SQL Server locally / Azure SQL Database in Azure. Keep the app a modular monolith.
-- Do not introduce a different frontend, database, cloud, or hosting platform. Do not add microservices, Kubernetes, Redis, distributed brokers, ML, Level 2 data, broker integration, automated trading, or LLM-generated decisions.
-- Do not connect a live market-data provider until explicitly requested and provider selection criteria are reviewed. Keep provider DTOs in infrastructure adapters behind provider-independent interfaces.
-- Fixture remains the offline default. Alpaca is an approved market-data alternative; neither provider selection implies broker or order permissions. Follow [ADR-005](../docs/adr/ADR-005-market-data-provider-criteria.md) before changing provider behavior.
-- Keep shared `appsettings.json` provider selection at `Fixture`; use Development User Secrets for an explicitly requested local provider and command-line overrides for one-run validation. Credentials do not select a provider. Follow [README configuration](../README.md#configuration), check higher-priority overrides before diagnosing the wrong adapter, and report process-only overrides separately from persistent settings. Provider selection does not select a SQL test database; guard that connection independently. Never dump secrets while diagnosing configuration.
-- For provider-specific WebSocket protocol details and current adapter limitations, consult the [Alpaca reference](../docs/providers/alpaca-websocket.md) or [Massive reference](../docs/providers/massive-websocket.md) and their linked official documentation.
+- Deliver Milestone A in small, tested vertical slices. Roadmap items are not authorization to implement them.
+- Keep the recorded-fixture scanner as the offline default. Do not connect a live provider without an explicit request and review under [ADR-005](../docs/adr/ADR-005-market-data-provider-criteria.md). Provider selection never implies broker or order permissions.
+- Use .NET 10, ASP.NET Core 10, C#, Blazor, EF Core 10, and SQL Server locally / Azure SQL Database in Azure. Keep a modular monolith.
+- Do not substitute frontend, database, cloud, or hosting platforms, or add microservices, Kubernetes, Redis, distributed brokers, ML, Level 2 data, broker integration, automated trading, or LLM-generated decisions.
+- Keep provider DTOs and persistence in Infrastructure; Domain and Analytics remain independent of EF Core, SQL Server, HTTP, SignalR, Blazor, Azure SDKs, and vendor SDKs.
+- Keep credentials out of source, logs, and browser code. Follow README configuration precedence and guarded test-database instructions; never dump secrets while diagnosing configuration.
 
-## Architecture and correctness
+## Architectural and product invariants
 
-- Keep Domain and Analytics independent of EF Core, SQL Server, HTTP, SignalR, Blazor, Azure SDKs, and vendor SDKs. Respect existing project references and place persistence and provider adapters in Infrastructure.
-- Use canonical market-event contracts with symbol, explicit session identity where applicable, event time, receive time, provider, stable event identity, and trade/quote fields. Use decimal/integer types for prices and quantities.
-- Analytical results must depend only on events at or before `AsOfUtc`. Keep event time distinct from receive time; order late events deterministically, handle duplicate identities idempotently, and keep symbol/session state isolated and bounded.
-- Use `TimeProvider` for application/system time. Never use wall-clock time to determine analytical values; derive features from market event time.
-- Make data-quality and risk vetoes explicit in structured results and the UI. Never silently publish through a veto or hide why a candidate was rejected.
-- Keep analytical opportunities immutable. The application publication lifecycle separately suspends live candidates for Connecting, Stale, Offline, or Error source health and reports expiration/reasons; do not describe that in-memory projection as persisted lifecycle history.
-- Keep thresholds and scoring weights in validated, versioned configuration. Persist configuration, feature/setup versions, evidence, contradictions, vetoes, invalidation, and immutable opportunity decisions. A 0–100 setup score is not a probability of profit.
-- Do not allow later observations to rewrite decision-time records. Identical event input and versions should replay deterministically; changed analysis should create a new version/record.
+Keep these concepts separate and in this order:
 
-## Implementation and validation
+`Canonical MarketEvent -> FeatureSnapshot / current-session features -> MarketStructure -> Opportunity / analytical setup -> TradePlan -> TrackedOpportunity -> PreTradeReadiness`
 
-- Inspect existing patterns and tests before editing. Make focused changes, preserve unrelated work, and update directly affected documentation.
-- For analytical slices, update affected test fixtures when snapshot or configuration shapes change, including positional constructors and identity/serialization assertions. Derive expected values independently from the canonical ordered eligible inputs, and keep test helper symbol/session/configuration identities aligned with the scenario.
-- Add or update unit tests for analytical behavior, event ordering, duplicates, bounded state, vetoes, and future-event exclusion. Test setup logic without a web server, database, network, or Azure; run focused replay tests before broader validation.
-- Use SQL Server for persistence integration tests; do not substitute an in-memory or other database provider for SQL behavior. Follow the README's guarded SQL test procedure and the current validation evidence in PROJECT_STATUS: confirm the configured connection targets a dedicated test database before running SQL tests. If setup or connection validation fails before tests execute, report SQL coverage as not run/unavailable, not as a test pass or test failure.
-- Run builds, tests, and app-host verification sequentially rather than concurrently. If output files are locked, identify the owning process and stop only processes started for the current verification before retrying; do not overwrite, kill, or clean up unrelated processes.
-- Run the smallest relevant tests, then build the solution. For end-to-end changes, verify the running ASP.NET Core/Blazor app and its persisted results, not just compilation.
-- Use the documented commands in [README](../README.md). Never commit secrets or expose provider credentials to browser code; use local-only development configuration and Azure Key Vault for deployed secrets.
-- Do not claim a strategy is profitable or present a quality score as a calibrated probability. No real-money order placement is in scope.
+- **Opportunity:** the analytical setup detected.
+- **TradePlan:** immutable hypothetical candidate geometry for a setup; persistence does not mean a trade occurred.
+- **TrackedOpportunity:** the immutable `PlanId` currently followed as a candidate.
+- **PreTradeReadiness:** current pre-trade market assessment against that pinned candidate.
+- **PriorSessionContext:** stable previous-session contextual structure, separate from live ingestion and current-session state.
+- **PublicationDecision:** a current data-health/presentation projection, separate from immutable analytical history.
 
-## Documentation decisions
+`PriorSessionContext` is historical/contextual evidence consumed only where approved. Incomplete or unavailable context is never complete; current-session analysis may continue in explicitly labeled `CurrentSessionOnly` mode where allowed. `PriorSessionEnhanced` requires usable, complete prior context to actually participate. Do not invent exchange calendars, call fixture partial extrema official previous-day high/low/close, or treat persisted live events as an approved historical research source. Follow [ADR-007](../docs/adr/ADR-007-prior-session-context.md).
 
-Keep architecture decisions in concise ADRs under [`docs/adr`](../docs/adr/). Follow the existing decisions for Blazor Interactive Server rendering, EF Core/SQL Server, in-process transport, event retention, and provider-selection criteria; update an ADR when an implementation changes its decision.
+Follow [ADR-006](../docs/adr/ADR-006-immutable-trade-plan-persistence.md) and [ADR-008](../docs/adr/ADR-008-tracked-opportunity-readiness.md): never move an active candidate's pinned `PlanId` or geometry to a newer plan; reevaluate readiness from current trustworthy market state. Stale/offline feed health suspends current presentation without mutating the immutable plan. `EntryReady` means candidate entry conditions are aligned, not that an order should be placed. Do not use “BUY NOW,” “SELL NOW,” or “GUARANTEED PROFIT”; a quality score is not probability of profit.
+
+The engine analyzes market conditions and candidate opportunities; it does not need actual ownership to describe potential entry conditions, structural invalidation, or market situations in approved checkpoints. Never infer holdings, fills, execution, realized/unrealized profit, or account state. Do not introduce `PositionContext` as a prerequisite for market-opportunity analysis. Actual position/account management is a separate future concern, only if approved.
+
+## Correctness and SQL
+
+- Analytical results use only events at or before `AsOfUtc`; keep event and receive time distinct, order late events deterministically, deduplicate identities, and bound symbol/session state. Use decimal/integer prices and quantities.
+- Use `TimeProvider` for application/system time; never use wall-clock time to determine analytical values. Make data-quality and risk vetoes explicit.
+- Preserve immutable decision-time records and deterministic replay. Changed analysis creates a new version/record rather than rewriting history.
+- Follow [ADR-002](../docs/adr/ADR-002-ef-sqlserver-conventions.md): SQL Server is required for persistence integration behavior. Clean development/test schemas may use documented `EnsureCreated`; existing schemas use reviewed hand-written/idempotent migrations. There is no normal EF initial migration/model snapshot convention; do not run `dotnet ef migrations add` blindly.
+- SQL tests require a verified dedicated test database. Independently guard the SQL connection; never retarget tests to development or live-validation databases to make them pass.
+
+## Validation and documentation
+
+Inspect existing patterns and tests before editing; make focused changes and update directly affected current documentation. Use the smallest relevant tests, then build. Run tests/build/app-host verification sequentially. For analytical changes, test event ordering, duplicates, bounded state, vetoes, and future-event exclusion. For end-to-end changes, verify the hosted app and persisted results.
+
+Before any implementation task returns a checkpoint **COMPLETE**, verify this closeout gate:
+
+- required implementation exists and required focused tests pass;
+- SQL/integration tests pass when the checkpoint changes SQL behavior;
+- solution build passes;
+- `PROJECT_STATUS.md` marks the checkpoint COMPLETE and names the correct next checkpoint;
+- README current-milestone/capability statements agree with status and implementation;
+- the master spec recognizes approved new architectural concepts, and relevant ADRs capture durable decisions;
+- concise validation evidence is appended to `VALIDATION_HISTORY.md`;
+- current documents have been searched for contradictory current-status claims.
+
+If these cannot be reconciled, return **PARTIAL** or **BLOCKED**, not COMPLETE. Historical validation entries need not match current state and must remain unrewritten. Keep ADRs concise; link to the master spec, README, and ADRs rather than duplicating their detailed contents.
