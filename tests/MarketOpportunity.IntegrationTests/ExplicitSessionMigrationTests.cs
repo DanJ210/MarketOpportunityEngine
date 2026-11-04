@@ -126,22 +126,7 @@ public sealed class ExplicitSessionMigrationTests
 
     private static string GetTestConnectionString()
     {
-        var connectionString = Environment.GetEnvironmentVariable("MARKETOPPORTUNITY_SQL_TEST_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            throw new InvalidOperationException(
-                "SQL Server integration test was not run: set MARKETOPPORTUNITY_SQL_TEST_CONNECTION to a dedicated SQL Server test database.");
-        }
-
-        var builder = new SqlConnectionStringBuilder(connectionString);
-        if (string.IsNullOrWhiteSpace(builder.InitialCatalog)
-            || !builder.InitialCatalog.Contains("test", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException(
-                "SQL Server integration tests require a dedicated database whose name contains 'test'.");
-        }
-
-        return builder.ConnectionString;
+        return IntegrationTestConfiguration.GetSqlTestConnectionString();
     }
 
     private static async Task<IsolatedDatabase> CreateIsolatedDatabaseAsync(string connectionString)

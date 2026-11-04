@@ -22,17 +22,8 @@ public sealed class LiveValidationInstrumentationTests
     [Fact]
     public async Task Offline_host_exports_final_diagnostics_and_persists_unchanged_canonical_events()
     {
-        var connection = Environment.GetEnvironmentVariable("MARKETOPPORTUNITY_SQL_TEST_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connection))
-        {
-            throw new InvalidOperationException("SQL diagnostic verification requires a dedicated test database.");
-        }
+        var connection = IntegrationTestConfiguration.GetSqlTestConnectionString();
         var target = new SqlConnectionStringBuilder(connection);
-        if (target.DataSource != "localhost,1433"
-            || target.InitialCatalog != "MarketOpportunityEngine_IntegrationTests")
-        {
-            throw new InvalidOperationException("Offline diagnostic verification requires the dedicated local integration-test database.");
-        }
         await using (var guard = new SqlConnection(connection))
         {
             await guard.OpenAsync();

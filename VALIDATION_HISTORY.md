@@ -1542,3 +1542,19 @@ Addressed the six selected review findings on `agents/pasted-text-processing`. C
 | Guarded SQL lifecycle/restart regressions, same-database SQL repeat, full SQL integration suite | **NOT RUN / unavailable**: `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was absent; no connection was fabricated, database created/retargeted, provider connected, or User Secrets inspected |
 
 New regressions cover quote-age validity/future/missing/boundary cases, health-only quote aging without snapshot mutation, terminal-state preservation, exact expiry timestamps, idle startup/timer reconciliation, session transitions without eligible plans, late-session isolation, and honest complete-context labeling. Existing SQL tests were extended to reject every terminal lifecycle mutation (including false-to-true readiness flags) and prove idle expiry survives restart; their execution remains outstanding. The earlier SQL closeout above is historical evidence for the original implementation, not validation of these corrections. **PR #2 still requires guarded SQL revalidation before merge/checkpoint closure.**
+
+## PR #2 guarded SQL revalidation (2026-11-03)
+
+**Status: COMPLETE.** The configured integration-test connection was verified with a read-only `SELECT DB_NAME()` as `MarketOpportunityEngine_IntegrationTests` on `localhost,1433` before SQL tests. The existing Compose SQL Server was already healthy; no service was started/recreated, no database was created or reset, and no credentials or connection strings were printed. SQL tests used the dedicated integration catalog; migration tests used their uniquely named temporary databases.
+
+| Sequential verification | Result |
+|---|---|
+| `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter "FullyQualifiedName~SqlServerPersistenceTests\|FullyQualifiedName~ExplicitSessionMigrationTests" --verbosity minimal` | **9/9 passed** |
+| `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter "FullyQualifiedName~Tracked_opportunity_and_readiness_history_round_trip_restart_and_reject_conflicts\|FullyQualifiedName~Readiness_states_and_context_modes_round_trip_through_sql\|FullyQualifiedName~Restart_restores_the_pinned_plan_and_reevaluates_readiness_from_current_state" --no-restore --verbosity minimal` | **3/3 passed** |
+| `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter FullyQualifiedName~FixtureWebApplicationTests --no-restore --verbosity minimal` | **1/1 passed twice**, same database without reset |
+| Full integration suite, first attempt | **19/20 passed**; one `IOException` opening the temporary diagnostics JSON in `Offline_host_exports_final_diagnostics_and_persists_unchanged_canonical_events` |
+| Isolated rerun of `Offline_host_exports_final_diagnostics_and_persists_unchanged_canonical_events` | **1/1 passed**; Restart Manager reported no remaining process owning the file after the initial failure |
+| Full integration suite rerun: `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --no-restore --verbosity minimal` | **20/20 passed** |
+| `dotnet build MarketOpportunityEngine.sln --no-restore` | Succeeded; **0 warnings, 0 errors** |
+
+The initial file-lock failure was not suppressed: after checking that no process remained to stop, the affected test passed in isolation and the complete integration suite passed on rerun. The dedicated SQL checks validate the PR #2 lifecycle, terminal immutability, restart restoration, and current-state reevaluation corrections. No application behavior or SQL schema was changed during this validation. The previously documented offline validation remains as recorded above; this later entry closes only the outstanding guarded SQL gate.

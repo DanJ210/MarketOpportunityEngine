@@ -4,7 +4,7 @@ A .NET 10 modular-monolith decision-support scanner for US equities/ETFs. The ap
 
 ## Current milestone
 
-**Milestone A.2.3b - Tracked Opportunity + Pre-Trade Readiness: implementation and original offline + guarded SQL closeout COMPLETE; PR #2 review-correction validation BLOCKED pending guarded SQL revalidation.** A.1 live scanner validation, A.2.1 market structure, A.2.2 immutable candidate TradePlans, and A.2.3a prior-session context are complete. The immediate next checkpoint is guarded SQL revalidation of the PR #2 corrections; A.2.4a Structural Level Interaction is planned afterward and has not started. See [PROJECT_STATUS.md](./PROJECT_STATUS.md) for the concise checkpoint and [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md) for historical evidence.
+**Milestone A.2.3b - Tracked Opportunity + Pre-Trade Readiness: COMPLETE, including PR #2 review-correction guarded SQL revalidation.** A.1 live scanner validation, A.2.1 market structure, A.2.2 immutable candidate TradePlans, and A.2.3a prior-session context are also complete. The next checkpoint is A.2.4a Structural Level Interaction; it is ready to begin but has not started. See [PROJECT_STATUS.md](./PROJECT_STATUS.md) for the concise checkpoint and [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md) for validation evidence.
 
 ## Architecture overview
 
@@ -90,7 +90,20 @@ The app requires SQL Server persistence. Development startup creates a clean dat
 
 Schema management is deliberately mixed: clean development schemas may use `EnsureCreated`; existing schemas use reviewed hand-written, idempotent migrations. The repository has no EF model snapshot or initial migration. Do not generate a model migration blindly; it may describe the entire model. Review the migration-generation strategy before changing this convention. The current TradePlan schema is introduced by an explicit migration, and the tracked-candidate/readiness tables (`tracked_opportunity`, `pre_trade_readiness_assessment`) by `20261101120000_AddTrackedOpportunityReadiness`. See [ADR-002](./docs/adr/ADR-002-ef-sqlserver-conventions.md), [ADR-006](./docs/adr/ADR-006-immutable-trade-plan-persistence.md), and [ADR-008](./docs/adr/ADR-008-tracked-opportunity-readiness.md).
 
-SQL integration tests use `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` and must target a dedicated test database, never the development database or live-validation database. Before any SQL test command, verify the effective connection's catalog with a read-only SQL Server query and confirm it is dedicated to testing (the A.2.2 closeout used `MarketOpportunityEngine_IntegrationTests`). If no safe dedicated test connection already exists, stop; do not start a server, create/retarget a database, or drop/reset data to make the tests run. Follow the guarded procedure and exact database checks in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#milestone-a22---sql-validation-closeout-2026-10-30).
+SQL integration tests use the dedicated `MarketOpportunityEngine_IntegrationTests` database on the local Compose SQL Server; they do not use the development or live-validation database. Create it idempotently on the existing SQL Server instance with:
+
+```powershell
+docker compose up -d sqlserver
+docker compose --profile validation run --rm sqlserver-test-init
+```
+
+The init service creates the integration and live-validation catalogs only when absent and verifies each catalog; it does not reset existing databases. SQL Server data uses the existing persistent `market-opportunity-sql-data` volume. Configure the integration-test project's local User Secret `MarketOpportunity:SQL:Test:Connection` (or use the process-only `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` override). The test guard requires exactly `localhost,1433` and `MarketOpportunityEngine_IntegrationTests`; it rejects the development database, live-validation database, and other targets. User Secrets are local development settings, are not encrypted, and must not be committed. Before any SQL test command, verify the effective connection's catalog with a read-only SQL Server query. SQL tests use uniquely scoped records; migration tests create and drop only uniquely named temporary databases. See the [A.2.2 SQL validation closeout](./VALIDATION_HISTORY.md#milestone-a22---sql-validation-closeout-2026-10-30) for the guarded procedure.
+
+Set the connection secret from PowerShell with:
+
+```powershell
+dotnet user-secrets set "MarketOpportunity:SQL:Test:Connection" "<connection-string>" --project tests\MarketOpportunity.IntegrationTests
+```
 
 ## Offline fixture mode
 
@@ -172,7 +185,7 @@ A tracked candidate pins one immutable `PlanDefined` plan per symbol/session; th
 ## Current limitations
 
 - A.2.3b readiness states describe market conditions only; Entry Ready is not an execution instruction, and no order/position capability exists.
-- The original A.2.3b guarded SQL closeout passed; PR #2 review corrections require guarded SQL revalidation.
+- PR #2 review-correction guarded SQL revalidation passed on 2026-11-03; details are in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#pr-2-guarded-sql-revalidation-2026-11-03).
 - The recorded fixture produces no confirmed structure, so it yields no tracked candidates; readiness reports no tracked candidate in fixture mode.
 - The `Scanner:PreTrade:ApproachDistanceRiskMultiple` default (1.0) is provisional and not market calibrated; it makes no profitability claim.
 - The scanner has no `PositionContext` and cannot infer whether a user entered a trade. `MANAGE`, `TAKE PROFIT`, and `EXIT` states are not implemented.
