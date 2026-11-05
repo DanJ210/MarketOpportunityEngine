@@ -37,9 +37,10 @@ When current documentation conflicts:
 
 Keep these concepts separate and in this order:
 
-`Canonical MarketEvent -> FeatureSnapshot / current-session features -> MarketStructure -> Opportunity / analytical setup -> TradePlan -> TrackedOpportunity -> PreTradeReadiness`
+`Canonical MarketEvent -> FeatureSnapshot / current-session features -> MarketStructure + PriorSessionContext -> MarketSituation (parallel descriptive evidence) -> Opportunity / analytical setup -> TradePlan -> TrackedOpportunity -> PreTradeReadiness`
 
 - **Opportunity:** the analytical setup detected.
+- **MarketSituation:** descriptive interaction with eligible support/resistance levels; it is independent of opportunity, TradePlan, publication, tracking, and readiness.
 - **TradePlan:** immutable hypothetical candidate geometry for a setup; persistence does not mean a trade occurred.
 - **TrackedOpportunity:** the immutable `PlanId` currently followed as a candidate.
 - **PreTradeReadiness:** current pre-trade market assessment against that pinned candidate.
@@ -47,6 +48,8 @@ Keep these concepts separate and in this order:
 - **PublicationDecision:** a current data-health/presentation projection, separate from immutable analytical history.
 
 `PriorSessionContext` is historical/contextual evidence consumed only where approved. Incomplete or unavailable context is never complete; current-session analysis may continue in explicitly labeled `CurrentSessionOnly` mode where allowed. `PriorSessionEnhanced` requires usable, complete prior context to actually participate. Do not invent exchange calendars, call fixture partial extrema official previous-day high/low/close, or treat persisted live events as an approved historical research source. Follow [ADR-007](../docs/adr/ADR-007-prior-session-context.md).
+
+`MarketSituation` v1 may report approaching, testing, or crossed support and resistance from independently selected eligible levels; it can report both sides simultaneously. Current swings require complete current-session structure/data, and prior swings/extrema require complete, usable, gap-free prior context. Preserve deterministic level provenance and immutable assessment history. Its provisional thresholds are not market calibrated. Do not infer a hold, bounce, reversal, breakdown, rejection, breakout, or failed breakout, and do not use MarketSituation to mutate setup, TradePlan, publication, tracked opportunity, or readiness. Any reaction classifier requires a separately approved design checkpoint; A.2.4b is proposed and is not authorization to implement. Follow [ADR-009](../docs/adr/ADR-009-market-situation-level-interaction.md).
 
 Follow [ADR-006](../docs/adr/ADR-006-immutable-trade-plan-persistence.md) and [ADR-008](../docs/adr/ADR-008-tracked-opportunity-readiness.md): never move an active candidate's pinned `PlanId` or geometry to a newer plan; reevaluate readiness from current trustworthy market state. Stale/offline feed health suspends current presentation without mutating the immutable plan. `EntryReady` means candidate entry conditions are aligned, not that an order should be placed. Do not use “BUY NOW,” “SELL NOW,” or “GUARANTEED PROFIT”; a quality score is not probability of profit.
 

@@ -4,7 +4,7 @@ A .NET 10 modular-monolith decision-support scanner for US equities/ETFs. The ap
 
 ## Current milestone
 
-**Milestone A.2.3b - Tracked Opportunity + Pre-Trade Readiness: COMPLETE, including PR #2 correction guarded SQL revalidation.** A.1 live scanner validation, A.2.1 market structure, A.2.2 immutable candidate TradePlans, and A.2.3a prior-session context are complete. The next checkpoint is A.2.4a Structural Level Interaction; it is planned and has not started. See [PROJECT_STATUS.md](./PROJECT_STATUS.md) for the concise checkpoint and [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md) for validation evidence.
+**Milestone A.2.4a - Structural Level Interaction: COMPLETE.** A.1 live scanner validation through A.2.3b tracked opportunity and pre-trade readiness are also complete. A.2.4a adds a descriptive, immutable MarketSituation assessment without reaction prediction. The proposed next checkpoint is A.2.4b reaction classification, whose scope requires approval; it has not started. See [PROJECT_STATUS.md](./PROJECT_STATUS.md) and [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md).
 
 ## Architecture overview
 
@@ -13,14 +13,24 @@ Recorded fixture (default) or optional read-only adapter
   -> canonical market events
   -> bounded in-process channel for live ingestion
   -> event-time state and versioned features
-  -> Momentum Continuation setup
-  -> immutable opportunity and candidate TradePlan
-  -> current publication-health projection
-  -> tracked candidate and immutable pre-trade readiness assessments
+     -> confirmed MarketStructure + eligible PriorSessionContext
+        -> separate descriptive MarketSituation assessment
+     -> Momentum Continuation setup
+        -> immutable opportunity and candidate TradePlan
+           -> current publication-health projection
+              -> tracked candidate and immutable pre-trade readiness assessments
   -> ASP.NET Core API and Blazor Interactive Server dashboard
 ```
 
 The solution targets .NET 10, ASP.NET Core 10, Blazor Interactive Server, EF Core 10, and SQL Server locally / Azure SQL Database as the deployment target. Domain and analytics remain independent of provider DTOs and persistence. Blazor's circuit transport updates the UI; there is no separate application SignalR hub. See [the master specification](./Market_Opportunity_Engine_Final_Master_Spec.md) and [docs/adr/](./docs/adr/).
+
+## A.2.4a market situation
+
+`market-situation-v1` describes the nearest eligible support and resistance interactions independently: approaching, testing, or crossed. It can report support and resistance simultaneously; the primary situation is the active interaction closest to its zone edge, with support winning an exact tie. The API includes the assessment in each opportunity read model, and the dashboard presents both interactions and expandable level provenance. Assessments are persisted as immutable SQL history by `20261105120000_AddMarketSituationHistory`; deterministic replay is idempotent and a conflicting write fails. See [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
+
+Current-session levels come only from confirmed swings when current structure, price data, and retained session history are complete. Prior-session swings and high/low are eligible only from complete, usable, gap-free context with full coverage and matching provenance. Incomplete prior context contributes no levels. The assessment never predicts a hold, bounce, reversal, breakdown, rejection, breakout, or failed breakout, and does not change setup, plan geometry, publication, tracking, or readiness.
+
+The versioned configuration keys are `Scanner:MarketSituation:TestZonePercent` and `Scanner:MarketSituation:ApproachDistancePercent`. The shipped `scanner-config-v18` defaults are 0.10% test-zone half-width and 0.25% distance from the zone edge; both are provisional development values, not market-calibrated. A level's test zone is centered on its price, and approach/crossed relevance uses the percentage distance from the active zone edge. Any threshold change requires a new scanner configuration version.
 
 ## A.2.3a prior-session context
 
@@ -59,7 +69,7 @@ The local SQL Server uses a persistent Compose volume. `docker compose down` pre
 
 Keep the shared [`appsettings.json`](./src/MarketOpportunity.Web/appsettings.json) provider at `Fixture`. Provider selection is `MarketData:Provider` (`Fixture`, `Alpaca`, or `Massive`); credentials do not select a provider. Configuration precedence is command line, environment variables, Development User Secrets, environment-specific JSON, then shared JSON. Restart the app after changing settings.
 
-Readiness thresholds live under the versioned scanner configuration: `Scanner:PreTrade:ApproachDistanceRiskMultiple` (must be positive) sets how close price must be to the pinned entry area, in multiples of the plan's risk per share, before Setup Forming applies. The shipped default 1.0 is a provisional development value; changing it requires a new `Scanner:Version`, which participates in readiness assessment identity.
+Readiness thresholds live under the versioned scanner configuration: `Scanner:PreTrade:ApproachDistanceRiskMultiple` (must be positive) sets how close price must be to the pinned entry area, in multiples of the plan's risk per share, before Setup Forming applies. The shipped default 1.0 is a provisional development value; changing it requires a new `Scanner:Version`, which participates in readiness assessment identity. MarketSituation thresholds and their provisional defaults are described in [A.2.4a market situation](#a24a-market-situation).
 
 Select an optional provider locally through Development User Secrets. For example:
 
@@ -88,7 +98,7 @@ Both adapters are market-data-only. Neither selects broker permissions, accesses
 
 The app requires SQL Server persistence. Development startup creates a clean database schema with EF Core `EnsureCreated`; if the database already exists, it applies the available reviewed migrations. Existing event/session migration behavior labels legacy rows `legacy-unknown`, rather than inferring a session.
 
-Schema management is deliberately mixed: clean development schemas may use `EnsureCreated`; existing schemas use reviewed hand-written, idempotent migrations. The repository has no EF model snapshot or initial migration. Do not generate a model migration blindly; it may describe the entire model. Review the migration-generation strategy before changing this convention. The current TradePlan schema is introduced by an explicit migration, and the tracked-candidate/readiness tables (`tracked_opportunity`, `pre_trade_readiness_assessment`) by `20261101120000_AddTrackedOpportunityReadiness`. See [ADR-002](./docs/adr/ADR-002-ef-sqlserver-conventions.md), [ADR-006](./docs/adr/ADR-006-immutable-trade-plan-persistence.md), and [ADR-008](./docs/adr/ADR-008-tracked-opportunity-readiness.md).
+Schema management is deliberately mixed: clean development schemas may use `EnsureCreated`; existing schemas use reviewed hand-written, idempotent migrations. The repository has no EF model snapshot or initial migration. Do not generate a model migration blindly; it may describe the entire model. Review the migration-generation strategy before changing this convention. The current TradePlan schema is introduced by an explicit migration, tracked-candidate/readiness tables (`tracked_opportunity`, `pre_trade_readiness_assessment`) by `20261101120000_AddTrackedOpportunityReadiness`, and MarketSituation history by `20261105120000_AddMarketSituationHistory`. See [ADR-002](./docs/adr/ADR-002-ef-sqlserver-conventions.md), [ADR-006](./docs/adr/ADR-006-immutable-trade-plan-persistence.md), [ADR-008](./docs/adr/ADR-008-tracked-opportunity-readiness.md), and [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
 
 SQL integration tests use `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` and must target a dedicated test database, never the development database or live-validation database. Before any SQL test command, verify the effective connection's catalog with a read-only SQL Server query and confirm it is dedicated to testing (the A.2.2 closeout used `MarketOpportunityEngine_IntegrationTests`). If no safe dedicated test connection already exists, stop; do not start a server, create/retarget a database, or drop/reset data to make the tests run. Follow the guarded procedure and exact database checks in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#milestone-a22---sql-validation-closeout-2026-10-30).
 
@@ -175,7 +185,7 @@ A tracked candidate pins one immutable `PlanDefined` plan per symbol/session; th
 - The recorded fixture produces no confirmed structure, so it yields no tracked candidates; readiness reports no tracked candidate in fixture mode.
 - The `Scanner:PreTrade:ApproachDistanceRiskMultiple` default (1.0) is provisional and not market calibrated; it makes no profitability claim.
 - The scanner has no `PositionContext` and cannot infer whether a user entered a trade. `MANAGE`, `TAKE PROFIT`, and `EXIT` states are not implemented.
-- Breakout, VWAP reclaim/rejection, and failed-breakout detectors are not implemented. The planned A.2.4a Structural Level Interaction checkpoint is not implemented; its initial scope is descriptive approaching/testing/crossed support and resistance, not outcome or reversal confirmation.
+- Breakout, VWAP reclaim/rejection, failed-breakout, and structural reaction classifiers are not implemented. A.2.4a reports only descriptive approaching/testing/crossed support and resistance, not outcome or reversal confirmation. A.2.4b reaction classification is a proposed design checkpoint requiring approval.
 - No historical event-read path, outcome labeling, backtesting, ML, or ONNX inference.
 - Raw vendor payloads are not persisted; normalized-event retention has occurred for local evaluation. See [ADR-004](./docs/adr/ADR-004-market-event-retention.md) before sustained research/backtesting/model-training use.
 - No exchange-calendar integration or full historical gap recovery; Massive has no reconnect behavior.

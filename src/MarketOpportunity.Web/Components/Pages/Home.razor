@@ -154,6 +154,83 @@
                         </article>
                     </section>
 
+                    <section class="invalidation-panel market-situation-panel" aria-label="Market situation">
+                        <h3>MARKET SITUATION</h3>
+                        @if (result.MarketSituation is { } situation)
+                        {
+                            <p>
+                                Current: @FormatStructurePrice(situation.CurrentReferencePrice) ·
+                                Context: @MarketSituationContextLabel(situation.ContextMode) ·
+                                as of @FormatUtc(situation.AsOfUtc)
+                            </p>
+                            @if (situation.PrimarySituation is { } primary)
+                            {
+                                var primaryInteraction = primary.Side == MarketSituationSide.Support
+                                    ? situation.SupportInteraction
+                                    : situation.ResistanceInteraction;
+                                <p>
+                                    <strong>@MarketSituationLabel(primary.SituationType)</strong>
+                                    · nearest active interaction
+                                </p>
+                                <p>@MarketSituationDescription(primary.SituationType, primaryInteraction!.Level.Source)</p>
+                            }
+                            else if (situation.Status == MarketSituationStatus.Available)
+                            {
+                                <p>No structural level is currently within the configured approach or test zone.</p>
+                            }
+                            else
+                            {
+                                <p>@situation.UnavailableReason</p>
+                            }
+
+                            @if (situation.SupportInteraction is { } support)
+                            {
+                                <h4>Support · @MarketSituationLabel(support.SituationType)</h4>
+                                <p>
+                                    @LevelSourceLabel(support.Level.Source): @FormatStructurePrice(support.Level.Price) ·
+                                    test zone: @FormatStructurePrice(support.ZoneLow) - @FormatStructurePrice(support.ZoneHigh) ·
+                                    distance to zone: @FormatStructurePrice(support.DistanceToActiveZone)
+                                    (@FormatPercent(support.DistanceToActiveZonePercent))
+                                </p>
+                            }
+                            @if (situation.ResistanceInteraction is { } resistance)
+                            {
+                                <h4>Resistance · @MarketSituationLabel(resistance.SituationType)</h4>
+                                <p>
+                                    @LevelSourceLabel(resistance.Level.Source): @FormatStructurePrice(resistance.Level.Price) ·
+                                    test zone: @FormatStructurePrice(resistance.ZoneLow) - @FormatStructurePrice(resistance.ZoneHigh) ·
+                                    distance to zone: @FormatStructurePrice(resistance.DistanceToActiveZone)
+                                    (@FormatPercent(resistance.DistanceToActiveZonePercent))
+                                </p>
+                            }
+
+                            <p class="muted">
+                                This is a descriptive reference to current price and structural levels, not a trade signal
+                                or a prediction that a level will hold, fail, or reverse.
+                                @situation.DefinitionVersion · @situation.ConfigurationVersion
+                            </p>
+                            @if (situation.EligibleLevels.Count > 0)
+                            {
+                                <details>
+                                    <summary>Eligible structural reference levels (@situation.EligibleLevels.Count)</summary>
+                                    <ul class="evidence-list">
+                                        @foreach (var level in situation.EligibleLevels)
+                                        {
+                                            <li>
+                                                <strong>@LevelSourceLabel(level.Source) · @FormatStructurePrice(level.Price)</strong>
+                                                <span>Source session @level.SourceSessionId · @level.SourceCompleteness · @level.HistoricalSource</span>
+                                            </li>
+                                        }
+                                    </ul>
+                                </details>
+                            }
+                        }
+                        else
+                        {
+                            <p>Market situation is not available for this analysis.</p>
+                        }
+                    </section>
+
                     <section class="invalidation-panel readiness-panel" aria-label="Pre-trade readiness">
                         <h3>PRE-TRADE READINESS</h3>
                         @if (result.Readiness is { } readiness)
@@ -525,6 +602,55 @@
         PreTradeReadinessState.EntryZoneActive or PreTradeReadinessState.SetupForming => "watch",
         PreTradeReadinessState.NoLongerActionable => "avoid",
         _ => "neutral"
+    };
+
+    private static string MarketSituationContextLabel(MarketSituationContextMode contextMode) =>
+        contextMode == MarketSituationContextMode.PriorSessionEnhanced
+            ? "Prior Session + Today"
+            : "Today Only";
+
+    private static string MarketSituationLabel(MarketSituationType situation) => situation switch
+    {
+        MarketSituationType.ApproachingSupport => "Approaching Support",
+        MarketSituationType.TestingSupport => "Testing Support",
+        MarketSituationType.CrossedSupport => "Crossed Support",
+        MarketSituationType.ApproachingResistance => "Approaching Resistance",
+        MarketSituationType.TestingResistance => "Testing Resistance",
+        MarketSituationType.CrossedResistance => "Crossed Resistance",
+        _ => "Unavailable"
+    };
+
+    private static string MarketSituationDescription(
+        MarketSituationType situation,
+        ImportantPriceLevelSource source)
+    {
+        var sourceText = source is ImportantPriceLevelSource.PriorSwingHigh
+            or ImportantPriceLevelSource.PriorSwingLow
+            or ImportantPriceLevelSource.PriorSessionHigh
+            or ImportantPriceLevelSource.PriorSessionLow
+                ? "an important level from the prior session"
+                : "a confirmed structural level from today";
+        return situation switch
+        {
+            MarketSituationType.ApproachingSupport or MarketSituationType.ApproachingResistance =>
+                $"Price is moving close to {sourceText}.",
+            MarketSituationType.TestingSupport or MarketSituationType.TestingResistance =>
+                $"Price is interacting with {sourceText}.",
+            MarketSituationType.CrossedSupport or MarketSituationType.CrossedResistance =>
+                $"Current price is beyond the test-zone edge of {sourceText}; this alone does not confirm a reaction.",
+            _ => "No active level interaction is available."
+        };
+    }
+
+    private static string LevelSourceLabel(ImportantPriceLevelSource source) => source switch
+    {
+        ImportantPriceLevelSource.PriorSwingHigh => "Prior swing high",
+        ImportantPriceLevelSource.PriorSwingLow => "Prior swing low",
+        ImportantPriceLevelSource.PriorSessionHigh => "Prior session high",
+        ImportantPriceLevelSource.PriorSessionLow => "Prior session low",
+        ImportantPriceLevelSource.CurrentSwingHigh => "Current swing high",
+        ImportantPriceLevelSource.CurrentSwingLow => "Current swing low",
+        _ => "Structural level"
     };
 
     private static string FormatRiskMultiple(decimal? multiple) =>

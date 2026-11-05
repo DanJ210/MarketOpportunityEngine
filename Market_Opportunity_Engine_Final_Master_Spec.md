@@ -215,6 +215,12 @@ Track:
 
 A level crossing alone is insufficient. Breakout quality should consider participation, momentum, relative strength, liquidity, broader context, and whether price holds or rejects the level.
 
+### A.2.4a MarketSituation
+
+`market-situation-v1` is a separate descriptive assessment of price interaction with eligible structural levels. It may independently report approaching, testing, or crossed support and resistance, including both sides at once. Current-session levels require confirmed swings and complete retained current-session data; prior-session swings and extrema require complete, usable, gap-free prior context and full coverage. The assessment preserves level provenance, classifies a test zone centered on the level, and measures approach/crossed relevance from the zone edge using versioned provisional thresholds. It does not classify reactions or change opportunity, TradePlan, publication, tracking, or readiness. See [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
+
+Any later reaction classifier is a distinct, proposed A.2.4b design checkpoint and requires approval. It must define event-time confirmation windows, evidence and completeness rules before classifying a hold, bounce/reversal, breakdown, rejection, breakout, or failed breakout/reclaim.
+
 ## 4.8 Volatility and risk
 
 Inputs:
@@ -397,7 +403,7 @@ Material changes create a new version rather than rewriting historical reasoning
 
 Keep these concepts distinct:
 
-- **Market situation:** What is happening around a level or candidate right now? This is distinct from a setup, plan, tracking, readiness, or publication state. It is not implemented; the planned A.2.4a checkpoint is limited to descriptive level interaction.
+- **Market situation:** What is happening around an eligible structural level right now? A.2.4a implements a descriptive, versioned assessment; it remains distinct from setup, plan, tracking, readiness, and publication state.
 - **Analytical setup:** What pattern or condition exists?
 - **TradePlan:** If the setup were traded, what is its structural geometry?
 - **Publication:** Is current source health sufficient to present this result? Publication may suspend or expire a candidate without mutating its immutable analysis or plan.
@@ -408,7 +414,7 @@ These are separate contracts: Market Situation ≠ Opportunity ≠ TradePlan ≠
 
 A.2.3b implements the pre-trade readiness states `Unavailable`, `Suspended`, `Watching`, `SetupForming`, `EntryZoneActive`, `EntryReady`, and `NoLongerActionable` (`pre-trade-readiness-v2`) over a pinned tracked candidate (`tracked-opportunity-selection-v1`). Readiness is a deterministic current-state evaluation, not a linear workflow; active states may be skipped, while terminal assessments and terminal lifecycle fields remain final. A newer recalculated plan never moves a tracked candidate's geometry; terminal conditions end the candidate and a subsequent evaluation may pin the newest eligible plan. v2 checks quote freshness at evaluation time without rewriting analytical snapshots and always reports `CurrentSessionOnly` because no historical levels participate in its rules. Prior context remains separately available. Live startup and health ticks persist lifecycle reconciliation independently of analysis batches; expiry uses the pinned validity boundary and observed session changes use strictly later event time, not inferred calendar boundaries. Lifecycle-only updates do not manufacture readiness-history observations. `EntryReady` means candidate entry conditions are aligned; it must never be worded as "buy now", "sell now", "short now", or a guaranteed or probable outcome. The application does not need to know whether the user owns a position to describe potential market entry/opportunity conditions; readiness describes market conditions, never holdings. Position/account management is a separate future concern if approved; it is not a prerequisite for market-opportunity analysis.
 
-The planned A.2.4a **Structural Level Interaction** checkpoint will keep `MarketSituation` distinct from the concepts above. Its initial descriptive scope is: approaching support, testing support, crossed support, approaching resistance, testing resistance, and crossed resistance. It must not claim that support will hold, a bounce is confirmed, a breakdown is confirmed, resistance rejection is confirmed, or a breakout is confirmed.
+A.2.4a **Structural Level Interaction** implements `MarketSituation` with the descriptive labels approaching support, testing support, crossed support, approaching resistance, testing resistance, and crossed resistance. It reports both support and resistance independently where relevant and preserves eligible-level provenance. It must not claim that support will hold, a bounce is confirmed, a breakdown is confirmed, resistance rejection is confirmed, or a breakout is confirmed. `MarketSituation` does not alter setup, TradePlan geometry, publication, tracking, or readiness.
 
 Future detector work follows `Detector -> TradePlan -> Readiness layer -> Outcome`. These are separate contracts and milestones; a detector does not itself produce a user action or outcome.
 
@@ -730,10 +736,13 @@ Trace provider reception -> normalization -> state -> features -> setup detector
 - **A.2.2 Trade Plan Foundation:** COMPLETE.
 - **A.2.3a Prior-Session Market Context:** COMPLETE.
 - **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** COMPLETE, including PR #2 correction guarded SQL revalidation.
+- **A.2.4a Structural Level Interaction:** COMPLETE.
 
 A.2.3b defines the user-facing pre-trade readiness contract over current setup, pinned TradePlan, publication, and data-quality evidence. Readiness stays separate from setup, immutable TradePlan geometry, and current publication health, and does not require knowing the user's holdings. Position/account management is a separate future concern if approved and is not required for market-opportunity analysis.
 
-**Immediate next checkpoint:** A.2.4a **Structural Level Interaction**, which has not started and is descriptive only: approaching/testing/crossed support and resistance. It will not assert a level will hold or that a bounce, breakdown, rejection, or breakout is confirmed.
+A.2.4a adds the versioned `market-situation-v1` descriptive assessment and immutable SQL history. Its default test-zone half-width is 0.10% of level price and its default approach/crossed relevance is 0.25% of zone-edge price; both are provisional and not market calibrated. See [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
+
+**Proposed next design checkpoint:** A.2.4b **Structural Level Reaction Classification**. Its scope and acceptance criteria require approval before implementation; it has not started. The design focus is event-time-confirmed reaction evidence and explicit completeness/window rules for holds, bounces/reversals, breakdowns, rejections, breakouts, and failed breakouts/reclaims. It must remain distinct from A.2.4a's descriptive labels and must not imply actual execution, holdings, or guaranteed outcomes.
 
 ## Phase 0: Minimal foundations
 

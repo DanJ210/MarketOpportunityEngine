@@ -49,6 +49,22 @@ public sealed class StructureWebApplicationTests
             Assert.Equal(JsonValueKind.Null, root.GetProperty("nearestResistanceCandidate").ValueKind);
         }
 
+        using (var opportunitiesResponse = await client.GetAsync("/api/v1/opportunities", timeout.Token))
+        using (var opportunitiesJson = JsonDocument.Parse(
+                   await opportunitiesResponse.Content.ReadAsStringAsync(timeout.Token)))
+        {
+            Assert.Equal(HttpStatusCode.OK, opportunitiesResponse.StatusCode);
+            var marketSituation = opportunitiesJson.RootElement.EnumerateArray()
+                .Select(item => item.GetProperty("marketSituation"))
+                .First(item => item.GetProperty("sessionId").GetString() == "fixture-2026-10-22");
+            Assert.Equal("market-situation-v1", marketSituation.GetProperty("definitionVersion").GetString());
+            Assert.Equal("CurrentSessionOnly", marketSituation.GetProperty("contextMode").GetString());
+            Assert.DoesNotContain(
+                marketSituation.GetProperty("eligibleLevels").EnumerateArray(),
+                item => item.GetProperty("source").GetString() is "PriorSwingHigh"
+                    or "PriorSwingLow" or "PriorSessionHigh" or "PriorSessionLow");
+        }
+
         using (var priorResponse = await client.GetAsync(
                    "/api/v1/symbols/MOE/prior-context?sessionId=fixture-2026-10-23",
                    timeout.Token))
@@ -83,11 +99,24 @@ public sealed class StructureWebApplicationTests
                 json.RootElement.GetProperty("context").GetProperty("completeness").GetString());
         }
 
+        using (var configurationResponse = await client.GetAsync(
+                   "/api/v1/configuration/effective",
+                   timeout.Token))
+        using (var json = JsonDocument.Parse(await configurationResponse.Content.ReadAsStringAsync(timeout.Token)))
+        {
+            Assert.Equal(HttpStatusCode.OK, configurationResponse.StatusCode);
+            Assert.Equal("scanner-config-v18", json.RootElement.GetProperty("version").GetString());
+            var marketSituation = json.RootElement.GetProperty("marketSituation");
+            Assert.Equal(0.1m, marketSituation.GetProperty("testZonePercent").GetDecimal());
+            Assert.Equal(0.25m, marketSituation.GetProperty("approachDistancePercent").GetDecimal());
+        }
+
         var html = await client.GetStringAsync("/", timeout.Token);
         Assert.Contains("MARKET STRUCTURE", html);
         Assert.Contains("TRADE PLAN", html);
         Assert.Contains("PRIOR SESSION", html);
         Assert.Contains("PRE-TRADE READINESS", html);
+        Assert.Contains("MARKET SITUATION", html);
         Assert.Contains("No tracked candidate opportunity", html);
         Assert.Contains("Support and resistance are historical reference areas, not guarantees.", html);
         Assert.Contains("Insufficient", html);
@@ -169,15 +198,28 @@ public sealed class StructureWebApplicationTests
         using (var json = JsonDocument.Parse(await opportunities.Content.ReadAsStringAsync(timeout.Token)))
         {
             Assert.Equal(HttpStatusCode.OK, opportunities.StatusCode);
-            var plan = Assert.Single(json.RootElement.EnumerateArray())
-                .GetProperty("tradePlan");
+            var analysis = Assert.Single(json.RootElement.EnumerateArray());
+            var plan = analysis.GetProperty("tradePlan");
             Assert.Equal("trade-plan-v1", plan.GetProperty("planDefinitionVersion").GetString());
             Assert.Equal(factory.Store.TradePlan!.Id, plan.GetProperty("id").GetGuid());
             Assert.Equal(factory.Store.TradePlan.Status.ToString(), plan.GetProperty("status").GetString());
             Assert.Equal(factory.Store.TradePlan.AsOfUtc, plan.GetProperty("asOfUtc").GetDateTimeOffset());
+            var marketSituation = analysis.GetProperty("marketSituation");
+            Assert.Equal("market-situation-v1", marketSituation.GetProperty("definitionVersion").GetString());
+            Assert.Equal("STRUCT", marketSituation.GetProperty("symbol").GetString());
+            Assert.Equal("CurrentSessionOnly", marketSituation.GetProperty("contextMode").GetString());
+            Assert.Contains(
+                marketSituation.GetProperty("eligibleLevels").EnumerateArray(),
+                item => item.GetProperty("source").GetString() == "CurrentSwingLow");
+            Assert.Equal(
+                "TestingResistance",
+                marketSituation.GetProperty("resistanceInteraction").GetProperty("situationType").GetString());
+            Assert.Contains(factory.MarketSituationStore.Persisted, item => item.Id == marketSituation.GetProperty("id").GetGuid());
         }
 
         var html = await client.GetStringAsync("/", timeout.Token);
+        Assert.Contains("MARKET SITUATION", html);
+        Assert.Contains("Testing Resistance", html);
         Assert.Contains("Latest swing high: $107.00", html);
         Assert.Contains("TRADE PLAN", html);
         Assert.Contains("Candidate geometry only", html);
@@ -187,15 +229,67 @@ public sealed class StructureWebApplicationTests
         Assert.Contains("Nearest resistance candidate: $105.00 · support candidate: $104.00", html);
         Assert.Contains("structure-observations", html);
         Assert.Contains("not a probability of profit or a trading recommendation", html);
+        Assert.DoesNotContain("BREAKDOWN CONFIRMED", html);
+        Assert.DoesNotContain("BREAKOUT CONFIRMED", html);
+    }
+
+    [Fact]
+    public async Task Api_and_dashboard_preserve_simultaneous_support_and_resistance_interactions()
+    {
+        await using var factory = new StructureApplicationFactory(simultaneousSituationSource: true);
+        using var client = factory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        HttpResponseMessage? response = null;
+        while (!timeout.IsCancellationRequested)
+        {
+            response?.Dispose();
+            response = await client.GetAsync(
+                "/api/v1/symbols/STRUCT/snapshot?sessionId=hosted-structure",
+                timeout.Token);
+            if (response.StatusCode == HttpStatusCode.OK)
+            {
+                break;
+            }
+
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token);
+        }
+
+        Assert.NotNull(response);
+        response.Dispose();
+        using (var opportunities = await client.GetAsync("/api/v1/opportunities", timeout.Token))
+        using (var json = JsonDocument.Parse(await opportunities.Content.ReadAsStringAsync(timeout.Token)))
+        {
+            Assert.Equal(HttpStatusCode.OK, opportunities.StatusCode);
+            var marketSituation = Assert.Single(json.RootElement.EnumerateArray())
+                .GetProperty("marketSituation");
+            Assert.Equal(
+                "ApproachingSupport",
+                marketSituation.GetProperty("supportInteraction").GetProperty("situationType").GetString());
+            Assert.Equal(
+                "ApproachingResistance",
+                marketSituation.GetProperty("resistanceInteraction").GetProperty("situationType").GetString());
+            Assert.Equal("Support", marketSituation.GetProperty("primarySituation").GetProperty("side").GetString());
+        }
+
+        var html = await client.GetStringAsync("/", timeout.Token);
+        Assert.Contains("Approaching Support", html);
+        Assert.Contains("Approaching Resistance", html);
+        Assert.DoesNotContain("BUY", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("SELL", html, StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class StructureApplicationFactory : WebApplicationFactory<Program>
     {
         private readonly bool _useFixtureSource;
+        private readonly bool _simultaneousSituationSource;
 
-        public StructureApplicationFactory(bool useFixtureSource = false)
+        public StructureApplicationFactory(
+            bool useFixtureSource = false,
+            bool simultaneousSituationSource = false)
         {
             _useFixtureSource = useFixtureSource;
+            _simultaneousSituationSource = simultaneousSituationSource;
         }
 
         private static string WebProjectPath => Path.GetFullPath(Path.Combine(
@@ -204,6 +298,8 @@ public sealed class StructureWebApplicationTests
         public CapturingStore Store { get; } = new();
 
         public InMemoryReadinessStore ReadinessStore { get; } = new();
+
+        public InMemoryMarketSituationStore MarketSituationStore { get; } = new();
 
         protected override IHost CreateHost(IHostBuilder builder)
         {
@@ -223,12 +319,15 @@ public sealed class StructureWebApplicationTests
                 if (!_useFixtureSource)
                 {
                     services.RemoveAll<IMarketDataSource>();
-                    services.AddScoped<IMarketDataSource>(_ => new SyntheticStructureSource());
+                    services.AddScoped<IMarketDataSource>(_ =>
+                        new SyntheticStructureSource(_simultaneousSituationSource));
                 }
                 services.RemoveAll<IScannerStore>();
                 services.AddSingleton<IScannerStore>(Store);
                 services.RemoveAll<IPreTradeReadinessStore>();
                 services.AddSingleton<IPreTradeReadinessStore>(ReadinessStore);
+                services.RemoveAll<IMarketSituationStore>();
+                services.AddSingleton<IMarketSituationStore>(MarketSituationStore);
             });
         }
 
@@ -277,7 +376,20 @@ public sealed class StructureWebApplicationTests
         }
     }
 
-    private sealed class SyntheticStructureSource : IMarketDataSource
+    private sealed class InMemoryMarketSituationStore : IMarketSituationStore
+    {
+        public List<MarketSituationAssessment> Persisted { get; } = [];
+
+        public Task PersistAsync(
+            MarketSituationAssessment assessment,
+            CancellationToken cancellationToken)
+        {
+            Persisted.Add(assessment);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class SyntheticStructureSource(bool simultaneousSituation = false) : IMarketDataSource
     {
         public MarketDataCapabilities Capabilities { get; } =
             new("RecordedFixture", "Synthetic", MarketDataCoverage.Synthetic, false, true, true);
@@ -286,7 +398,9 @@ public sealed class StructureWebApplicationTests
             [EnumeratorCancellation] CancellationToken cancellationToken)
         {
             var start = new DateTimeOffset(2026, 10, 23, 14, 30, 0, TimeSpan.Zero);
-            decimal[] prices = [101.5m, 101m, 105m, 103m, 102m, 104m, 103m, 107m, 105m, 104m, 106m, 105m];
+            decimal[] prices = simultaneousSituation
+                ? [101m, 100m, 99.9m, 100.3m, 100.1m, 100.2m, 100m]
+                : [101.5m, 101m, 105m, 103m, 102m, 104m, 103m, 107m, 105m, 104m, 106m, 105m];
             for (var index = 0; index < prices.Length; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();

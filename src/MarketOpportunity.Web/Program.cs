@@ -115,6 +115,7 @@ builder.Services.AddScoped<IMarketDataSource>(serviceProvider =>
         serviceProvider.GetService<LiveValidationDiagnostics>()));
 builder.Services.AddScoped<IScannerStore, EfScannerStore>();
 builder.Services.AddScoped<IPreTradeReadinessStore, EfPreTradeReadinessStore>();
+builder.Services.AddScoped<IMarketSituationStore, EfMarketSituationStore>();
 
 var connectionString = builder.Configuration.GetConnectionString("MarketOpportunity")
     ?? throw new InvalidOperationException(
@@ -163,7 +164,8 @@ app.MapGet("/api/v1/opportunities", (ScannerState scanner) =>
             result.Opportunity,
             result.Publication,
             result.TradePlan,
-            PreTradeReadinessReadModel.From(result)))
+            PreTradeReadinessReadModel.From(result),
+            result.MarketSituation))
         .OrderByDescending(result => result.Opportunity.AsOfUtc)
         .ThenBy(result => result.Opportunity.Symbol, StringComparer.Ordinal)
         .ThenBy(result => result.Opportunity.SessionId, StringComparer.Ordinal)
@@ -178,7 +180,8 @@ app.MapGet("/api/v1/opportunities/{id:guid}", (Guid id, ScannerState scanner) =>
             result.Opportunity,
             result.Publication,
             result.TradePlan,
-            PreTradeReadinessReadModel.From(result)));
+            PreTradeReadinessReadModel.From(result),
+            result.MarketSituation));
 });
 app.MapGet("/api/v1/symbols/{symbol}/snapshot", (string symbol, string? sessionId, ScannerState scanner) =>
 {

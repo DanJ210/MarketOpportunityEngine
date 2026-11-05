@@ -10,6 +10,7 @@ public sealed class ExplicitSessionMigrationTests
     private const string ProvenanceMigrationId = "20261024232400_AddOpportunityMarketDataProvenance";
     private const string TradePlansMigrationId = "20261030210000_AddImmutableTradePlans";
     private const string TrackedReadinessMigrationId = "20261101120000_AddTrackedOpportunityReadiness";
+    private const string MarketSituationMigrationId = "20261105120000_AddMarketSituationHistory";
 
     [Fact]
     public async Task Clean_schema_accepts_explicit_session_migration()
@@ -26,11 +27,14 @@ public sealed class ExplicitSessionMigrationTests
                 Assert.Contains(ProvenanceMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(TradePlansMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(TrackedReadinessMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(MarketSituationMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                await context.Database.MigrateAsync();
             }
 
             await AssertSessionColumnsAndIndexesAsync(database.ConnectionString);
             await AssertTradePlanSchemaAsync(database.ConnectionString);
             await AssertTrackedReadinessSchemaAsync(database.ConnectionString);
+            await AssertMarketSituationSchemaAsync(database.ConnectionString);
         }
         finally
         {
@@ -74,6 +78,7 @@ public sealed class ExplicitSessionMigrationTests
                 Assert.Contains(MigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(TradePlansMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(TrackedReadinessMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(MarketSituationMigrationId, await context.Database.GetAppliedMigrationsAsync());
 
                 var marketEvent = await context.MarketEvents.AsNoTracking().SingleAsync(item => item.Id == eventId);
                 Assert.Equal("legacy-unknown", marketEvent.SessionId);
@@ -118,6 +123,7 @@ public sealed class ExplicitSessionMigrationTests
             await AssertSessionColumnsAndIndexesAsync(database.ConnectionString);
             await AssertTradePlanSchemaAsync(database.ConnectionString);
             await AssertTrackedReadinessSchemaAsync(database.ConnectionString);
+            await AssertMarketSituationSchemaAsync(database.ConnectionString);
         }
         finally
         {
@@ -434,6 +440,42 @@ public sealed class ExplicitSessionMigrationTests
                 """;
             Assert.Equal(6, Convert.ToInt32(await indexCommand.ExecuteScalarAsync()));
         }
+    }
+
+    private static async Task AssertMarketSituationSchemaAsync(string connectionString)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using (var columnsCommand = connection.CreateCommand())
+        {
+            columnsCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.columns AS c
+                INNER JOIN sys.tables AS t ON c.object_id = t.object_id
+                WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                  AND t.name = N'market_situation_assessment'
+                  AND c.name IN (
+                    N'Id', N'FeatureSnapshotId', N'PriorSessionContextId', N'Symbol', N'SessionId',
+                    N'AsOfUtc', N'EvaluatedAtUtc', N'Status', N'ContextMode', N'PrimarySituationType',
+                    N'SupportSituationType', N'ResistanceSituationType', N'SupportLevelSource',
+                    N'ResistanceLevelSource', N'DefinitionVersion', N'ConfigurationVersion', N'AssessmentJson');
+                """;
+            Assert.Equal(17, Convert.ToInt32(await columnsCommand.ExecuteScalarAsync()));
+        }
+
+        await using var indexesCommand = connection.CreateCommand();
+        indexesCommand.CommandText =
+            """
+            SELECT COUNT(*)
+            FROM sys.indexes
+            WHERE name IN (
+                N'IX_market_situation_assessment_Symbol_SessionId_AsOfUtc',
+                N'IX_market_situation_assessment_SupportSituationType_SupportLevelSource_AsOfUtc',
+                N'IX_market_situation_assessment_ResistanceSituationType_ResistanceLevelSource_AsOfUtc',
+                N'IX_market_situation_assessment_PrimarySituationType_AsOfUtc');
+            """;
+        Assert.Equal(4, Convert.ToInt32(await indexesCommand.ExecuteScalarAsync()));
     }
 
     private sealed record IsolatedDatabase(string Name, string ConnectionString);

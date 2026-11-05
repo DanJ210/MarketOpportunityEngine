@@ -1126,6 +1126,7 @@ Focused replay coverage includes rising and falling slopes with exact expected v
 
 - The first focused build found one test-only `FeatureSnapshot` construction missing the new slope fields; the publication-gate test fixture was updated with the explicit insufficient/null state.
 - The next focused run passed 7 of 8 replay tests; the existing configuration identity test selected `scanner-config-v4`, which had become the new default and therefore was not a changed configuration. Its test-only changed value was updated to `scanner-config-v5`; no production default was changed to accommodate the test.
+
 - The first SQL setup attempt loaded the neutral SQL client instead of the Windows runtime assembly and failed before any database test. Loading the packaged Windows runtime `Microsoft.Data.SqlClient.dll` resolved setup. No database was reset/dropped, and no credential was printed or saved.
 
 No outstanding verification blocker remains for this feature slice. The hosted fixture test still uses the isolated Testing/Fixture setup and no Development User Secrets.
@@ -1561,3 +1562,23 @@ New regressions cover quote-age validity/future/missing/boundary cases, health-o
 | Full solution build | **0 warnings, 0 errors** |
 
 The existing-schema migration test previously verified that the migration was applied but did not inspect its resulting tracked/readiness schema. One test-only assertion now applies the existing table/index checks to that path as well; the focused migration test and complete sequence passed afterward. No production code or migration changed, and no automatic EF migration generation was run. PR #2 guarded SQL correction revalidation is **COMPLETE**; A.2.4a Structural Level Interaction remains the next planned checkpoint and has not started.
+
+## A.2.4a - Structural Level Interaction (2026-11-05)
+
+**Result: COMPLETE.** `market-situation-v1` adds descriptive, independently selected support and resistance interactions from complete eligible structural levels. It preserves current/prior provenance, may report both sides simultaneously, persists immutable SQL history, and is exposed through the hosted opportunity API and dashboard. It does not classify reactions or change opportunity, TradePlan, publication, tracking, or readiness. Threshold defaults remain provisional and not market calibrated. See [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
+
+| Sequential verification | Result |
+|---|---|
+| `MarketSituationEvaluatorTests` | **18/18 passed** |
+| Hosted API/dashboard tests before the additional simultaneous-interaction case | **2/2 passed** |
+| Expanded `StructureWebApplicationTests`, including simultaneous support and resistance | **3/3 passed** |
+| Readiness/pipeline, prior-context, TradePlan, market-structure, and Momentum regressions | **85/85, 11/11, 17/17, 13/13, and 22/22 passed** |
+| Full offline unit suite | **379/379 passed** |
+| Guarded SQL persistence and migration tests | **10/10 passed** against the dedicated `MarketOpportunityEngine_IntegrationTests` database; clean and existing schema migration assertions passed. |
+| Hosted fixture SQL test | **1/1 passed twice against the same dedicated database without reset** |
+| Full guarded integration suite | **17/17 passed** before the additional simultaneous-interaction hosted test was added. The first full invocation had a transient Windows diagnostics-file sharing failure; the affected test passed in isolation and the subsequent full run passed. |
+| Final `dotnet build MarketOpportunityEngine.sln --no-restore` | **0 warnings, 0 errors** |
+
+After the final hosted test was added, its focused `StructureWebApplicationTests` run passed **3/3**. A subsequent unguarded full integration invocation was not counted as validation: the SQL integration tests' existing safety guard rejected the run because this process had no configured dedicated database connection. No SQL database was retargeted or modified for that invocation. The earlier guarded SQL and full integration evidence remains applicable because the final change was only hosted API/dashboard test coverage. Current documentation and status were reconciled; no historical validation entries were rewritten.
+
+**Proposed next design checkpoint:** A.2.4b Structural Level Reaction Classification is not started and requires approval before implementation. Its design focus is event-time-confirmed reaction evidence with explicit confirmation windows and data-completeness rules.

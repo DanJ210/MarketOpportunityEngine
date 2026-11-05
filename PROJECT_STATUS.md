@@ -1,6 +1,6 @@
 # Current Project Status
 
-**Current checkpoint:** Milestone A.2.4a - Structural Level Interaction (next; not started)
+**Current checkpoint:** Milestone A.2.4a - Structural Level Interaction: COMPLETE
 **Updated:** 2026-11-05
 
 ## Milestones
@@ -10,18 +10,23 @@
 - **A.2.2 Trade Plan Foundation:** COMPLETE
 - **A.2.3a Prior-Session Market Context:** COMPLETE
 - **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** COMPLETE, including PR #2 correction guarded SQL revalidation
+- **A.2.4a Structural Level Interaction:** COMPLETE
 
 ## Current state
 
 The app defaults to the recorded fixture and supports optional read-only Alpaca and Massive market-data adapters. A.2.1 added versioned confirmed swing/structure values, A.2.2 immutable candidate TradePlans, and A.2.3a the separate `prior-session-context-v1` contract.
 
-A.2.3b adds the tracked-candidate and readiness layer. `tracked-opportunity-selection-v1` pins one immutable `PlanDefined` TradePlan per symbol/session when the opportunity direction agrees, publication is Active, required current data is valid, and risk/reward to Target 1 are positive; newer plans never move a tracked candidate's geometry. The PR #2 corrections advance readiness to `pre-trade-readiness-v2`, retaining the same states but checking current quote freshness, preserving terminal assessments/history, and reporting `CurrentSessionOnly` honestly because the approved rules do not consume prior-session levels. Available prior context alone no longer claims enhancement. Live startup and health ticks persist lifecycle reconciliation without new analyses; expiry uses the pinned validity boundary, session transitions require strictly later event-time observations, and late-session inputs remain isolated. EntryReady still combines only existing approved outputs; no indicator was added. `Scanner:PreTrade:ApproachDistanceRiskMultiple` remains the provisional, uncalibrated 1.0 development default in `scanner-config-v17`. Feature, Momentum, TradePlan, selection, prior-context, and configuration versions are unchanged.
+A.2.3b adds the tracked-candidate and readiness layer. `tracked-opportunity-selection-v1` pins one immutable `PlanDefined` TradePlan per symbol/session when the opportunity direction agrees, publication is Active, required current data is valid, and risk/reward to Target 1 are positive; newer plans never move a tracked candidate's geometry. The PR #2 corrections advance readiness to `pre-trade-readiness-v2`, retaining the same states but checking current quote freshness, preserving terminal assessments/history, and reporting `CurrentSessionOnly` honestly because the approved rules do not consume prior-session levels. Available prior context alone no longer claims enhancement. Live startup and health ticks persist lifecycle reconciliation without new analyses; expiry uses the pinned validity boundary, session transitions require strictly later event-time observations, and late-session inputs remain isolated. EntryReady still combines only existing approved outputs; no indicator was added. `Scanner:PreTrade:ApproachDistanceRiskMultiple` remains the provisional, uncalibrated 1.0 development default; A.2.4a adds `MarketSituation` thresholds in `scanner-config-v18`. Feature, Momentum, TradePlan, selection, and prior-context definition versions remain unchanged.
+
+A.2.4a adds `market-situation-v1`, a deterministic descriptive assessment of independently selected support and resistance interactions. Eligible current swings require complete current-session structure/data; prior swings and extrema require complete, usable, gap-free prior context and full coverage. Both interactions can be exposed at once, with deterministic primary selection and provenance. The provisional defaults are a 0.10% test-zone half-width and 0.25% approach/crossed relevance from the zone edge; they are not market calibrated. The API and dashboard expose the assessment, and immutable history persists through `20261105120000_AddMarketSituationHistory`. This layer does not classify reactions or alter opportunity, TradePlan, publication, tracking, or readiness. See [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
 
 Tracked associations/lifecycle and immutable readiness assessments persist to SQL Server via the hand-written idempotent migration `20261101120000_AddTrackedOpportunityReadiness` (`tracked_opportunity`, `pre_trade_readiness_assessment`); only documented lifecycle fields may change, terminal candidates are never replaced in place, and active candidates are restored on restart and reevaluated from current trustworthy market state. Feed/data-health problems suspend readiness in the in-memory `ScannerState` projection without terminating or mutating the tracked plan; recovery reevaluates the same `PlanId`. See [ADR-008](./docs/adr/ADR-008-tracked-opportunity-readiness.md). The dashboard adds a PRE-TRADE READINESS section with plain-language states ("Candidate entry conditions are aligned." for Entry Ready) and the opportunity API responses expose the tracked identity, readiness state/reason, context mode, entry zone, distances, invalidation, Target 1, and reward/risk. The recorded fixture yields no confirmed structure, so it produces no tracked candidates and readiness honestly reports no tracked candidate.
 
 The scanner does not know the user's actual holdings; readiness states describe market conditions, not positions, and Entry Ready is not an instruction to trade. Position-management states such as `MANAGE`, `TAKE PROFIT`, and `EXIT` require a `PositionContext`, which is not implemented. Reward/risk is descriptive; no minimum reward/risk veto has been approved or implemented.
 
 ## Latest validation
+
+**A.2.4a validation: COMPLETE (offline + guarded SQL).** The evaluator tests passed **18/18**; the initial hosted API/dashboard tests passed **2/2**, and the expanded hosted suite passed **3/3**, including simultaneous support/resistance. SQL persistence/migrations passed **10/10**; the hosted fixture SQL test passed **1/1 twice against the same dedicated database without reset**; and the full guarded integration suite passed **17/17** before the final supplemental hosted test was added. Regressions passed readiness/pipeline **85/85**, prior context **11/11**, TradePlan **17/17**, market structure **13/13**, and Momentum **22/22**; the full offline unit suite passed **379/379**. The first full integration invocation hit a transient Windows diagnostics-file sharing failure; the affected test passed in isolation and the subsequent guarded suite passed. A later unguarded full-suite attempt was not counted: the SQL safety guard refused SQL-dependent tests because this process had no configured dedicated test connection. The final solution build and document consistency review are recorded in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#a24a---structural-level-interaction-2026-11-05).
 
 **PR #2 correction offline validation:** Focused readiness/pipeline tests **85/85**, offline hosted fixture/API/dashboard tests **2/2**, the full unit suite **361/361**, and the solution build (**0 warnings/errors**) passed. See the [review-correction record](./VALIDATION_HISTORY.md#pr-2---readiness-review-corrections-2026-11-02).
 
@@ -31,10 +36,10 @@ The scanner does not know the user's actual holdings; readiness states describe 
 
 **A.2.2 SQL validation: COMPLETE.** Final validation passed SQL persistence/migrations **6/6**, same-database hosted fixture tests **1/1 twice** without clearing records, full integrations **13/13**, offline units **279/279**, and the solution build (**0 warnings/errors**). See the [final six-stage validation evidence](./VALIDATION_HISTORY.md#final-a222-six-stage-sql-validation-2026-10-30).
 
-## Immediate next checkpoint
+## Proposed next design checkpoint
 
-**A.2.4a Structural Level Interaction is next and has not started.** Its approved initial scope is descriptive only: approaching, testing, or crossed support/resistance. It will not claim that a level will hold, a bounce/breakdown/rejection/breakout is confirmed, or that a profit area is assured.
+**A.2.4b Structural Level Reaction Classification is proposed and has not started.** Its scope and acceptance criteria require approval before implementation. The design focus is event-time-confirmed reaction evidence and explicit completeness/window rules for holds, bounces/reversals, breakdowns, rejections, breakouts, and failed breakouts/reclaims. It must remain distinct from A.2.4a's descriptive labels and must not imply actual execution, holdings, or guaranteed outcomes.
 
-**Current blockers:** None for A.2.3b; its PR #2 corrections have passed guarded SQL revalidation.
+**Current blockers:** None for completed A.2.4a; the proposed A.2.4b scope awaits approval.
 
 No live-provider validation, outcome tracking, backtesting, ML/ONNX inference, broker integration, or order execution is part of A.2.3. See the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md) for product and architecture contracts.
