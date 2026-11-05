@@ -729,11 +729,11 @@ Trace provider reception -> normalization -> state -> features -> setup detector
 - **A.2.1 Market Structure Foundation:** COMPLETE.
 - **A.2.2 Trade Plan Foundation:** COMPLETE.
 - **A.2.3a Prior-Session Market Context:** COMPLETE.
-- **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** Implementation and original offline + guarded SQL closeout COMPLETE; PR #2 review-correction validation BLOCKED pending guarded SQL revalidation.
+- **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** COMPLETE, including PR #2 correction guarded SQL revalidation.
 
 A.2.3b defines the user-facing pre-trade readiness contract over current setup, pinned TradePlan, publication, and data-quality evidence. Readiness stays separate from setup, immutable TradePlan geometry, and current publication health, and does not require knowing the user's holdings. Position/account management is a separate future concern if approved and is not required for market-opportunity analysis.
 
-**Immediate next checkpoint:** Close PR #2 guarded SQL revalidation; its original SQL closeout does not validate the review corrections. After that prerequisite, the planned A.2.4a **Structural Level Interaction** checkpoint is descriptive only: approaching/testing/crossed support and resistance. It will not assert a level will hold or that a bounce, breakdown, rejection, or breakout is confirmed. A.2.4a has not started.
+**Immediate next checkpoint:** A.2.4a **Structural Level Interaction**, which has not started and is descriptive only: approaching/testing/crossed support and resistance. It will not assert a level will hold or that a bounce, breakdown, rejection, or breakout is confirmed.
 
 ## Phase 0: Minimal foundations
 

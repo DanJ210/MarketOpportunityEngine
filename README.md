@@ -4,7 +4,7 @@ A .NET 10 modular-monolith decision-support scanner for US equities/ETFs. The ap
 
 ## Current milestone
 
-**Milestone A.2.3b - Tracked Opportunity + Pre-Trade Readiness: implementation and original offline + guarded SQL closeout COMPLETE; PR #2 review-correction validation BLOCKED pending guarded SQL revalidation.** A.1 live scanner validation, A.2.1 market structure, A.2.2 immutable candidate TradePlans, and A.2.3a prior-session context are complete. The immediate next checkpoint is guarded SQL revalidation of the PR #2 corrections; A.2.4a Structural Level Interaction is planned afterward and has not started. See [PROJECT_STATUS.md](./PROJECT_STATUS.md) for the concise checkpoint and [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md) for historical evidence.
+**Milestone A.2.3b - Tracked Opportunity + Pre-Trade Readiness: COMPLETE, including PR #2 correction guarded SQL revalidation.** A.1 live scanner validation, A.2.1 market structure, A.2.2 immutable candidate TradePlans, and A.2.3a prior-session context are complete. The next checkpoint is A.2.4a Structural Level Interaction; it is planned and has not started. See [PROJECT_STATUS.md](./PROJECT_STATUS.md) for the concise checkpoint and [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md) for validation evidence.
 
 ## Architecture overview
 
@@ -172,7 +172,6 @@ A tracked candidate pins one immutable `PlanDefined` plan per symbol/session; th
 ## Current limitations
 
 - A.2.3b readiness states describe market conditions only; Entry Ready is not an execution instruction, and no order/position capability exists.
-- The original A.2.3b guarded SQL closeout passed; PR #2 review corrections require guarded SQL revalidation.
 - The recorded fixture produces no confirmed structure, so it yields no tracked candidates; readiness reports no tracked candidate in fixture mode.
 - The `Scanner:PreTrade:ApproachDistanceRiskMultiple` default (1.0) is provisional and not market calibrated; it makes no profitability claim.
 - The scanner has no `PositionContext` and cannot infer whether a user entered a trade. `MANAGE`, `TAKE PROFIT`, and `EXIT` states are not implemented.

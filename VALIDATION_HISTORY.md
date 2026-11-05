@@ -1542,3 +1542,22 @@ Addressed the six selected review findings on `agents/pasted-text-processing`. C
 | Guarded SQL lifecycle/restart regressions, same-database SQL repeat, full SQL integration suite | **NOT RUN / unavailable**: `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was absent; no connection was fabricated, database created/retargeted, provider connected, or User Secrets inspected |
 
 New regressions cover quote-age validity/future/missing/boundary cases, health-only quote aging without snapshot mutation, terminal-state preservation, exact expiry timestamps, idle startup/timer reconciliation, session transitions without eligible plans, late-session isolation, and honest complete-context labeling. Existing SQL tests were extended to reject every terminal lifecycle mutation (including false-to-true readiness flags) and prove idle expiry survives restart; their execution remains outstanding. The earlier SQL closeout above is historical evidence for the original implementation, not validation of these corrections. **PR #2 still requires guarded SQL revalidation before merge/checkpoint closure.**
+
+## PR #2 - Guarded SQL correction revalidation (2026-11-05)
+
+**Revalidated scope:** PR #2's `pre-trade-readiness-v2` quote-freshness-at-evaluation and `CurrentSessionOnly` semantics; immutable terminal readiness projections/history; controlled lifecycle transitions; idle/startup and restart reconciliation; pinned `ValidUntilUtc` expiry; session/event-time handling; SQL replay/collision rules, including audit-only `EvaluatedAtUtc`; and restart restoration of the exact pinned `PlanId` without restoring historical readiness. No provider, scoring, TradePlan, schema, feature version, or scanner configuration behavior was changed.
+
+**Database guard:** The existing Compose `sqlserver` service was healthy. The only test catalog was `MarketOpportunityEngine_IntegrationTests`; `SqlConnectionStringBuilder` verified `Data Source=localhost,1433` and the exact `Initial Catalog`, and `DB_NAME()` confirmed the connected catalog. The connection was process-scoped and cleared afterward. No development/live-validation/production database, provider, or User Secrets were used; no test database was reset or dropped.
+
+| Sequential verification | Result |
+|---|---|
+| Targeted tracked/readiness/restart SQL regressions | **3/3 passed** |
+| `SqlServerPersistenceTests` | **7/7 passed** |
+| `ExplicitSessionMigrationTests` | **2/2 passed** |
+| Migration `20261101120000_AddTrackedOpportunityReadiness` | Clean-schema and existing-schema migration paths passed; both verified the `tracked_opportunity` and `pre_trade_readiness_assessment` columns and all six required indexes. |
+| `FixtureWebApplicationTests` | **1/1 passed twice against the same database without reset**; persisted fixture identity assertions and the single `scanner-config-v17` snapshot with approach distance `1.0` passed on both runs. No whole-database row delta was measured. |
+| Full `MarketOpportunity.IntegrationTests` | **16/16 passed** |
+| Full `MarketOpportunity.UnitTests` | **361/361 passed** |
+| Full solution build | **0 warnings, 0 errors** |
+
+The existing-schema migration test previously verified that the migration was applied but did not inspect its resulting tracked/readiness schema. One test-only assertion now applies the existing table/index checks to that path as well; the focused migration test and complete sequence passed afterward. No production code or migration changed, and no automatic EF migration generation was run. PR #2 guarded SQL correction revalidation is **COMPLETE**; A.2.4a Structural Level Interaction remains the next planned checkpoint and has not started.

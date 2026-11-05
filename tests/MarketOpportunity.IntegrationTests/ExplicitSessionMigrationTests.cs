@@ -117,6 +117,7 @@ public sealed class ExplicitSessionMigrationTests
 
             await AssertSessionColumnsAndIndexesAsync(database.ConnectionString);
             await AssertTradePlanSchemaAsync(database.ConnectionString);
+            await AssertTrackedReadinessSchemaAsync(database.ConnectionString);
         }
         finally
         {

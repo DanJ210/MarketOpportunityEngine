@@ -1,7 +1,7 @@
 # Current Project Status
 
-**Current checkpoint:** Milestone A.2.3b - PR #2 review-correction guarded SQL revalidation
-**Updated:** 2026-11-02
+**Current checkpoint:** Milestone A.2.4a - Structural Level Interaction (next; not started)
+**Updated:** 2026-11-05
 
 ## Milestones
 
@@ -9,7 +9,7 @@
 - **A.2.1 Market Structure Foundation:** COMPLETE
 - **A.2.2 Trade Plan Foundation:** COMPLETE
 - **A.2.3a Prior-Session Market Context:** COMPLETE
-- **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** Implementation and original offline + guarded SQL closeout COMPLETE; PR #2 review-correction validation BLOCKED pending guarded SQL revalidation
+- **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** COMPLETE, including PR #2 correction guarded SQL revalidation
 
 ## Current state
 
@@ -23,7 +23,9 @@ The scanner does not know the user's actual holdings; readiness states describe 
 
 ## Latest validation
 
-**PR #2 review corrections:** Focused readiness/pipeline tests **85/85**, the full offline unit suite **361/361**, hosted fixture/API/dashboard tests **2/2**, and the solution build (**0 warnings/errors**) passed. Guarded SQL revalidation is separate from the original closeout below: no `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` is configured in this session, so the extended SQL lifecycle/restart regressions, same-database SQL repeat, and full SQL integration suite were **NOT RUN / unavailable**. See the [review-correction record](./VALIDATION_HISTORY.md#pr-2---readiness-review-corrections-2026-11-02).
+**PR #2 correction offline validation:** Focused readiness/pipeline tests **85/85**, offline hosted fixture/API/dashboard tests **2/2**, the full unit suite **361/361**, and the solution build (**0 warnings/errors**) passed. See the [review-correction record](./VALIDATION_HISTORY.md#pr-2---readiness-review-corrections-2026-11-02).
+
+**PR #2 guarded SQL correction revalidation: COMPLETE (2026-11-05).** The existing healthy Compose SQL Server was used only through the dedicated `MarketOpportunityEngine_IntegrationTests` catalog; the process-scoped connection was validated with `SqlConnectionStringBuilder` and cleared after the run. Targeted tracked/readiness/restart SQL regressions passed **3/3**, `SqlServerPersistenceTests` **7/7**, and `ExplicitSessionMigrationTests` **2/2**, including clean-schema and existing-schema table/index assertions for migration `20261101120000_AddTrackedOpportunityReadiness`. The hosted fixture/API test passed **1/1 twice against the same database without reset**; both runs verified deterministic fixture persistence and the single `scanner-config-v17` snapshot with `preTrade.approachDistanceRiskMultiple = 1.0`. Full integrations passed **16/16**, units **361/361**, and the solution build had **0 warnings/errors**. The repeated hosted test did not measure a whole-database row delta. One test-only assertion was added to verify tracked/readiness schema and indexes on the existing-schema migration path; **no production code or migration changed**. See the [guarded SQL revalidation record](./VALIDATION_HISTORY.md#pr-2---guarded-sql-correction-revalidation-2026-11-05).
 
 **A.2.3b validation: COMPLETE (offline + guarded SQL).** The guarded SQL closeout ran against the dedicated `MarketOpportunityEngine_IntegrationTests` database on the existing healthy Compose SQL Server with an in-memory process-scoped connection (no credentials printed, cleared after each run). SQL persistence/migrations passed **9/9** (including the tracked/readiness round-trip, lifecycle/collision enforcement, representative readiness states and context modes with exact decimals, and clean + legacy migration paths with `tracked_opportunity` / `pre_trade_readiness_assessment` schema and index assertions), focused tracked/readiness/restart tests **3/3** (restart restored the active candidate, resolved the exact pinned immutable `PlanId` despite a newer persisted plan, and reevaluated readiness from current market state instead of restoring the historical state), and the SQL-backed hosted fixture suite **1/1 twice against the same database without reset** (asserting `scanner-config-v17` and the persisted `preTrade.approachDistanceRiskMultiple = 1.0` snapshot). Full integrations passed **16/16**, the full offline unit suite **345/345**, and the solution build succeeded with **0 warnings/errors**. Earlier offline evidence (focused readiness **55/55** and regressions) is unchanged. Two test-only corrections were made (a stale `scanner-config-v16` literal in the hosted fixture test and new SQL coverage); **no production code changed**. See the [A.2.3b SQL closeout record](./VALIDATION_HISTORY.md#milestone-a23b---sql-validation-closeout-2026-11-01).
 
@@ -31,8 +33,8 @@ The scanner does not know the user's actual holdings; readiness states describe 
 
 ## Immediate next checkpoint
 
-**Close PR #2 review-correction validation before A.2.4a Structural Level Interaction.** The original SQL closeout does not validate these later fixes. A.2.4a has not started. Its approved initial scope is descriptive only: approaching, testing, or crossed support/resistance. It will not claim that a level will hold, a bounce/breakdown/rejection/breakout is confirmed, or that a profit area is assured.
+**A.2.4a Structural Level Interaction is next and has not started.** Its approved initial scope is descriptive only: approaching, testing, or crossed support/resistance. It will not claim that a level will hold, a bounce/breakdown/rejection/breakout is confirmed, or that a profit area is assured.
 
-**Current blockers:** Guarded SQL revalidation for the PR #2 corrections is unavailable without an already configured dedicated test connection.
+**Current blockers:** None for A.2.3b; its PR #2 corrections have passed guarded SQL revalidation.
 
 No live-provider validation, outcome tracking, backtesting, ML/ONNX inference, broker integration, or order execution is part of A.2.3. See the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md) for product and architecture contracts.
