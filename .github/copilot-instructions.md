@@ -79,3 +79,26 @@ Before any implementation task returns a checkpoint **COMPLETE**, verify this cl
 - current documents have been searched for contradictory current-status claims.
 
 If these cannot be reconciled, return **PARTIAL** or **BLOCKED**, not COMPLETE. Historical validation entries need not match current state and must remain unrewritten. Keep ADRs concise; link to the master spec, README, and ADRs rather than duplicating their detailed contents.
+
+## Internal slice/batch closeout
+
+When an approved checkpoint is explicitly divided into implementation batches or slices, distinguish completion of the current batch from completion of the overall checkpoint.
+
+A batch may be marked COMPLETE when:
+
+- every requirement explicitly assigned to that batch is implemented;
+- the validation explicitly required for that batch has passed;
+- work reserved for later approved batches has not been implemented;
+- PROJECT_STATUS.md records:
+  - the overall checkpoint as IN PROGRESS,
+  - the completed batch as COMPLETE,
+  - the next approved batch/slice as the immediate next task;
+- README/master-spec wording does not contradict the batch boundary.
+
+Do not keep a successfully validated batch in IMPLEMENTED or "validation pending" state merely because later batches contain SQL, integration, API, UI, or final checkpoint validation that was explicitly excluded from the completed batch.
+
+Likewise, completion of an internal batch does not authorize marking the overall checkpoint COMPLETE.
+
+When the current batch's required validation passes, reconcile PROJECT_STATUS.md in the same task before returning the batch closeout. Do not require a separate documentation-only reconciliation prompt for evidence already produced by that task.
+
+Only stop for a prerequisite contradiction when repository evidence shows a genuine unresolved requirement, failed/missing validation, or scope conflict, not merely because a status label failed to advance after validation that the same task successfully completed.
