@@ -4,7 +4,7 @@ A .NET 10 modular-monolith decision-support scanner for US equities/ETFs. The ap
 
 ## Current milestone
 
-**Milestone A.2.4a - Structural Level Interaction: COMPLETE. A.2.4b - Structural Level Reaction Classification: IN PROGRESS (Batch 1 implemented).** Batch 1 adds the domain contracts and offline event-time evaluator; production scanning integration, restart continuity, SQL episode persistence, and reaction-specific API/dashboard exposure are not implemented. See [PROJECT_STATUS.md](./PROJECT_STATUS.md) and the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md#a24b-structural-level-reaction-classification).
+**Milestone A.2.4a - Structural Level Interaction: COMPLETE. A.2.4b - Structural Level Reaction Classification: IN PROGRESS (Batch 1 COMPLETE; Batch 2 NEXT / AUTHORIZED).** Batch 1 adds the domain contracts and offline event-time evaluator. Batch 2 is the next authorized slice for restart/continuity safety and SQL persistence/migration; reaction behavior remains offline and is not production-integrated or exposed through a reaction API/dashboard until later batches. See [PROJECT_STATUS.md](./PROJECT_STATUS.md) and the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md#a24b-structural-level-reaction-classification).
 
 ## Architecture overview
 

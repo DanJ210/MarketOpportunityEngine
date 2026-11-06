@@ -1,7 +1,7 @@
 # Current Project Status
 
-**Current checkpoint:** Milestone A.2.4b Batch 1 - Domain + Reaction Algorithm: IMPLEMENTED (A.2.4b remains in progress)
-**Updated:** 2026-11-05
+**Current checkpoint:** Milestone A.2.4b - Structural Level Reaction Classification: IN PROGRESS
+**Updated:** 2026-11-06
 
 ## Milestones
 
@@ -11,7 +11,14 @@
 - **A.2.3a Prior-Session Market Context:** COMPLETE
 - **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** COMPLETE, including PR #2 correction guarded SQL revalidation
 - **A.2.4a Structural Level Interaction:** COMPLETE
-- **A.2.4b Batch 1 - Domain + Reaction Algorithm:** IMPLEMENTED; Batch 2-4 and full checkpoint closeout remain
+- **A.2.4b Structural Level Reaction Classification:** IN PROGRESS
+
+**A.2.4b internal batch status:**
+
+- **Batch 1 - Domain + Reaction Algorithm:** COMPLETE
+- **Batch 2 - Restart/Continuity Safety + SQL Persistence/Migration:** NEXT / AUTHORIZED
+- **Batch 3 - Pipeline Integration + Research Context + API + Blazor:** NOT STARTED
+- **Batch 4 - ADR/Documentation + Complete Regression/SQL/Checkpoint Closeout:** NOT STARTED
 
 ## Current state
 
@@ -31,7 +38,7 @@ The scanner does not know the user's actual holdings; readiness states describe 
 
 **A.2.4a validation: COMPLETE (offline + guarded SQL).** The evaluator tests passed **18/18**; the initial hosted API/dashboard tests passed **2/2**, and the expanded hosted suite passed **3/3**, including simultaneous support/resistance. SQL persistence/migrations passed **10/10**; the hosted fixture SQL test passed **1/1 twice against the same dedicated database without reset**; and the full guarded integration suite passed **17/17** before the final supplemental hosted test was added. Regressions passed readiness/pipeline **85/85**, prior context **11/11**, TradePlan **17/17**, market structure **13/13**, and Momentum **22/22**; the full offline unit suite passed **379/379**. The first full integration invocation hit a transient Windows diagnostics-file sharing failure; the affected test passed in isolation and the subsequent guarded suite passed. A later unguarded full-suite attempt was not counted: the SQL safety guard refused SQL-dependent tests because this process had no configured dedicated test connection. The final solution build and document consistency review are recorded in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#a24a---structural-level-interaction-2026-11-05).
 
-**A.2.4b Batch 1 validation:** reaction evaluator tests passed **15/15**, the full offline unit suite passed **394/394**, hosted offline configuration/API tests passed **3/3**, and the solution build succeeded with **0 warnings/errors**. Reaction episode SQL/restart tests are not applicable because Batch 1 adds no reaction persistence or pipeline integration.
+**A.2.4b Batch 1 validation:** reaction evaluator tests passed **15/15**, the full offline unit suite passed **394/394**, hosted offline configuration/API tests passed **3/3**, and the solution build succeeded with **0 warnings/errors**. Reaction SQL persistence and restart restoration tests are not applicable to Batch 1; those behaviors belong to Batch 2.
 
 **PR #2 correction offline validation:** Focused readiness/pipeline tests **85/85**, offline hosted fixture/API/dashboard tests **2/2**, the full unit suite **361/361**, and the solution build (**0 warnings/errors**) passed. See the [review-correction record](./VALIDATION_HISTORY.md#pr-2---readiness-review-corrections-2026-11-02).
 
@@ -41,16 +48,16 @@ The scanner does not know the user's actual holdings; readiness states describe 
 
 **A.2.2 SQL validation: COMPLETE.** Final validation passed SQL persistence/migrations **6/6**, same-database hosted fixture tests **1/1 twice** without clearing records, full integrations **13/13**, offline units **279/279**, and the solution build (**0 warnings/errors**). See the [final six-stage validation evidence](./VALIDATION_HISTORY.md#final-a22-six-stage-sql-validation-2026-10-30).
 
-## Approved next implementation checkpoint
+## Approved implementation checkpoint and immediate next task
 
-**A.2.4a Structural Level Interaction: COMPLETE. A.2.4b Structural Level Reaction Classification: APPROVED; Batch 1 implemented, Batch 2-4 pending.** The approved v1 scope classifies reactions after an A.2.4a interaction as `SupportHeld`, `SupportBreakdown`, `SupportReclaimed`, `ResistanceRejected`, `ResistanceBreakout`, or `ResistanceFailedBreakout`, with unresolved interaction episodes, event-time expiration, conservative restart continuity, and immutable confirmed history. Confirmation uses a later eligible canonical observation, canonical event-time ordering, and displacement beyond the pinned test-zone edge; a tiny zone crossing alone is not confirmation. The first confirmed terminal reaction wins, later price action does not rewrite it, and later interactions may start new episodes. Restart handling must not fabricate observations from scanner-offline time.
+**A.2.4a Structural Level Interaction: COMPLETE. A.2.4b Structural Level Reaction Classification: IN PROGRESS; Batch 1 COMPLETE; Batch 2 NEXT / AUTHORIZED; Batches 3-4 NOT STARTED.** The approved v1 scope classifies reactions after an A.2.4a interaction as `SupportHeld`, `SupportBreakdown`, `SupportReclaimed`, `ResistanceRejected`, `ResistanceBreakout`, or `ResistanceFailedBreakout`, with unresolved interaction episodes, event-time expiration, conservative restart continuity, and immutable confirmed history. Confirmation uses a later eligible canonical observation, canonical event-time ordering, and displacement beyond the pinned test-zone edge; a tiny zone crossing alone is not confirmation. The first confirmed terminal reaction wins, later price action does not rewrite it, and later interactions may start new episodes. Restart handling must not fabricate observations from scanner-offline time.
 
 MarketReaction remains descriptive and separate from MarketSituation, setup detection, TradePlan geometry, tracked-candidate identity, and PreTradeReadiness. It is not an entry-readiness gate, execution instruction, setup detector, probability, or profitability claim. The only approved reaction policy values are `Scanner:MarketReaction:ConfirmationDistancePercent` and `Scanner:MarketReaction:MaxEpisodeDurationSeconds`; the implementation defaults are 0.10% and 300 seconds, both **PROVISIONAL / NOT MARKET CALIBRATED**. Volume, Momentum, VWAP, EMA, ADX, trend, opportunity, TradePlan, readiness, and reward/risk do not define v1 confirmation.
 
-The approved implementation is divided into four batches: **Batch 1** domain/configuration/episode lifecycle/reaction algorithm; **Batch 2** restart/continuity safety and SQL persistence/migration; **Batch 3** pipeline integration, research context, API, and Blazor; **Batch 4** ADR/documentation and complete regression/SQL/checkpoint closeout. Batch 1 is limited to reaction/episode domain contracts, `market-reaction-v1`, the two policy values, scanner configuration version advancement, episode lifecycle/evaluator, six mechanical algorithms, and offline deterministic tests/regressions. It must not include SQL persistence/migrations, restart restoration, production `ScannerPipeline` or `ScannerState` integration, API, Blazor, outcome research, or ML.
+The approved implementation is divided into four batches: **Batch 1 - Domain + Reaction Algorithm: COMPLETE**; **Batch 2 - Restart/Continuity Safety + SQL Persistence/Migration: NEXT / AUTHORIZED**; **Batch 3 - Pipeline Integration + Research Context + API + Blazor: NOT STARTED**; **Batch 4 - ADR/Documentation + Complete Regression/SQL/Checkpoint Closeout: NOT STARTED**. Batch 1 is limited to reaction/episode domain contracts, `market-reaction-v1`, the two policy values, scanner configuration version advancement, episode lifecycle/evaluator, six mechanical algorithms, and offline deterministic tests/regressions. It must not include SQL persistence/migrations, restart restoration, production `ScannerPipeline` or `ScannerState` integration, API, Blazor, outcome research, or ML.
 
-**Current immediate next task:** Complete Batch 1 regression/hosted configuration/build validation; do not begin Batch 2 until separately authorized.
+**Current immediate next task:** A.2.4b Batch 2 - Restart/Continuity Safety + SQL Persistence/Migration. Batch 2 is authorized within its approved scope; this status does not authorize Batch 3, Batch 4, or out-of-scope work.
 
-**Current blockers:** None for the completed Batch 1 scope. Batch 2-4 remain unimplemented and are not part of this batch; excluded work such as role reversal, confluence, ATR or relative-volume confirmation, new setup detectors, Target 2, reward/risk vetoes, position/account management, broker execution, outcome labeling, backtesting, ML/ONNX, LLM trading decisions, provider changes, or historical-provider integration remains unauthorized.
+**Current blockers:** None preventing Batch 2 from beginning. Batch 3 and Batch 4 have not started; excluded work such as role reversal, confluence, ATR or relative-volume confirmation, new setup detectors, Target 2, reward/risk vetoes, position/account management, broker execution, outcome labeling, backtesting, ML/ONNX, LLM trading decisions, provider changes, or historical-provider integration remains unauthorized.
 
 No live-provider validation, outcome tracking, backtesting, ML/ONNX inference, broker integration, or order execution is part of A.2.3. See the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md) for product and architecture contracts.
