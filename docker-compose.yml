@@ -27,7 +27,8 @@ services:
     command:
       - |
         export SQLCMDPASSWORD="$${MSSQL_SA_PASSWORD}"
-        /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -C -b -d master -Q "IF DB_ID(N'MarketOpportunityEngine_LiveValidationTests') IS NULL CREATE DATABASE [MarketOpportunityEngine_LiveValidationTests];"
+        /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -C -b -d master -Q "IF DB_ID(N'MarketOpportunityEngine_IntegrationTests') IS NULL CREATE DATABASE [MarketOpportunityEngine_IntegrationTests]; IF DB_ID(N'MarketOpportunityEngine_LiveValidationTests') IS NULL CREATE DATABASE [MarketOpportunityEngine_LiveValidationTests];"
+        /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -C -b -d MarketOpportunityEngine_IntegrationTests -Q "SET NOCOUNT ON; SELECT DB_NAME() AS IntegrationTestDatabase;"
         /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -C -b -d MarketOpportunityEngine_LiveValidationTests -Q "SET NOCOUNT ON; SELECT DB_NAME() AS ValidationDatabase;"
 
 volumes:
