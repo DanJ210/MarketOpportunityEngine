@@ -44,6 +44,13 @@ public interface IScannerStore
         CancellationToken cancellationToken);
 }
 
+public interface IMarketSituationStore
+{
+    Task PersistAsync(
+        MarketSituationAssessment assessment,
+        CancellationToken cancellationToken);
+}
+
 public sealed record ScannerStatus(
     MarketDataHealthStatus FeedStatus,
     string Source,
@@ -61,13 +68,15 @@ public sealed record ScannerAnalysisResult(
     PublicationDecision Publication,
     TradePlan TradePlan,
     PriorSessionContextView? PriorSessionContext = null,
-    PreTradeReadinessProjection? Readiness = null);
+    PreTradeReadinessProjection? Readiness = null,
+    MarketSituationAssessment? MarketSituation = null);
 
 public sealed record OpportunityPublicationReadModel(
     Opportunity Opportunity,
     PublicationDecision Publication,
     TradePlan TradePlan,
-    PreTradeReadinessReadModel? Readiness = null);
+    PreTradeReadinessReadModel? Readiness = null,
+    MarketSituationAssessment? MarketSituation = null);
 
 public sealed record ScannerReadModel(
     ScannerStatus Status,
@@ -256,10 +265,12 @@ public sealed class ScannerPipeline(
     IPriorSessionContextProvider? priorSessionContextProvider = null,
     IOpportunityPublicationGate? publicationGate = null,
     PreTradeReadinessTracker? readinessTracker = null,
-    IPreTradeReadinessStore? readinessStore = null)
+    IPreTradeReadinessStore? readinessStore = null,
+    IMarketSituationStore? marketSituationStore = null)
 {
     private static readonly TimeSpan LiveAnalysisInterval = TimeSpan.FromSeconds(5);
     private readonly TradePlanBuilder _tradePlanBuilder = new();
+    private readonly MarketSituationEvaluator _marketSituationEvaluator = new();
     private readonly PreTradeReadinessEvaluator _readinessEvaluator = new();
     private readonly IOpportunityPublicationGate _publicationGate =
         publicationGate ?? new OpportunityPublicationGate();
@@ -331,6 +342,12 @@ public sealed class ScannerPipeline(
                     snapshot.AsOfUtc,
                     snapshot.ReferencePrice,
                     cancellationToken);
+            var marketSituation = _marketSituationEvaluator.Evaluate(
+                snapshot,
+                stateEvents,
+                priorContext,
+                configuration,
+                asOfUtc);
             // Recorded analysis evaluates publication and readiness at the analysis event time so
             // that selection and the persisted assessment replay deterministically.
             var publication = _publicationGate.Evaluate(
@@ -359,6 +376,10 @@ public sealed class ScannerPipeline(
                     readinessEvaluation.PersistAssessment,
                     cancellationToken);
             }
+            if (marketSituationStore is not null)
+            {
+                await marketSituationStore.PersistAsync(marketSituation, cancellationToken);
+            }
 
             results.Add(key, new ScannerAnalysisResult(
                 snapshot,
@@ -366,7 +387,8 @@ public sealed class ScannerPipeline(
                 publication,
                 tradePlan,
                 priorContext,
-                readinessEvaluation?.Projection));
+                readinessEvaluation?.Projection,
+                marketSituation));
         }
 
         state.SetResults(
@@ -720,6 +742,7 @@ public sealed class ScannerPipeline(
                 PriorSessionContextView? priorContext;
                 PublicationDecision publication;
                 PreTradeReadinessEvaluation? readinessEvaluation;
+                MarketSituationAssessment marketSituation;
                 try
                 {
                     snapshot = featureCalculator.Calculate(
@@ -737,6 +760,12 @@ public sealed class ScannerPipeline(
                             snapshot.AsOfUtc,
                             snapshot.ReferencePrice,
                             cancellationToken);
+                    marketSituation = _marketSituationEvaluator.Evaluate(
+                        snapshot,
+                        symbolState.GetEventsAsOf(snapshot.AsOfUtc),
+                        priorContext,
+                        configuration,
+                        now);
                     var currentStatus = CreateLiveStatus(null, now, latestReceivedTime, null);
                     publication = _publicationGate.Evaluate(
                         opportunity,
@@ -776,6 +805,12 @@ public sealed class ScannerPipeline(
                             readinessEvaluation.PersistAssessment,
                             persistenceCancellation.Token);
                     }
+                    if (marketSituationStore is not null)
+                    {
+                        await marketSituationStore.PersistAsync(
+                            marketSituation,
+                            persistenceCancellation.Token);
+                    }
                 }
                 catch (OperationCanceledException) when (persistenceCancellation.IsCancellationRequested)
                 {
@@ -803,7 +838,8 @@ public sealed class ScannerPipeline(
                     publication,
                     tradePlan,
                     priorContext,
-                    readinessEvaluation?.Projection);
+                    readinessEvaluation?.Projection,
+                    marketSituation);
             }
 
             lock (statusSync)

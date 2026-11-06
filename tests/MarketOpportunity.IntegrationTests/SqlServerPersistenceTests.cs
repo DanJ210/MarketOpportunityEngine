@@ -11,6 +11,89 @@ namespace MarketOpportunity.IntegrationTests;
 public sealed class SqlServerPersistenceTests
 {
     [Fact]
+    public async Task Market_situation_history_is_immutable_idempotent_and_round_trips()
+    {
+        var connectionString = GetTestConnectionString();
+        var token = Guid.NewGuid().ToString("N")[..16];
+        var symbol = $"IT{token}";
+        var sessionId = $"it-situation-session-{token}";
+        var assessedAt = new DateTimeOffset(2026, 11, 4, 15, 0, 0, TimeSpan.Zero);
+        var assessment = new MarketSituationAssessment(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            null,
+            symbol,
+            sessionId,
+            assessedAt,
+            assessedAt.AddSeconds(1),
+            100m,
+            MarketSituationStatus.NoEligibleLevels,
+            "No eligible structural levels.",
+            MarketSituationContextMode.CurrentSessionOnly,
+            null,
+            null,
+            null,
+            null,
+            null,
+            [],
+            0.10m,
+            0.25m,
+            "market-situation-v1",
+            "features-v16",
+            "scanner-config-v19",
+            MarketDataCapabilities.Unknown,
+            DataQualityStatus.Good,
+            MarketStructureStatus.Insufficient,
+            true);
+        var schemaReady = false;
+        try
+        {
+            await using (var setupContext = CreateContext(connectionString))
+            {
+                if (!await setupContext.Database.EnsureCreatedAsync())
+                {
+                    await setupContext.Database.MigrateAsync();
+                }
+            }
+
+            schemaReady = true;
+            await PersistMarketSituation(connectionString, assessment);
+            await PersistMarketSituation(
+                connectionString,
+                assessment with { EvaluatedAtUtc = assessment.EvaluatedAtUtc.AddMinutes(1) });
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                PersistMarketSituation(
+                    connectionString,
+                    assessment with { UnavailableReason = "Conflicting material content." }));
+
+            await using var verifyContext = CreateContext(connectionString);
+            var stored = await verifyContext.MarketSituationAssessments.AsNoTracking()
+                .SingleAsync(item => item.Id == assessment.Id);
+            Assert.Equal(1, await verifyContext.MarketSituationAssessments
+                .CountAsync(item => item.Symbol == symbol && item.SessionId == sessionId));
+            Assert.Equal(MarketSituationStatus.NoEligibleLevels.ToString(), stored.Status);
+            Assert.Equal("market-situation-v1", stored.DefinitionVersion);
+            var restored = JsonSerializer.Deserialize<MarketSituationAssessment>(
+                stored.AssessmentJson,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.NotNull(restored);
+            Assert.Equal(assessment.Id, restored.Id);
+            Assert.Equal(assessment.EligibleLevels, restored.EligibleLevels);
+            Assert.Equal(assessment.CurrentReferencePrice, restored.CurrentReferencePrice);
+        }
+        finally
+        {
+            if (schemaReady)
+            {
+                await using var cleanupContext = CreateContext(connectionString);
+                await cleanupContext.MarketSituationAssessments
+                    .Where(item => item.Symbol == symbol && item.SessionId == sessionId)
+                    .ExecuteDeleteAsync();
+            }
+        }
+    }
+
+    [Fact]
     public async Task Confirmed_swing_snapshots_are_persisted_idempotently_without_rewriting_earlier_results()
     {
         var connectionString = GetTestConnectionString();
@@ -916,6 +999,14 @@ public sealed class SqlServerPersistenceTests
         await using var context = CreateContext(connectionString);
         var store = new EfPreTradeReadinessStore(context);
         await store.PersistAsync(tracked, assessment, CancellationToken.None);
+    }
+
+    private static async Task PersistMarketSituation(
+        string connectionString,
+        MarketSituationAssessment assessment)
+    {
+        await using var context = CreateContext(connectionString);
+        await new EfMarketSituationStore(context).PersistAsync(assessment, CancellationToken.None);
     }
 
     private static async Task<IReadOnlyList<TrackedOpportunitySnapshot>> RestoreReadiness(

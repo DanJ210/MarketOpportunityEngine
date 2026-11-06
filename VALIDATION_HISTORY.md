@@ -1126,6 +1126,7 @@ Focused replay coverage includes rising and falling slopes with exact expected v
 
 - The first focused build found one test-only `FeatureSnapshot` construction missing the new slope fields; the publication-gate test fixture was updated with the explicit insufficient/null state.
 - The next focused run passed 7 of 8 replay tests; the existing configuration identity test selected `scanner-config-v4`, which had become the new default and therefore was not a changed configuration. Its test-only changed value was updated to `scanner-config-v5`; no production default was changed to accommodate the test.
+
 - The first SQL setup attempt loaded the neutral SQL client instead of the Windows runtime assembly and failed before any database test. Loading the packaged Windows runtime `Microsoft.Data.SqlClient.dll` resolved setup. No database was reset/dropped, and no credential was printed or saved.
 
 No outstanding verification blocker remains for this feature slice. The hosted fixture test still uses the isolated Testing/Fixture setup and no Development User Secrets.
@@ -1543,18 +1544,41 @@ Addressed the six selected review findings on `agents/pasted-text-processing`. C
 
 New regressions cover quote-age validity/future/missing/boundary cases, health-only quote aging without snapshot mutation, terminal-state preservation, exact expiry timestamps, idle startup/timer reconciliation, session transitions without eligible plans, late-session isolation, and honest complete-context labeling. Existing SQL tests were extended to reject every terminal lifecycle mutation (including false-to-true readiness flags) and prove idle expiry survives restart; their execution remains outstanding. The earlier SQL closeout above is historical evidence for the original implementation, not validation of these corrections. **PR #2 still requires guarded SQL revalidation before merge/checkpoint closure.**
 
-## PR #2 guarded SQL revalidation (2026-11-03)
+## PR #2 - Guarded SQL correction revalidation (2026-11-05)
 
-**Status: COMPLETE.** The configured integration-test connection was verified with a read-only `SELECT DB_NAME()` as `MarketOpportunityEngine_IntegrationTests` on `localhost,1433` before SQL tests. The existing Compose SQL Server was already healthy; no service was started/recreated, no database was created or reset, and no credentials or connection strings were printed. SQL tests used the dedicated integration catalog; migration tests used their uniquely named temporary databases.
+**Revalidated scope:** PR #2's `pre-trade-readiness-v2` quote-freshness-at-evaluation and `CurrentSessionOnly` semantics; immutable terminal readiness projections/history; controlled lifecycle transitions; idle/startup and restart reconciliation; pinned `ValidUntilUtc` expiry; session/event-time handling; SQL replay/collision rules, including audit-only `EvaluatedAtUtc`; and restart restoration of the exact pinned `PlanId` without restoring historical readiness. No provider, scoring, TradePlan, schema, feature version, or scanner configuration behavior was changed.
+
+**Database guard:** The existing Compose `sqlserver` service was healthy. The only test catalog was `MarketOpportunityEngine_IntegrationTests`; `SqlConnectionStringBuilder` verified `Data Source=localhost,1433` and the exact `Initial Catalog`, and `DB_NAME()` confirmed the connected catalog. The connection was process-scoped and cleared afterward. No development/live-validation/production database, provider, or User Secrets were used; no test database was reset or dropped.
 
 | Sequential verification | Result |
 |---|---|
-| `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter "FullyQualifiedName~SqlServerPersistenceTests\|FullyQualifiedName~ExplicitSessionMigrationTests" --verbosity minimal` | **9/9 passed** |
-| `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter "FullyQualifiedName~Tracked_opportunity_and_readiness_history_round_trip_restart_and_reject_conflicts\|FullyQualifiedName~Readiness_states_and_context_modes_round_trip_through_sql\|FullyQualifiedName~Restart_restores_the_pinned_plan_and_reevaluates_readiness_from_current_state" --no-restore --verbosity minimal` | **3/3 passed** |
-| `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter FullyQualifiedName~FixtureWebApplicationTests --no-restore --verbosity minimal` | **1/1 passed twice**, same database without reset |
-| Full integration suite, first attempt | **19/20 passed**; one `IOException` opening the temporary diagnostics JSON in `Offline_host_exports_final_diagnostics_and_persists_unchanged_canonical_events` |
-| Isolated rerun of `Offline_host_exports_final_diagnostics_and_persists_unchanged_canonical_events` | **1/1 passed**; Restart Manager reported no remaining process owning the file after the initial failure |
-| Full integration suite rerun: `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --no-restore --verbosity minimal` | **20/20 passed** |
-| `dotnet build MarketOpportunityEngine.sln --no-restore` | Succeeded; **0 warnings, 0 errors** |
+| Targeted tracked/readiness/restart SQL regressions | **3/3 passed** |
+| `SqlServerPersistenceTests` | **7/7 passed** |
+| `ExplicitSessionMigrationTests` | **2/2 passed** |
+| Migration `20261101120000_AddTrackedOpportunityReadiness` | Clean-schema and existing-schema migration paths passed; both verified the `tracked_opportunity` and `pre_trade_readiness_assessment` columns and all six required indexes. |
+| `FixtureWebApplicationTests` | **1/1 passed twice against the same database without reset**; persisted fixture identity assertions and the single `scanner-config-v17` snapshot with approach distance `1.0` passed on both runs. No whole-database row delta was measured. |
+| Full `MarketOpportunity.IntegrationTests` | **16/16 passed** |
+| Full `MarketOpportunity.UnitTests` | **361/361 passed** |
+| Full solution build | **0 warnings, 0 errors** |
 
-The initial file-lock failure was not suppressed: after checking that no process remained to stop, the affected test passed in isolation and the complete integration suite passed on rerun. The dedicated SQL checks validate the PR #2 lifecycle, terminal immutability, restart restoration, and current-state reevaluation corrections. No application behavior or SQL schema was changed during this validation. The previously documented offline validation remains as recorded above; this later entry closes only the outstanding guarded SQL gate.
+The existing-schema migration test previously verified that the migration was applied but did not inspect its resulting tracked/readiness schema. One test-only assertion now applies the existing table/index checks to that path as well; the focused migration test and complete sequence passed afterward. No production code or migration changed, and no automatic EF migration generation was run. PR #2 guarded SQL correction revalidation is **COMPLETE**; A.2.4a Structural Level Interaction remains the next planned checkpoint and has not started.
+
+## A.2.4a - Structural Level Interaction (2026-11-05)
+
+**Result: COMPLETE.** `market-situation-v1` adds descriptive, independently selected support and resistance interactions from complete eligible structural levels. It preserves current/prior provenance, may report both sides simultaneously, persists immutable SQL history, and is exposed through the hosted opportunity API and dashboard. It does not classify reactions or change opportunity, TradePlan, publication, tracking, or readiness. Threshold defaults remain provisional and not market calibrated. See [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
+
+| Sequential verification | Result |
+|---|---|
+| `MarketSituationEvaluatorTests` | **18/18 passed** |
+| Hosted API/dashboard tests before the additional simultaneous-interaction case | **2/2 passed** |
+| Expanded `StructureWebApplicationTests`, including simultaneous support and resistance | **3/3 passed** |
+| Readiness/pipeline, prior-context, TradePlan, market-structure, and Momentum regressions | **85/85, 11/11, 17/17, 13/13, and 22/22 passed** |
+| Full offline unit suite | **379/379 passed** |
+| Guarded SQL persistence and migration tests | **10/10 passed** against the dedicated `MarketOpportunityEngine_IntegrationTests` database; clean and existing schema migration assertions passed. |
+| Hosted fixture SQL test | **1/1 passed twice against the same dedicated database without reset** |
+| Full guarded integration suite | **17/17 passed** before the additional simultaneous-interaction hosted test was added. The first full invocation had a transient Windows diagnostics-file sharing failure; the affected test passed in isolation and the subsequent full run passed. |
+| Final `dotnet build MarketOpportunityEngine.sln --no-restore` | **0 warnings, 0 errors** |
+
+After the final hosted test was added, its focused `StructureWebApplicationTests` run passed **3/3**. A subsequent unguarded full integration invocation was not counted as validation: the SQL integration tests' existing safety guard rejected the run because this process had no configured dedicated database connection. No SQL database was retargeted or modified for that invocation. The earlier guarded SQL and full integration evidence remains applicable because the final change was only hosted API/dashboard test coverage. Current documentation and status were reconciled; no historical validation entries were rewritten.
+
+**Proposed next design checkpoint:** A.2.4b Structural Level Reaction Classification is not started and requires approval before implementation. Its design focus is event-time-confirmed reaction evidence with explicit confirmation windows and data-completeness rules.

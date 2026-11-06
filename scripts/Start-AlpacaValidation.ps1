@@ -14,7 +14,7 @@ param(
     [switch] $Instrument,
 
     [ValidateRange(5, 3600)]
-    [int] $DurationSeconds = 600,
+    [int] $DurationSeconds = 3600,
 
     [string] $DiagnosticsDirectory,
 

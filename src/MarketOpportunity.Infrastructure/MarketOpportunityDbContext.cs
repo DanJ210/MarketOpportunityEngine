@@ -15,6 +15,8 @@ public sealed class MarketOpportunityDbContext(DbContextOptions<MarketOpportunit
     public DbSet<TrackedOpportunityEntity> TrackedOpportunities => Set<TrackedOpportunityEntity>();
     public DbSet<PreTradeReadinessAssessmentEntity> PreTradeReadinessAssessments =>
         Set<PreTradeReadinessAssessmentEntity>();
+    public DbSet<MarketSituationAssessmentEntity> MarketSituationAssessments =>
+        Set<MarketSituationAssessmentEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -127,6 +129,28 @@ public sealed class MarketOpportunityDbContext(DbContextOptions<MarketOpportunit
             entity.HasIndex(item => new { item.Symbol, item.SessionId, item.AsOfUtc });
             entity.HasIndex(item => item.TrackedOpportunityId);
             entity.HasIndex(item => item.PlanId);
+        });
+
+        modelBuilder.Entity<MarketSituationAssessmentEntity>(entity =>
+        {
+            entity.ToTable("market_situation_assessment");
+            entity.HasKey(item => item.Id);
+            entity.Property(item => item.Symbol).HasMaxLength(32).IsRequired();
+            entity.Property(item => item.SessionId).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.Status).HasMaxLength(32).IsRequired();
+            entity.Property(item => item.ContextMode).HasMaxLength(32).IsRequired();
+            entity.Property(item => item.PrimarySituationType).HasMaxLength(32);
+            entity.Property(item => item.SupportSituationType).HasMaxLength(32);
+            entity.Property(item => item.ResistanceSituationType).HasMaxLength(32);
+            entity.Property(item => item.SupportLevelSource).HasMaxLength(32);
+            entity.Property(item => item.ResistanceLevelSource).HasMaxLength(32);
+            entity.Property(item => item.DefinitionVersion).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.ConfigurationVersion).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.AssessmentJson).IsRequired();
+            entity.HasIndex(item => new { item.Symbol, item.SessionId, item.AsOfUtc });
+            entity.HasIndex(item => new { item.SupportSituationType, item.SupportLevelSource, item.AsOfUtc });
+            entity.HasIndex(item => new { item.ResistanceSituationType, item.ResistanceLevelSource, item.AsOfUtc });
+            entity.HasIndex(item => new { item.PrimarySituationType, item.AsOfUtc });
         });
     }
 }
@@ -251,5 +275,27 @@ public sealed class PreTradeReadinessAssessmentEntity
     public string Reason { get; set; } = "";
     public string ContextMode { get; set; } = "";
     public string ReadinessDefinitionVersion { get; set; } = "";
+    public string AssessmentJson { get; set; } = "";
+}
+
+/// <summary>Immutable descriptive market-situation history row.</summary>
+public sealed class MarketSituationAssessmentEntity
+{
+    public Guid Id { get; set; }
+    public Guid FeatureSnapshotId { get; set; }
+    public Guid? PriorSessionContextId { get; set; }
+    public string Symbol { get; set; } = "";
+    public string SessionId { get; set; } = "";
+    public DateTimeOffset AsOfUtc { get; set; }
+    public DateTimeOffset EvaluatedAtUtc { get; set; }
+    public string Status { get; set; } = "";
+    public string ContextMode { get; set; } = "";
+    public string? PrimarySituationType { get; set; }
+    public string? SupportSituationType { get; set; }
+    public string? ResistanceSituationType { get; set; }
+    public string? SupportLevelSource { get; set; }
+    public string? ResistanceLevelSource { get; set; }
+    public string DefinitionVersion { get; set; } = "";
+    public string ConfigurationVersion { get; set; } = "";
     public string AssessmentJson { get; set; } = "";
 }

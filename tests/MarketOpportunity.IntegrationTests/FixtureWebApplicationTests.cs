@@ -175,7 +175,7 @@ public sealed class FixtureWebApplicationTests
             Assert.Equal("features-v16", snapshot.FeatureSetVersion);
             Assert.Equal("features-v16", opportunity.FeatureSetVersion);
             Assert.Equal("momentum-continuation-v1", opportunity.SetupDefinitionVersion);
-            Assert.Equal("scanner-config-v17", opportunity.ConfigurationVersion);
+            Assert.Equal("scanner-config-v19", opportunity.ConfigurationVersion);
             var expectedRange = expectedGroups[(opportunity.Symbol, opportunity.SessionId)];
             Assert.Equal(expectedRange.High, snapshotJson.RootElement.GetProperty("sessionHighPrice").GetDecimal());
             Assert.Equal(expectedRange.Low, snapshotJson.RootElement.GetProperty("sessionLowPrice").GetDecimal());
@@ -288,16 +288,19 @@ public sealed class FixtureWebApplicationTests
             AssertPersistedOpportunity(httpOpportunities[persisted.Id], persisted);
         }
 
-        // The versioned configuration snapshot represents the pre-trade approach boundary.
+        // The versioned configuration snapshot records the effective scanner policy.
         var persistedConfiguration = await dbContext.ConfigurationSnapshots.AsNoTracking()
             .SingleAsync(item => item.Version == configuration.Version);
-        Assert.Equal("scanner-config-v17", persistedConfiguration.Version);
+        Assert.Equal("scanner-config-v19", persistedConfiguration.Version);
         using (var persistedConfigurationJson = JsonDocument.Parse(persistedConfiguration.ConfigurationJson))
         {
             Assert.Equal(1.0m, persistedConfigurationJson.RootElement
                 .GetProperty("preTrade")
                 .GetProperty("approachDistanceRiskMultiple")
                 .GetDecimal());
+            var marketReaction = persistedConfigurationJson.RootElement.GetProperty("marketReaction");
+            Assert.Equal(0.1m, marketReaction.GetProperty("confirmationDistancePercent").GetDecimal());
+            Assert.Equal(300, marketReaction.GetProperty("maxEpisodeDurationSeconds").GetInt32());
         }
 
         var planIds = httpTradePlans.Keys.ToArray();

@@ -33,7 +33,9 @@ internal static class IntegrationTestConfiguration
     {
         var builder = new SqlConnectionStringBuilder(connectionString);
         if (!string.Equals(builder.DataSource, RequiredServer, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(builder.InitialCatalog, RequiredDatabase, StringComparison.OrdinalIgnoreCase))
+            || !string.Equals(builder.InitialCatalog, RequiredDatabase, StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrEmpty(builder.FailoverPartner)
+            || !string.IsNullOrEmpty(builder.AttachDBFilename))
         {
             throw new InvalidOperationException(
                 $"SQL Server integration tests require server '{RequiredServer}' and database '{RequiredDatabase}'.");
