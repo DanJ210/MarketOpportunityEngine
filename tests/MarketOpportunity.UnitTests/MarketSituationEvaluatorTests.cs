@@ -345,7 +345,7 @@ public sealed class MarketSituationEvaluatorTests
             snapshot, CreateTrades([100m]), ToView(changedLevelContext, snapshot.ReferencePrice), _configuration, Start);
         var changedConfiguration = _configuration with
         {
-            Version = "scanner-config-v19",
+            Version = "scanner-config-v20",
             MarketSituation = new MarketSituationConfiguration
             {
                 TestZonePercent = 0.11m,

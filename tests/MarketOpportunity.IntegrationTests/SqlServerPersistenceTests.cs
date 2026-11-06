@@ -40,7 +40,7 @@ public sealed class SqlServerPersistenceTests
             0.25m,
             "market-situation-v1",
             "features-v16",
-            "scanner-config-v18",
+            "scanner-config-v19",
             MarketDataCapabilities.Unknown,
             DataQualityStatus.Good,
             MarketStructureStatus.Insufficient,

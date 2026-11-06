@@ -4,7 +4,7 @@ A .NET 10 modular-monolith decision-support scanner for US equities/ETFs. The ap
 
 ## Current milestone
 
-**Milestone A.2.4a - Structural Level Interaction: COMPLETE.** A.1 live scanner validation through A.2.3b tracked opportunity and pre-trade readiness are also complete. A.2.4a adds a descriptive, immutable MarketSituation assessment without reaction prediction. The proposed next checkpoint is A.2.4b reaction classification, whose scope requires approval; it has not started. See [PROJECT_STATUS.md](./PROJECT_STATUS.md) and [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md).
+**Milestone A.2.4a - Structural Level Interaction: COMPLETE. A.2.4b - Structural Level Reaction Classification: IN PROGRESS (Batch 1 implemented).** Batch 1 adds the domain contracts and offline event-time evaluator; production scanning integration, restart continuity, SQL episode persistence, and reaction-specific API/dashboard exposure are not implemented. See [PROJECT_STATUS.md](./PROJECT_STATUS.md) and the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md#a24b-structural-level-reaction-classification).
 
 ## Architecture overview
 
@@ -30,7 +30,9 @@ The solution targets .NET 10, ASP.NET Core 10, Blazor Interactive Server, EF Cor
 
 Current-session levels come only from confirmed swings when current structure, price data, and retained session history are complete. Prior-session swings and high/low are eligible only from complete, usable, gap-free context with full coverage and matching provenance. Incomplete prior context contributes no levels. The assessment never predicts a hold, bounce, reversal, breakdown, rejection, breakout, or failed breakout, and does not change setup, plan geometry, publication, tracking, or readiness.
 
-The versioned configuration keys are `Scanner:MarketSituation:TestZonePercent` and `Scanner:MarketSituation:ApproachDistancePercent`. The shipped `scanner-config-v18` defaults are 0.10% test-zone half-width and 0.25% distance from the zone edge; both are provisional development values, not market-calibrated. A level's test zone is centered on its price, and approach/crossed relevance uses the percentage distance from the active zone edge. Any threshold change requires a new scanner configuration version.
+The versioned configuration keys are `Scanner:MarketSituation:TestZonePercent` and `Scanner:MarketSituation:ApproachDistancePercent`. The shipped `scanner-config-v18` defaults are 0.10% test-zone half-width and 0.25% distance from the zone edge; both are provisional development values, not market-calibrated. A level's test zone is centered on its price, and approach/crossed relevance uses the percentage distance from the active zone edge.
+
+The current `scanner-config-v19` also adds `Scanner:MarketReaction:ConfirmationDistancePercent` (0.10%) and `Scanner:MarketReaction:MaxEpisodeDurationSeconds` (300 seconds). These are provisional development defaults, not market-calibrated. Confirmation requires a later eligible trade to clear the original pinned zone edge by the configured percentage; unresolved episodes expire at the event-time duration boundary. Changing these policy values requires a new scanner configuration version.
 
 ## A.2.3a prior-session context
 
@@ -185,7 +187,7 @@ A tracked candidate pins one immutable `PlanDefined` plan per symbol/session; th
 - The recorded fixture produces no confirmed structure, so it yields no tracked candidates; readiness reports no tracked candidate in fixture mode.
 - The `Scanner:PreTrade:ApproachDistanceRiskMultiple` default (1.0) is provisional and not market calibrated; it makes no profitability claim.
 - The scanner has no `PositionContext` and cannot infer whether a user entered a trade. `MANAGE`, `TAKE PROFIT`, and `EXIT` states are not implemented.
-- Breakout, VWAP reclaim/rejection, failed-breakout, and structural reaction classifiers are not implemented. A.2.4a reports only descriptive approaching/testing/crossed support and resistance, not outcome or reversal confirmation. A.2.4b reaction classification is a proposed design checkpoint requiring approval.
+- Breakout, VWAP reclaim/rejection, and failed-breakout setup classifiers are not implemented. A.2.4a reports only descriptive approaching/testing/crossed support and resistance. The A.2.4b offline reaction evaluator implements the six approved mechanical reactions, but is not yet integrated, persisted, exposed as a reaction API, or shown in the dashboard.
 - No historical event-read path, outcome labeling, backtesting, ML, or ONNX inference.
 - Raw vendor payloads are not persisted; normalized-event retention has occurred for local evaluation. See [ADR-004](./docs/adr/ADR-004-market-event-retention.md) before sustained research/backtesting/model-training use.
 - No exchange-calendar integration or full historical gap recovery; Massive has no reconnect behavior.

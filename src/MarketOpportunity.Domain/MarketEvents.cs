@@ -289,7 +289,7 @@ public sealed record Opportunity(
 
 public sealed record ScannerConfiguration
 {
-    public string Version { get; init; } = "scanner-config-v18";
+    public string Version { get; init; } = "scanner-config-v19";
     public string FeatureSetVersion { get; init; } = "features-v16";
     public string SetupDefinitionVersion { get; init; } = "momentum-continuation-v1";
     public int MaximumStateEvents { get; init; } = 10_000;
@@ -313,6 +313,7 @@ public sealed record ScannerConfiguration
     public int ActivityScoreWeight { get; init; } = 15;
     public PreTradeReadinessConfiguration PreTrade { get; init; } = new();
     public MarketSituationConfiguration MarketSituation { get; init; } = new();
+    public MarketReactionConfiguration MarketReaction { get; init; } = new();
 
     public void Validate()
     {
@@ -332,6 +333,15 @@ public sealed record ScannerConfiguration
         {
             throw new InvalidOperationException(
                 $"Scanner configuration '{Version}' requires MarketSituation:TestZonePercent to be between 0 and 100 and MarketSituation:ApproachDistancePercent to be greater than TestZonePercent.");
+        }
+
+        if (MarketReaction is null
+            || MarketReaction.ConfirmationDistancePercent <= 0
+            || MarketReaction.ConfirmationDistancePercent >= 100
+            || MarketReaction.MaxEpisodeDurationSeconds < 1)
+        {
+            throw new InvalidOperationException(
+                $"Scanner configuration '{Version}' requires MarketReaction:ConfirmationDistancePercent to be between 0 and 100 and MarketReaction:MaxEpisodeDurationSeconds to be positive.");
         }
 
         if (MaximumStateEvents < 1

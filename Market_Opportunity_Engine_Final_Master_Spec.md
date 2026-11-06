@@ -213,13 +213,34 @@ Track:
 
 **A.2.3a Prior-Session Market Context defines the only approved prior-session input to A.2.3b pre-trade readiness.** When readiness uses prior-session levels, it must consume an explicit, versioned context for the immediately preceding eligible session; it must not select a session by subtracting a calendar day. The context must preserve provider/feed provenance, structural-observation identity, and explicit completeness. Prior-session swings reuse the versioned two-left/two-right trade-point algorithm and cannot be confirmed by later-session events. Partial, unavailable, or invalid history must remain distinguishable, must not be presented as complete prior-session levels, and must not be used as confirmed historical support or resistance. If no approved historical source or authoritative calendar is configured, readiness must treat prior context as unavailable rather than infer it. Readiness may fall back to explicitly labeled current-session-only analysis when the current-session setup, TradePlan, publication health, and data-quality requirements remain satisfied, and must expose the context mode it used: `PriorSessionEnhanced` when complete prior-session context participated, or `CurrentSessionOnly` when readiness was derived without usable prior-session context (see [ADR-007](./docs/adr/ADR-007-prior-session-context.md)).
 
-A level crossing alone is insufficient. Breakout quality should consider participation, momentum, relative strength, liquidity, broader context, and whether price holds or rejects the level.
+A level crossing alone is insufficient for breakout-quality analysis. Participation, momentum, relative strength, liquidity, broader context, and whether price holds or rejects the level may be relevant to separate setup-quality work; these inputs do not define A.2.4b `market-reaction-v1` confirmation.
 
 ### A.2.4a MarketSituation
 
 `market-situation-v1` is a separate descriptive assessment of price interaction with eligible structural levels. It may independently report approaching, testing, or crossed support and resistance, including both sides at once. Current-session levels require confirmed swings and complete retained current-session data; prior-session swings and extrema require complete, usable, gap-free prior context and full coverage. The assessment preserves level provenance, classifies a test zone centered on the level, and measures approach/crossed relevance from the zone edge using versioned provisional thresholds. It does not classify reactions or change opportunity, TradePlan, publication, tracking, or readiness. See [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
 
-Any later reaction classifier is a distinct, proposed A.2.4b design checkpoint and requires approval. It must define event-time confirmation windows, evidence and completeness rules before classifying a hold, bounce/reversal, breakdown, rejection, breakout, or failed breakout/reclaim.
+### A.2.4b Structural Level Reaction Classification
+
+**Approved checkpoint; Batch 1 domain/configuration and offline evaluator are implemented.** Production pipeline integration, restart/continuity restoration, reaction persistence, and reaction-specific API/UI exposure remain unimplemented. A.2.4b describes what happens after an A.2.4a structural-level interaction. It is separate from `MarketSituation` (current geometric relationship to a level), setup detection, `TradePlan` geometry, tracked-candidate identity, and `PreTradeReadiness` (`pre-trade-readiness-v2`). A reaction is not an entry-readiness gate, a trade instruction, a new setup detector, or a probability/profitability claim.
+
+The approved v1 reaction vocabulary is:
+
+- **Support:** `SupportHeld`, `SupportBreakdown`, `SupportReclaimed`.
+- **Resistance:** `ResistanceRejected`, `ResistanceBreakout`, `ResistanceFailedBreakout`.
+- An interaction may also remain unresolved until event-time expiration.
+
+An episode starts from an A.2.4a interaction and pins the original `LevelId` and test-zone geometry. `TestingSupport` or `CrossedSupport` may start a support episode; `TestingResistance` or `CrossedResistance` may start a resistance episode. The initiating observation cannot confirm its own reaction. Confirmation requires a later eligible canonical market observation, deterministic canonical ordering and event time, and price displacement beyond the appropriate pinned test-zone edge. A tiny zone crossing alone remains an A.2.4a `Crossed` observation, not a confirmed breakdown or breakout. The first confirmed terminal reaction wins; immutable confirmed history is not rewritten by later price action, although a later interaction may start a new episode. Unresolved episodes expire by event-time duration. Restart/continuity handling must conservatively preserve what is known and never fabricate observations from the scanner-offline interval.
+
+The only approved v1 reaction-policy configuration values are `Scanner:MarketReaction:ConfirmationDistancePercent` and `Scanner:MarketReaction:MaxEpisodeDurationSeconds`. The initial defaults are `0.10` percent and `300` seconds; both are **PROVISIONAL / NOT MARKET CALIBRATED**. Confirmation is not based on volume, Momentum, VWAP, EMA, ADX, trend direction, Opportunity classification, TradePlan, PreTradeReadiness, or reward/risk; such values may later be retained as research context only.
+
+Approved implementation batches:
+
+1. **Batch 1 - Domain + Reaction Algorithm (implemented):** reaction/episode domain contracts; `market-reaction-v1`; the two policy values and scanner configuration version advancement; episode lifecycle/evaluator; six mechanical reaction algorithms; offline deterministic tests/regressions. No SQL persistence/migrations, restart restoration, production `ScannerPipeline` or `ScannerState` integration, reaction API, Blazor, outcome research, or ML.
+2. **Batch 2 - Restart/Continuity Safety + SQL Persistence/Migration.**
+3. **Batch 3 - Pipeline Integration + Research Context + API + Blazor.**
+4. **Batch 4 - ADR/Documentation + Complete Regression/SQL/Checkpoint Closeout.**
+
+Batch 1 is implemented; Batch 2 is the next separately authorized implementation slice. A.2.4b does not authorize role reversal, confluence scoring, ATR or relative-volume confirmation, new momentum thresholds or setup detectors, a reaction requirement for `EntryReady`, Target 2, hard reward/risk vetoes, position/account management, broker execution, outcome labeling, backtesting, ML/ONNX, LLM trading decisions, provider changes, or historical-provider integration.
 
 ## 4.8 Volatility and risk
 
@@ -737,12 +758,13 @@ Trace provider reception -> normalization -> state -> features -> setup detector
 - **A.2.3a Prior-Session Market Context:** COMPLETE.
 - **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** COMPLETE, including PR #2 correction guarded SQL revalidation.
 - **A.2.4a Structural Level Interaction:** COMPLETE.
+- **A.2.4b Structural Level Reaction Classification:** APPROVED; Batch 1 domain/configuration and offline evaluator implemented; Batch 2-4 pending.
 
 A.2.3b defines the user-facing pre-trade readiness contract over current setup, pinned TradePlan, publication, and data-quality evidence. Readiness stays separate from setup, immutable TradePlan geometry, and current publication health, and does not require knowing the user's holdings. Position/account management is a separate future concern if approved and is not required for market-opportunity analysis.
 
 A.2.4a adds the versioned `market-situation-v1` descriptive assessment and immutable SQL history. Its default test-zone half-width is 0.10% of level price and its default approach/crossed relevance is 0.25% of zone-edge price; both are provisional and not market calibrated. See [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
 
-**Proposed next design checkpoint:** A.2.4b **Structural Level Reaction Classification**. Its scope and acceptance criteria require approval before implementation; it has not started. The design focus is event-time-confirmed reaction evidence and explicit completeness/window rules for holds, bounces/reversals, breakdowns, rejections, breakouts, and failed breakouts/reclaims. It must remain distinct from A.2.4a's descriptive labels and must not imply actual execution, holdings, or guaranteed outcomes.
+**Approved next implementation slice:** A.2.4b Batch 2 - Restart/Continuity Safety + SQL Persistence/Migration, after separate authorization. Batch 1 implements the domain/configuration and deterministic offline evaluator only; the approved v1 vocabulary, confirmation principles, configuration boundary, architectural boundary, exclusions, and four-batch implementation limits are recorded in [A.2.4b Structural Level Reaction Classification](#a24b-structural-level-reaction-classification).
 
 ## Phase 0: Minimal foundations
 
