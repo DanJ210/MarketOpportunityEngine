@@ -1582,3 +1582,33 @@ The existing-schema migration test previously verified that the migration was ap
 After the final hosted test was added, its focused `StructureWebApplicationTests` run passed **3/3**. A subsequent unguarded full integration invocation was not counted as validation: the SQL integration tests' existing safety guard rejected the run because this process had no configured dedicated database connection. No SQL database was retargeted or modified for that invocation. The earlier guarded SQL and full integration evidence remains applicable because the final change was only hosted API/dashboard test coverage. Current documentation and status were reconciled; no historical validation entries were rewritten.
 
 **Proposed next design checkpoint:** A.2.4b Structural Level Reaction Classification is not started and requires approval before implementation. Its design focus is event-time-confirmed reaction evidence with explicit confirmation windows and data-completeness rules.
+
+## A2.4b Batch 2 Validation 2026-11-06
+
+**A.2.4b Batch 2 - Restart/Continuity Safety + SQL Persistence/Migration: COMPLETE.** Batch 1 remains complete; A.2.4b remains in progress; Batch 3 - Pipeline Integration + Research Context + API + Blazor is the next authorized slice.
+
+`LevelInteractionEpisode` persistence stores the actual Batch 1 episode record and indexed lifecycle/session/level fields. Immutable start and pinned geometry/version values are collision-checked; active lifecycle updates are monotonic, and `Confirmed`, `Expired`, and `ContinuityUnknown` are terminal. `MarketReactionAssessment` is deterministic immutable JSON history, with exact decimal/event-time round trips, identical replay idempotency, and same-ID material collision rejection. Episode and assessment saves are atomic through one EF `SaveChanges`; assessments have a restrictive FK to their episode. `MarketReactionContinuityService` restores only active episodes by exact explicit session and symbol scope and marks each `ContinuityUnknown` without fabricating an offline observation. It is not wired into production startup.
+
+The hand-written idempotent migration is `20261106120000_AddLevelInteractionReactionPersistence`. It creates `level_interaction_episode` and `market_reaction_assessment` and the justified lifecycle/research indexes, including a filtered unique index that allows at most one confirmed assessment per episode. Clean `EnsureCreated` followed by migration, existing-schema migration, and explicit migration rerun passed. Schema checks covered columns, nullability, primary keys, the assessment-to-episode foreign key, and all eight indexes. No JSON evidence columns are indexed. Batch 1 contracts have no separate `EvaluatedAtUtc` or evidence collection; identity comparison therefore does not invent semantics for either.
+
+**Passing validation (0 failures / 0 skips):**
+
+| Scope | Command / evidence | Result |
+|---|---|---|
+| SQL preflight | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --no-build --filter FullyQualifiedName~SqlServerTargetPreflightTests` | **1/1**; read-only `DB_NAME()` verified `MarketOpportunityEngine_IntegrationTests` |
+| Batch 2 SQL | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --no-build --filter FullyQualifiedName~MarketReactionPersistenceTests` | **9/9**, repeated against the same dedicated database without reset |
+| Existing SQL regression + reaction persistence | Filter `FullyQualifiedName~MarketReactionPersistenceTests|FullyQualifiedName~SqlServerPersistenceTests` | **17/17** |
+| Clean/existing-schema migration | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --no-build --filter FullyQualifiedName~ExplicitSessionMigrationTests` | **2/2** |
+| SQL restart simulation | Filter `FullyQualifiedName~Restart_simulation` | **1/1**; unresolved state persisted in context A, restored/terminated in context B, post-restart price did not confirm it, new interaction got a new EpisodeId |
+| Batch 1 reaction regression | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj --no-build --filter FullyQualifiedName~MarketReactionEvaluatorTests` | **16/16** |
+| A.2.4a MarketSituation | Filter `FullyQualifiedName~MarketSituationEvaluatorTests` | **18/18** |
+| A.2.3b readiness/pipeline | Filter `FullyQualifiedName~PreTradeReadinessTests|FullyQualifiedName~ScannerPipelineTests` | **85/85** |
+| A.2.3a prior context | Filter `FullyQualifiedName~PriorSessionContextTests` | **11/11** |
+| TradePlan/Momentum | Filter `FullyQualifiedName~TradePlanBuilderTests|FullyQualifiedName~MomentumContinuationTests` | **39/39** |
+| Full offline unit suite | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj --no-build` | **395/395** |
+| Full guarded integration suite | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --no-build` | **35/35** |
+| Final solution build | `dotnet build MarketOpportunityEngine.sln --no-restore` | **Succeeded, 0 warnings, 0 errors** |
+
+**Database safety and exceptions:** `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was absent. The guarded integration-test configuration resolved the dedicated local catalog; the independent preflight queried only `DB_NAME()` and printed no connection string or credential. The existing Compose SQL Server was healthy and was not started, stopped, or recreated. Main persistence tests used only `MarketOpportunityEngine_IntegrationTests`; migration tests used the existing uniquely named temporary database pattern. No development/live-validation catalog was used or reset, no User Secrets were inspected, and no live provider was connected. The first full integration attempt had a 30-second timeout in the Windows diagnostics test; its isolated retry passed. A serial full-suite attempt then encountered transient diagnostics-file sharing, and the subsequent full guarded suite passed **35/35**.
+
+**Boundary and document check:** Production `ScannerPipeline`, `ScannerState`, API, and Blazor were not changed or wired to MarketReaction. `PROJECT_STATUS.md`, README, master specification, `.github/copilot-instructions.md`, and ADR-010 now consistently describe Batch 2 as complete and Batch 3 as the next authorized slice. Historical validation records above were not rewritten.

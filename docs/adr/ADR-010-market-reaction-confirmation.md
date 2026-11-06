@@ -1,0 +1,32 @@
+# ADR-010: Structural level reaction confirmation and persistence
+
+- **Status:** Accepted
+- **Decision:** Keep reaction confirmation distinct from descriptive level interaction, persist reaction episodes as controlled lifecycle state, persist each reaction assessment immutably, and terminate unresolved episodes as `ContinuityUnknown` after restart when uninterrupted eligible observation cannot be proven.
+
+## Context
+
+A.2.4a `MarketSituation` describes the current geometric relationship between price and eligible support/resistance. A.2.4b `MarketReaction` classifies what later eligible observations establish about one pinned level interaction. The second observation sequence may not be continuous across an application restart, and a first post-restart price cannot establish what happened while the process was offline.
+
+## Decision
+
+- `market-situation-v1` remains descriptive and does not imply a hold, rejection, breakout, or other reaction. `market-reaction-v1` is a separate, deterministic event-time classification.
+- The six confirmed reactions are `SupportHeld`, `SupportBreakdown`, `SupportReclaimed`, `ResistanceRejected`, `ResistanceBreakout`, and `ResistanceFailedBreakout`.
+- An episode begins only from a testing/crossed support or resistance interaction and pins its `LevelId`, role, initiating situation, level price, and zone bounds. The initiating observation cannot confirm its own reaction.
+- Confirmation requires a later eligible canonical trade observation. Canonical event ordering and event time determine the sequence; confirmation price must clear the appropriate pinned zone edge by `ConfirmationDistancePercent`. A zone crossing by itself is insufficient.
+- Confirmation and unresolved expiry use market event time. An unresolved episode expires at its configured event-time boundary; wall-clock time is not used to infer reaction geometry or expiry.
+- The first terminal result wins. `Confirmed`, `Expired`, and `ContinuityUnknown` episodes cannot be reopened or rewritten. A new qualifying interaction may create a new episode with a new identity.
+- On restart, only active episodes matching the explicit current `SessionId` and requested symbol scope are eligible for restoration. Without independently proven continuous eligible observations, each restored active episode transitions to terminal `ContinuityUnknown`. It is not evaluated against post-restart observations. No intermediate prices, calendar sessions, backfill, or historical gap inference are fabricated. Already-terminal episodes remain persisted historical state and are never restored as active.
+- `LevelInteractionEpisode` is the mutable lifecycle record; its deterministic identity and start/geometry/version fields are immutable. The current Batch 1 contract has no observed-price extrema, separate terminal reason, context-mode field, or structural-source field, so persistence does not invent duplicate lifecycle state for them. The canonical episode JSON preserves all contract fields and decimal precision; scalar columns support restoration and indexed queries.
+- `MarketReactionAssessment` is immutable history keyed by its deterministic Batch 1 identity. Exact replay is a no-op; a different serialized material assessment under the same ID fails. Episode lifecycle and assessment writes share one SQL `SaveChanges` transaction, and the assessment has a restrictive FK to its episode. The assessment references the episode and level IDs; the pinned level/zone values remain on the episode. Assessment times are event-time fields. Batch 1 has no `EvaluatedAtUtc` or separate evidence collection, so neither is added or assigned new identity semantics.
+- Persistence uses `level_interaction_episode` and `market_reaction_assessment`, with reviewed idempotent migration `20261106120000_AddLevelInteractionReactionPersistence`. A filtered unique index permits at most one confirmed assessment per episode. Clean schemas remain compatible with `EnsureCreated`; existing schemas evolve through this hand-written migration. Large JSON payloads are not indexed.
+- Context signals such as volume, momentum, VWAP, trend, opportunity, TradePlan, and readiness are not reaction confirmation gates. These changes do not alter setup, candidate plan, publication, tracking, or pre-trade-readiness semantics.
+- Batch 2 supplies persistence and an explicit application continuity service but does not invoke it from production startup. `ScannerPipeline`, `ScannerState`, API, and Blazor remain unchanged until their separately approved batch.
+
+## Consequences
+
+- Offline intervals make an unresolved interaction permanently unclassifiable in v1; future price movement can only start a new episode.
+- Episode lifecycle changes are auditable without rewriting immutable confirmed assessment history. SQL restart tests can reopen the same dedicated database and prove continuity loss without resetting it.
+- Confirmation distance (`0.10%`) and maximum unresolved duration (`300` seconds) remain provisional development values, not market-calibrated. Changing either requires a new scanner configuration version.
+- The persistence layer records only what the Batch 1 contracts establish; it does not claim source/context provenance or structured evidence that those contracts do not carry.
+
+See [ADR-009](./ADR-009-market-situation-level-interaction.md) for descriptive interaction semantics, [ADR-006](./ADR-006-immutable-trade-plan-persistence.md) and [ADR-008](./ADR-008-tracked-opportunity-readiness.md) for persistence/lifecycle precedents, and the [master specification](../../Market_Opportunity_Engine_Final_Master_Spec.md#a24b-structural-level-reaction-classification) for the approved A.2.4b boundary.

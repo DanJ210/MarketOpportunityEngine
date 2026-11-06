@@ -11,6 +11,7 @@ public sealed class ExplicitSessionMigrationTests
     private const string TradePlansMigrationId = "20261030210000_AddImmutableTradePlans";
     private const string TrackedReadinessMigrationId = "20261101120000_AddTrackedOpportunityReadiness";
     private const string MarketSituationMigrationId = "20261105120000_AddMarketSituationHistory";
+    private const string MarketReactionMigrationId = "20261106120000_AddLevelInteractionReactionPersistence";
 
     [Fact]
     public async Task Clean_schema_accepts_explicit_session_migration()
@@ -28,13 +29,22 @@ public sealed class ExplicitSessionMigrationTests
                 Assert.Contains(TradePlansMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(TrackedReadinessMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(MarketSituationMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(MarketReactionMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 await context.Database.MigrateAsync();
+            }
+
+            await RemoveMigrationHistoryEntryAsync(database.ConnectionString, MarketReactionMigrationId);
+            await using (var context = CreateContext(database.ConnectionString))
+            {
+                await context.Database.MigrateAsync();
+                Assert.Contains(MarketReactionMigrationId, await context.Database.GetAppliedMigrationsAsync());
             }
 
             await AssertSessionColumnsAndIndexesAsync(database.ConnectionString);
             await AssertTradePlanSchemaAsync(database.ConnectionString);
             await AssertTrackedReadinessSchemaAsync(database.ConnectionString);
             await AssertMarketSituationSchemaAsync(database.ConnectionString);
+            await AssertMarketReactionSchemaAsync(database.ConnectionString);
         }
         finally
         {
@@ -79,6 +89,7 @@ public sealed class ExplicitSessionMigrationTests
                 Assert.Contains(TradePlansMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(TrackedReadinessMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(MarketSituationMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(MarketReactionMigrationId, await context.Database.GetAppliedMigrationsAsync());
 
                 var marketEvent = await context.MarketEvents.AsNoTracking().SingleAsync(item => item.Id == eventId);
                 Assert.Equal("legacy-unknown", marketEvent.SessionId);
@@ -124,6 +135,7 @@ public sealed class ExplicitSessionMigrationTests
             await AssertTradePlanSchemaAsync(database.ConnectionString);
             await AssertTrackedReadinessSchemaAsync(database.ConnectionString);
             await AssertMarketSituationSchemaAsync(database.ConnectionString);
+            await AssertMarketReactionSchemaAsync(database.ConnectionString);
         }
         finally
         {
@@ -461,6 +473,103 @@ public sealed class ExplicitSessionMigrationTests
                 N'IX_market_situation_assessment_PrimarySituationType_AsOfUtc');
             """;
         Assert.Equal(4, Convert.ToInt32(await indexesCommand.ExecuteScalarAsync()));
+    }
+
+    private static async Task AssertMarketReactionSchemaAsync(string connectionString)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using (var columnsCommand = connection.CreateCommand())
+        {
+            columnsCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.columns AS c
+                INNER JOIN sys.tables AS t ON c.object_id = t.object_id
+                WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                  AND ((t.name = N'level_interaction_episode'
+                        AND c.name IN (N'Id', N'LevelId', N'Symbol', N'SessionId',
+                            N'StartedAtUtc', N'LatestAsOfUtc', N'Status', N'EpisodeJson'))
+                    OR (t.name = N'market_reaction_assessment'
+                        AND c.name IN (N'Id', N'EpisodeId', N'LevelId', N'Symbol',
+                            N'SessionId', N'AsOfUtc', N'ReactionType', N'AssessmentJson')));
+                """;
+            Assert.Equal(16, Convert.ToInt32(await columnsCommand.ExecuteScalarAsync()));
+        }
+
+        await using (var nullabilityCommand = connection.CreateCommand())
+        {
+            nullabilityCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.columns AS c
+                INNER JOIN sys.tables AS t ON c.object_id = t.object_id
+                WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                  AND ((t.name = N'market_reaction_assessment' AND c.name = N'ReactionType' AND c.is_nullable = 1)
+                    OR (t.name = N'level_interaction_episode' AND c.is_nullable = 0)
+                    OR (t.name = N'market_reaction_assessment' AND c.name <> N'ReactionType' AND c.is_nullable = 0));
+                """;
+            Assert.Equal(16, Convert.ToInt32(await nullabilityCommand.ExecuteScalarAsync()));
+        }
+
+        await using (var keysCommand = connection.CreateCommand())
+        {
+            keysCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.key_constraints AS k
+                INNER JOIN sys.tables AS t ON k.parent_object_id = t.object_id
+                WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                  AND t.name IN (N'level_interaction_episode', N'market_reaction_assessment')
+                  AND k.type = N'PK';
+                """;
+            Assert.Equal(2, Convert.ToInt32(await keysCommand.ExecuteScalarAsync()));
+        }
+
+        await using (var foreignKeyCommand = connection.CreateCommand())
+        {
+            foreignKeyCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.foreign_keys AS fk
+                INNER JOIN sys.tables AS t ON fk.parent_object_id = t.object_id
+                WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                  AND t.name = N'market_reaction_assessment'
+                  AND fk.name = N'FK_market_reaction_assessment_level_interaction_episode_EpisodeId';
+                """;
+            Assert.Equal(1, Convert.ToInt32(await foreignKeyCommand.ExecuteScalarAsync()));
+        }
+
+        await using (var indexesCommand = connection.CreateCommand())
+        {
+            indexesCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.indexes AS i
+                INNER JOIN sys.tables AS t ON i.object_id = t.object_id
+                WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                  AND i.name IN (
+                    N'IX_level_interaction_episode_Symbol_SessionId_Status',
+                    N'IX_level_interaction_episode_LevelId',
+                    N'IX_level_interaction_episode_StartedAtUtc',
+                    N'IX_market_reaction_assessment_Symbol_SessionId_AsOfUtc',
+                    N'IX_market_reaction_assessment_EpisodeId',
+                    N'UX_market_reaction_assessment_EpisodeId_Confirmed',
+                    N'IX_market_reaction_assessment_LevelId',
+                    N'IX_market_reaction_assessment_ReactionType');
+                """;
+            Assert.Equal(8, Convert.ToInt32(await indexesCommand.ExecuteScalarAsync()));
+        }
+    }
+
+    private static async Task RemoveMigrationHistoryEntryAsync(string connectionString, string migrationId)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM dbo.__EFMigrationsHistory WHERE MigrationId = @migrationId;";
+        command.Parameters.AddWithValue("@migrationId", migrationId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 
     private sealed record IsolatedDatabase(string Name, string ConnectionString);

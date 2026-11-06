@@ -320,6 +320,33 @@ public sealed class MarketReactionEvaluatorTests
             _evaluator.Evaluate(terminal.Episode, [], Start));
     }
 
+    [Fact]
+    public void Restart_marks_unresolved_episode_continuity_unknown_and_prevents_confirmation()
+    {
+        var episode = StartEpisode(
+            ImportantPriceLevelRole.Support,
+            MarketSituationType.TestingSupport,
+            100m);
+
+        var continuityUnknown = _evaluator.MarkContinuityUnknown(episode);
+        var afterRestart = _evaluator.Evaluate(
+            continuityUnknown.Episode,
+            [Trade(1, 100.21m)],
+            Start.AddSeconds(1));
+
+        Assert.Equal(MarketReactionEpisodeStatus.ContinuityUnknown, continuityUnknown.Episode.Status);
+        Assert.Equal(MarketReactionStatus.ContinuityUnknown, continuityUnknown.Assessment.Status);
+        Assert.Equal(episode.LastObservationAtUtc, continuityUnknown.Assessment.AsOfUtc);
+        Assert.Equal(MarketReactionEpisodeStatus.ContinuityUnknown, afterRestart.Episode.Status);
+        Assert.Null(afterRestart.Episode.Reaction);
+        Assert.Equal(MarketReactionStatus.ContinuityUnknown, afterRestart.Assessment.Status);
+
+        var repeatedTransition = _evaluator.MarkContinuityUnknown(continuityUnknown.Episode);
+        Assert.Equal(continuityUnknown, repeatedTransition);
+        Assert.Throws<InvalidOperationException>(() => _evaluator.MarkContinuityUnknown(
+            _evaluator.Evaluate(episode, [Trade(1, 100.21m)], Start.AddSeconds(1)).Episode));
+    }
+
     private LevelInteractionEpisode StartEpisode(
         ImportantPriceLevelRole role,
         MarketSituationType situation,

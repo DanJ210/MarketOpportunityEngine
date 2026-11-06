@@ -181,9 +181,28 @@ public sealed class MarketReactionEvaluator
         {
             MarketReactionEpisodeStatus.Confirmed => updated.ReactionAtUtc!.Value,
             MarketReactionEpisodeStatus.Expired => updated.ExpiresAtUtc,
+            MarketReactionEpisodeStatus.ContinuityUnknown => updated.LastObservationAtUtc!.Value,
             _ => asOf
         };
         return new MarketReactionEvaluation(updated, CreateAssessment(updated, assessmentAsOf));
+    }
+
+    public MarketReactionEvaluation MarkContinuityUnknown(LevelInteractionEpisode episode)
+    {
+        ArgumentNullException.ThrowIfNull(episode);
+        ValidateEpisode(episode);
+
+        if (episode.Status is MarketReactionEpisodeStatus.Confirmed or MarketReactionEpisodeStatus.Expired)
+        {
+            throw new InvalidOperationException(
+                $"Terminal reaction episode '{episode.Id}' cannot transition to ContinuityUnknown.");
+        }
+
+        var terminal = episode.Status == MarketReactionEpisodeStatus.ContinuityUnknown
+            ? episode
+            : episode with { Status = MarketReactionEpisodeStatus.ContinuityUnknown };
+        var assessmentAtUtc = terminal.LastObservationAtUtc!.Value;
+        return new MarketReactionEvaluation(terminal, CreateAssessment(terminal, assessmentAtUtc));
     }
 
     private static IReadOnlyList<TradeEvent> CanonicalObservations(
@@ -297,6 +316,7 @@ public sealed class MarketReactionEvaluator
             MarketReactionEpisodeStatus.Active => MarketReactionStatus.Unresolved,
             MarketReactionEpisodeStatus.Confirmed => MarketReactionStatus.Confirmed,
             MarketReactionEpisodeStatus.Expired => MarketReactionStatus.UnresolvedExpired,
+            MarketReactionEpisodeStatus.ContinuityUnknown => MarketReactionStatus.ContinuityUnknown,
             _ => throw new ArgumentOutOfRangeException(nameof(episode), episode.Status, "Unknown episode status.")
         };
         var id = DeterministicId.From(string.Join(
@@ -421,6 +441,11 @@ public sealed class MarketReactionEvaluator
         if (episode.Status == MarketReactionEpisodeStatus.Expired && !expiredStateValid)
         {
             throw new ArgumentException("An unresolved expired episode cannot contain a reaction.", nameof(episode));
+        }
+
+        if (episode.Status == MarketReactionEpisodeStatus.ContinuityUnknown && !expiredStateValid)
+        {
+            throw new ArgumentException("A continuity-unknown episode cannot contain a reaction.", nameof(episode));
         }
     }
 

@@ -17,6 +17,10 @@ public sealed class MarketOpportunityDbContext(DbContextOptions<MarketOpportunit
         Set<PreTradeReadinessAssessmentEntity>();
     public DbSet<MarketSituationAssessmentEntity> MarketSituationAssessments =>
         Set<MarketSituationAssessmentEntity>();
+    public DbSet<LevelInteractionEpisodeEntity> LevelInteractionEpisodes =>
+        Set<LevelInteractionEpisodeEntity>();
+    public DbSet<MarketReactionAssessmentEntity> MarketReactionAssessments =>
+        Set<MarketReactionAssessmentEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -151,6 +155,42 @@ public sealed class MarketOpportunityDbContext(DbContextOptions<MarketOpportunit
             entity.HasIndex(item => new { item.SupportSituationType, item.SupportLevelSource, item.AsOfUtc });
             entity.HasIndex(item => new { item.ResistanceSituationType, item.ResistanceLevelSource, item.AsOfUtc });
             entity.HasIndex(item => new { item.PrimarySituationType, item.AsOfUtc });
+        });
+
+        modelBuilder.Entity<LevelInteractionEpisodeEntity>(entity =>
+        {
+            entity.ToTable("level_interaction_episode");
+            entity.HasKey(item => item.Id);
+            entity.Property(item => item.Symbol).HasMaxLength(32).IsRequired();
+            entity.Property(item => item.SessionId).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.Status).HasMaxLength(32).IsRequired();
+            entity.Property(item => item.LatestAsOfUtc).IsRequired();
+            entity.Property(item => item.EpisodeJson).IsRequired();
+            entity.HasIndex(item => new { item.Symbol, item.SessionId, item.Status });
+            entity.HasIndex(item => item.LevelId);
+            entity.HasIndex(item => item.StartedAtUtc);
+        });
+
+        modelBuilder.Entity<MarketReactionAssessmentEntity>(entity =>
+        {
+            entity.ToTable("market_reaction_assessment");
+            entity.HasKey(item => item.Id);
+            entity.Property(item => item.Symbol).HasMaxLength(32).IsRequired();
+            entity.Property(item => item.SessionId).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.ReactionType).HasMaxLength(40);
+            entity.Property(item => item.AssessmentJson).IsRequired();
+            entity.HasOne<LevelInteractionEpisodeEntity>()
+                .WithMany()
+                .HasForeignKey(item => item.EpisodeId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(item => new { item.Symbol, item.SessionId, item.AsOfUtc });
+            entity.HasIndex(item => item.EpisodeId);
+            entity.HasIndex(item => item.EpisodeId)
+                .IsUnique()
+                .HasFilter("[ReactionType] IS NOT NULL")
+                .HasDatabaseName("UX_market_reaction_assessment_EpisodeId_Confirmed");
+            entity.HasIndex(item => item.LevelId);
+            entity.HasIndex(item => item.ReactionType);
         });
     }
 }
@@ -297,5 +337,31 @@ public sealed class MarketSituationAssessmentEntity
     public string? ResistanceLevelSource { get; set; }
     public string DefinitionVersion { get; set; } = "";
     public string ConfigurationVersion { get; set; } = "";
+    public string AssessmentJson { get; set; } = "";
+}
+
+/// <summary>Mutable lifecycle projection; pinned episode identity and geometry remain immutable.</summary>
+public sealed class LevelInteractionEpisodeEntity
+{
+    public Guid Id { get; set; }
+    public Guid LevelId { get; set; }
+    public string Symbol { get; set; } = "";
+    public string SessionId { get; set; } = "";
+    public DateTimeOffset StartedAtUtc { get; set; }
+    public DateTimeOffset LatestAsOfUtc { get; set; }
+    public string Status { get; set; } = "";
+    public string EpisodeJson { get; set; } = "";
+}
+
+/// <summary>Immutable reaction assessment history.</summary>
+public sealed class MarketReactionAssessmentEntity
+{
+    public Guid Id { get; set; }
+    public Guid EpisodeId { get; set; }
+    public Guid LevelId { get; set; }
+    public string Symbol { get; set; } = "";
+    public string SessionId { get; set; } = "";
+    public DateTimeOffset AsOfUtc { get; set; }
+    public string? ReactionType { get; set; }
     public string AssessmentJson { get; set; } = "";
 }

@@ -14,14 +14,16 @@ public enum MarketReactionEpisodeStatus
 {
     Active,
     Confirmed,
-    Expired
+    Expired,
+    ContinuityUnknown
 }
 
 public enum MarketReactionStatus
 {
     Unresolved,
     Confirmed,
-    UnresolvedExpired
+    UnresolvedExpired,
+    ContinuityUnknown
 }
 
 public sealed record LevelInteractionEpisode(

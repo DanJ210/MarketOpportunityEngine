@@ -221,7 +221,7 @@ A level crossing alone is insufficient for breakout-quality analysis. Participat
 
 ### A.2.4b Structural Level Reaction Classification
 
-**A.2.4b status: IN PROGRESS. Batch 1 is COMPLETE; Batch 2 is NEXT / AUTHORIZED; Batches 3 and 4 are NOT STARTED.** Production pipeline integration, restart/continuity restoration, reaction persistence, and reaction-specific API/UI exposure remain unimplemented. A.2.4b describes what happens after an A.2.4a structural-level interaction. It is separate from `MarketSituation` (current geometric relationship to a level), setup detection, `TradePlan` geometry, tracked-candidate identity, and `PreTradeReadiness` (`pre-trade-readiness-v2`). A reaction is not an entry-readiness gate, a trade instruction, a new setup detector, or a probability/profitability claim.
+**A.2.4b status: IN PROGRESS. Batches 1 and 2 are COMPLETE; Batch 3 is NEXT / AUTHORIZED; Batch 4 is NOT STARTED.** Episode/assessment persistence and conservative restart continuity are implemented, but they are not wired into production startup or exposed through a reaction-specific API/UI. A.2.4b describes what happens after an A.2.4a structural-level interaction. It is separate from `MarketSituation` (current geometric relationship to a level), setup detection, `TradePlan` geometry, tracked-candidate identity, and `PreTradeReadiness` (`pre-trade-readiness-v2`). A reaction is not an entry-readiness gate, a trade instruction, a new setup detector, or a probability/profitability claim. See [ADR-010](./docs/adr/ADR-010-market-reaction-confirmation.md).
 
 The approved v1 reaction vocabulary is:
 
@@ -233,12 +233,14 @@ An episode starts from an A.2.4a interaction and pins the original `LevelId` and
 
 The only approved v1 reaction-policy configuration values are `Scanner:MarketReaction:ConfirmationDistancePercent` and `Scanner:MarketReaction:MaxEpisodeDurationSeconds`. The initial defaults are `0.10` percent and `300` seconds; both are **PROVISIONAL / NOT MARKET CALIBRATED**. Confirmation is not based on volume, Momentum, VWAP, EMA, ADX, trend direction, Opportunity classification, TradePlan, PreTradeReadiness, or reward/risk; such values may later be retained as research context only.
 
+For Batch 2, active episodes are restored only within the exact explicit session/symbol scope. If continuous eligible observation cannot be independently established after restart, the old episode transitions to terminal `ContinuityUnknown`; no post-restart observation may confirm it. `Confirmed`, `Expired`, and `ContinuityUnknown` are terminal. `level_interaction_episode` stores the actual mutable Batch 1 episode lifecycle with immutable start/geometry fields, and `market_reaction_assessment` stores deterministic immutable assessment history. The hand-written idempotent SQL migration is `20261106120000_AddLevelInteractionReactionPersistence`. Batch 2 supplies an application persistence/continuity service but deliberately does not wire production startup, `ScannerPipeline`, `ScannerState`, API, or Blazor. The Batch 1 records do not define separate `EvaluatedAtUtc` or evidence-collection fields.
+
 Approved implementation batches:
 
-1. **Batch 1 - Domain + Reaction Algorithm (COMPLETE):** reaction/episode domain contracts; `market-reaction-v1`; the two policy values and scanner configuration version advancement; episode lifecycle/evaluator; six mechanical reaction algorithms; offline deterministic tests/regressions. No SQL persistence/migrations, restart restoration, production `ScannerPipeline` or `ScannerState` integration, reaction API, Blazor, outcome research, or ML.
-2. **Batch 2 - Restart/Continuity Safety + SQL Persistence/Migration (NEXT / AUTHORIZED).**
-3. **Batch 3 - Pipeline Integration + Research Context + API + Blazor (NOT STARTED).**
-4. **Batch 4 - ADR/Documentation + Complete Regression/SQL/Checkpoint Closeout (NOT STARTED).**
+1. **Batch 1 - Domain + Reaction Algorithm (COMPLETE):** reaction/episode domain contracts; `market-reaction-v1`; the two policy values and scanner configuration version advancement; episode lifecycle/evaluator; six mechanical reaction algorithms; offline deterministic tests/regressions.
+2. **Batch 2 - Restart/Continuity Safety + SQL Persistence/Migration (COMPLETE):** terminal restart continuity handling; explicit-session unresolved restore/read path; mutable episode and immutable assessment persistence; guarded SQL and migration tests; ADR-010.
+3. **Batch 3 - Pipeline Integration + Research Context + API + Blazor (NEXT / AUTHORIZED).**
+4. **Batch 4 - Final Documentation and Complete Regression/SQL/Checkpoint Closeout (NOT STARTED).**
 
 Batch 2 is authorized only within the approved four-batch scope; this does not authorize Batch 3, Batch 4, or out-of-scope work. A.2.4b does not authorize role reversal, confluence scoring, ATR or relative-volume confirmation, new momentum thresholds or setup detectors, a reaction requirement for `EntryReady`, Target 2, hard reward/risk vetoes, position/account management, broker execution, outcome labeling, backtesting, ML/ONNX, LLM trading decisions, provider changes, or historical-provider integration.
 
@@ -758,13 +760,13 @@ Trace provider reception -> normalization -> state -> features -> setup detector
 - **A.2.3a Prior-Session Market Context:** COMPLETE.
 - **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** COMPLETE, including PR #2 correction guarded SQL revalidation.
 - **A.2.4a Structural Level Interaction:** COMPLETE.
-- **A.2.4b Structural Level Reaction Classification:** IN PROGRESS; Batch 1 COMPLETE; Batch 2 NEXT / AUTHORIZED; Batches 3-4 NOT STARTED.
+- **A.2.4b Structural Level Reaction Classification:** IN PROGRESS; Batches 1-2 COMPLETE; Batch 3 NEXT / AUTHORIZED; Batch 4 NOT STARTED.
 
 A.2.3b defines the user-facing pre-trade readiness contract over current setup, pinned TradePlan, publication, and data-quality evidence. Readiness stays separate from setup, immutable TradePlan geometry, and current publication health, and does not require knowing the user's holdings. Position/account management is a separate future concern if approved and is not required for market-opportunity analysis.
 
 A.2.4a adds the versioned `market-situation-v1` descriptive assessment and immutable SQL history. Its default test-zone half-width is 0.10% of level price and its default approach/crossed relevance is 0.25% of zone-edge price; both are provisional and not market calibrated. See [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
 
-**Current immediate next implementation slice:** A.2.4b Batch 2 - Restart/Continuity Safety + SQL Persistence/Migration (AUTHORIZED). Batch 1 implements the domain/configuration and deterministic offline evaluator only; the approved v1 vocabulary, confirmation principles, configuration boundary, architectural boundary, exclusions, and four-batch implementation limits are recorded in [A.2.4b Structural Level Reaction Classification](#a24b-structural-level-reaction-classification).
+**Current immediate next implementation slice:** A.2.4b Batch 3 - Pipeline Integration + Research Context + API + Blazor (AUTHORIZED). Batches 1-2 implement the domain/configuration/evaluator and persistence/continuity layer only; production runtime integration remains pending. The approved v1 vocabulary, confirmation principles, configuration boundary, architectural boundary, exclusions, and four-batch implementation limits are recorded in [A.2.4b Structural Level Reaction Classification](#a24b-structural-level-reaction-classification).
 
 ## Phase 0: Minimal foundations
 
