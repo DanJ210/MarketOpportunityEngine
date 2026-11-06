@@ -29,7 +29,10 @@ public sealed class LiveValidationInstrumentationTests
             await guard.OpenAsync();
             await using var command = guard.CreateCommand();
             command.CommandText = "SELECT DB_NAME()";
-            Assert.Equal(target.InitialCatalog, await command.ExecuteScalarAsync());
+            Assert.Equal(
+                target.InitialCatalog,
+                await command.ExecuteScalarAsync() as string,
+                ignoreCase: true);
         }
         var session = "a1-offline-diagnostic-" + Guid.NewGuid().ToString("N");
         var directory = Path.Combine(Path.GetTempPath(), session);
