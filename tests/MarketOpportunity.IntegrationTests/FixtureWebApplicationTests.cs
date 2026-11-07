@@ -23,10 +23,24 @@ public sealed class FixtureWebApplicationTests
         Converters = { new JsonStringEnumConverter() }
     };
 
-    private static string WebProjectPath => Path.GetFullPath(Path.Combine(
-        AppContext.BaseDirectory,
-        "..", "..", "..", "..", "..",
-        "src", "MarketOpportunity.Web"));
+    private static string WebProjectPath
+    {
+        get
+        {
+            var webOutput = Path.GetDirectoryName(typeof(Program).Assembly.Location);
+            if (webOutput is not null
+                && File.Exists(Path.Combine(webOutput, "appsettings.json"))
+                && Directory.Exists(Path.Combine(webOutput, "Fixtures")))
+            {
+                return webOutput;
+            }
+
+            return Path.GetFullPath(Path.Combine(
+                AppContext.BaseDirectory,
+                "..", "..", "..", "..", "..",
+                "src", "MarketOpportunity.Web"));
+        }
+    }
 
     [Fact]
     public async Task Fixture_run_is_persisted_and_exposed_by_the_hosted_api()

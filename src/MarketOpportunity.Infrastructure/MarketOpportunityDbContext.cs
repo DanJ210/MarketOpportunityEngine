@@ -21,6 +21,8 @@ public sealed class MarketOpportunityDbContext(DbContextOptions<MarketOpportunit
         Set<LevelInteractionEpisodeEntity>();
     public DbSet<MarketReactionAssessmentEntity> MarketReactionAssessments =>
         Set<MarketReactionAssessmentEntity>();
+    public DbSet<MarketReactionResearchContextEntity> MarketReactionResearchContexts =>
+        Set<MarketReactionResearchContextEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -191,6 +193,21 @@ public sealed class MarketOpportunityDbContext(DbContextOptions<MarketOpportunit
                 .HasDatabaseName("UX_market_reaction_assessment_EpisodeId_Confirmed");
             entity.HasIndex(item => item.LevelId);
             entity.HasIndex(item => item.ReactionType);
+        });
+
+        modelBuilder.Entity<MarketReactionResearchContextEntity>(entity =>
+        {
+            entity.ToTable("market_reaction_research_context");
+            entity.HasKey(item => item.AssessmentId);
+            entity.Property(item => item.Symbol).HasMaxLength(32).IsRequired();
+            entity.Property(item => item.SessionId).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.ContextJson).IsRequired();
+            entity.HasOne<MarketReactionAssessmentEntity>()
+                .WithOne()
+                .HasForeignKey<MarketReactionResearchContextEntity>(item => item.AssessmentId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(item => new { item.Symbol, item.SessionId, item.AsOfUtc });
+            entity.HasIndex(item => item.EpisodeId);
         });
     }
 }
@@ -364,4 +381,15 @@ public sealed class MarketReactionAssessmentEntity
     public DateTimeOffset AsOfUtc { get; set; }
     public string? ReactionType { get; set; }
     public string AssessmentJson { get; set; } = "";
+}
+
+/// <summary>Immutable, non-gating feature context captured alongside a reaction assessment.</summary>
+public sealed class MarketReactionResearchContextEntity
+{
+    public Guid AssessmentId { get; set; }
+    public Guid EpisodeId { get; set; }
+    public string Symbol { get; set; } = "";
+    public string SessionId { get; set; } = "";
+    public DateTimeOffset AsOfUtc { get; set; }
+    public string ContextJson { get; set; } = "";
 }

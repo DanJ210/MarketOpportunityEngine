@@ -231,6 +231,54 @@
                         }
                     </section>
 
+                    <section class="invalidation-panel market-reaction-panel" aria-label="Market reaction">
+                        <h3>MARKET REACTION</h3>
+                        @if (result.MarketReactions is { Count: > 0 } reactions)
+                        {
+                            @foreach (var reaction in reactions.OrderByDescending(item => item.Assessment.AsOfUtc))
+                            {
+                                <article class="reaction-assessment">
+                                    <h4>
+                                        @ReactionLabel(reaction.Assessment.Reaction) · @reaction.Assessment.Status
+                                    </h4>
+                                    <p>
+                                        Pinned @(reaction.Episode.Role == ImportantPriceLevelRole.Support ? "support" : "resistance") level:
+                                        @FormatStructurePrice(reaction.Episode.LevelPrice) ·
+                                        episode started <time class="local-time" data-local-time datetime="@ToUtcIso(reaction.Episode.StartedAtUtc)">@FormatUtc(reaction.Episode.StartedAtUtc)</time>
+                                        · expires <time class="local-time" data-local-time datetime="@ToUtcIso(reaction.Episode.ExpiresAtUtc)">@FormatUtc(reaction.Episode.ExpiresAtUtc)</time>
+                                    </p>
+                                    @if (reaction.Assessment.ReactionAtUtc is { } reactionAtUtc)
+                                    {
+                                        <p>
+                                            Confirmed at <time class="local-time" data-local-time datetime="@ToUtcIso(reactionAtUtc)">@FormatUtc(reactionAtUtc)</time>
+                                            · price @FormatStructurePrice(reaction.Assessment.ReactionPrice)
+                                        </p>
+                                    }
+                                    @if (reaction.ResearchContext is { } context)
+                                    {
+                                        <p>
+                                            Research context at @FormatUtc(context.AsOfUtc):
+                                            momentum @FormatPercent(context.ShortHorizonReturnPercent) /
+                                            @FormatPercent(context.SecondaryHorizonReturnPercent) ·
+                                            VWAP @FormatPrice(context.SessionVwap) ·
+                                            trend @context.SessionTrendDirection ·
+                                            setup @context.OpportunityClassification (@context.OpportunityQualityScore / 100) ·
+                                            data @context.DataQuality · @context.FeatureSetVersion
+                                        </p>
+                                    }
+                                </article>
+                            }
+                        }
+                        else
+                        {
+                            <p>No market-reaction episode is available for this symbol and session.</p>
+                        }
+                        <p class="muted">
+                            Reaction classification uses only eligible event-time price observations.
+                            Research context is descriptive and is not a confirmation gate, entry instruction, or profitability claim.
+                        </p>
+                    </section>
+
                     <section class="invalidation-panel readiness-panel" aria-label="Pre-trade readiness">
                         <h3>PRE-TRADE READINESS</h3>
                         @if (result.Readiness is { } readiness)
@@ -641,6 +689,17 @@
             _ => "No active level interaction is available."
         };
     }
+
+    private static string ReactionLabel(MarketReactionType? reaction) => reaction switch
+    {
+        MarketReactionType.SupportHeld => "Support Held",
+        MarketReactionType.SupportBreakdown => "Support Breakdown",
+        MarketReactionType.SupportReclaimed => "Support Reclaimed",
+        MarketReactionType.ResistanceRejected => "Resistance Rejected",
+        MarketReactionType.ResistanceBreakout => "Resistance Breakout",
+        MarketReactionType.ResistanceFailedBreakout => "Resistance Failed Breakout",
+        _ => "Unresolved Reaction"
+    };
 
     private static string LevelSourceLabel(ImportantPriceLevelSource source) => source switch
     {

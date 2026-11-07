@@ -196,6 +196,71 @@ public sealed class MarketReactionPersistenceTests
     }
 
     [Fact]
+    public async Task Research_context_round_trips_idempotently_and_rejects_mutation()
+    {
+        var connectionString = IntegrationTestConfiguration.GetSqlTestConnectionString();
+        var token = Guid.NewGuid().ToString("N")[..16];
+        var symbol = $"R{token}";
+        var sessionId = $"reaction-context-{token}";
+        var evaluator = new MarketReactionEvaluator();
+        var (_, evaluation) = CreateEpisode(evaluator, symbol, sessionId);
+        var context = new MarketReactionResearchContext(
+            evaluation.Assessment.AsOfUtc,
+            Guid.NewGuid(),
+            "features-v16",
+            100m,
+            99.95m,
+            0.1m,
+            0.05m,
+            10,
+            1_000m,
+            ShortHorizonDollarVolumeStatus.Available,
+            2m,
+            TrendDirectionContext.Bullish,
+            PriceStructure.Mixed,
+            DataQualityStatus.Good,
+            true,
+            true,
+            OpportunityClassification.Watch,
+            60,
+            MarketSituationStatus.Available,
+            MarketSituationContextMode.CurrentSessionOnly,
+            "UnitTest",
+            "Recorded");
+        var schemaReady = false;
+        try
+        {
+            await EnsureSchemaAsync(connectionString);
+            schemaReady = true;
+            await PersistAsync(connectionString, evaluation, context);
+            await PersistAsync(connectionString, evaluation, context);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                PersistAsync(connectionString, evaluation, context with
+                {
+                    OpportunityQualityScore = context.OpportunityQualityScore + 1
+                }));
+
+            await using var verification = CreateContext(connectionString);
+            var stored = await verification.MarketReactionResearchContexts.AsNoTracking()
+                .SingleAsync(item => item.AssessmentId == evaluation.Assessment.Id);
+            Assert.Equal(evaluation.Episode.Id, stored.EpisodeId);
+            Assert.Equal(symbol, stored.Symbol);
+            Assert.Equal(sessionId, stored.SessionId);
+            Assert.True(stored.AsOfUtc.EqualsExact(context.AsOfUtc));
+            Assert.Equal(
+                context,
+                JsonSerializer.Deserialize<MarketReactionResearchContext>(stored.ContextJson, JsonOptions));
+        }
+        finally
+        {
+            if (schemaReady)
+            {
+                await CleanupAsync(connectionString, [symbol]);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Restart_simulation_marks_only_current_session_unresolved_episode_unknown()
     {
         var connectionString = IntegrationTestConfiguration.GetSqlTestConnectionString();
@@ -374,6 +439,16 @@ public sealed class MarketReactionPersistenceTests
         await new EfMarketReactionStore(context).PersistAsync(evaluation, CancellationToken.None);
     }
 
+    private static async Task PersistAsync(
+        string connectionString,
+        MarketReactionEvaluation evaluation,
+        MarketReactionResearchContext researchContext)
+    {
+        await using var context = CreateContext(connectionString);
+        await new EfMarketReactionStore(context)
+            .PersistAsync(evaluation, researchContext, CancellationToken.None);
+    }
+
     private static async Task<IReadOnlyList<LevelInteractionEpisode>> RestoreActiveAsync(
         string connectionString,
         string sessionId,
@@ -404,6 +479,9 @@ public sealed class MarketReactionPersistenceTests
     private static async Task CleanupAsync(string connectionString, IReadOnlyCollection<string> symbols)
     {
         await using var context = CreateContext(connectionString);
+        await context.MarketReactionResearchContexts
+            .Where(item => symbols.Contains(item.Symbol))
+            .ExecuteDeleteAsync();
         await context.MarketReactionAssessments.Where(item => symbols.Contains(item.Symbol)).ExecuteDeleteAsync();
         await context.LevelInteractionEpisodes.Where(item => symbols.Contains(item.Symbol)).ExecuteDeleteAsync();
     }

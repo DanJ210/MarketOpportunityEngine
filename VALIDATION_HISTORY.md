@@ -1612,3 +1612,26 @@ The hand-written idempotent migration is `20261106120000_AddLevelInteractionReac
 **Database safety and exceptions:** `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` was absent. The guarded integration-test configuration resolved the dedicated local catalog; the independent preflight queried only `DB_NAME()` and printed no connection string or credential. The existing Compose SQL Server was healthy and was not started, stopped, or recreated. Main persistence tests used only `MarketOpportunityEngine_IntegrationTests`; migration tests used the existing uniquely named temporary database pattern. No development/live-validation catalog was used or reset, no User Secrets were inspected, and no live provider was connected. The first full integration attempt had a 30-second timeout in the Windows diagnostics test; its isolated retry passed. A serial full-suite attempt then encountered transient diagnostics-file sharing, and the subsequent full guarded suite passed **35/35**.
 
 **Boundary and document check:** Production `ScannerPipeline`, `ScannerState`, API, and Blazor were not changed or wired to MarketReaction. `PROJECT_STATUS.md`, README, master specification, `.github/copilot-instructions.md`, and ADR-010 now consistently describe Batch 2 as complete and Batch 3 as the next authorized slice. Historical validation records above were not rewritten.
+
+## A.2.4b Batch 3 Integration 2026-11-06
+
+**A.2.4b Batch 3 - Pipeline Integration + Research Context + API + Blazor: COMPLETE.** A.2.4b remains IN PROGRESS; Batch 4 remains NOT STARTED. `market-reaction-v1` was not changed. The event-driven tracker is wired to symbol/session analysis and live restart restoration; a hosted test proves a testing support episode starts on one analysis batch and confirms `SupportHeld` on a later batch. Current reaction projections are exposed through opportunity responses, `GET /api/v1/reactions`, and the dashboard. Research context is event-time bounded and persisted immutably beside reaction assessments, without participating in confirmation. Momentum and PreTradeReadiness algorithms and behavior remain unchanged.
+
+**Validation evidence:**
+
+| Scope | Command / evidence | Result |
+|---|---|---|
+| Updated hosted structure/reaction tests | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --no-restore --artifacts-path M:\temp\MarketOpportunityEngine-artifacts --filter FullyQualifiedName~StructureWebApplicationTests` | **5 passed, 0 failed, 0 skipped**; includes hosted restart, two-batch reaction confirmation, API/opportunity shape, Blazor rendering, simultaneous support/resistance, and session filtering |
+| Full offline unit suite | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj` | **398 passed, 0 failed, 0 skipped** |
+| Batch 1 reaction regression | `FullyQualifiedName~MarketReactionEvaluatorTests` | **16/16** |
+| A.2.4a support/resistance regression | `FullyQualifiedName~MarketSituationEvaluatorTests` | **18/18** |
+| A.2.3b readiness/pipeline regression | `FullyQualifiedName~PreTradeReadinessTests|FullyQualifiedName~ScannerPipelineTests` | **85/85** |
+| A.2.3a prior-context regression | `FullyQualifiedName~PriorSessionContextTests` | **11/11** |
+| Full guarded integration suite | Batch 3 guarded run with the verified dedicated SQL test catalog | **37/37**; this run preceded the additional hosted progression test, which passed separately in the updated 5/5 hosted suite |
+| Reaction SQL persistence/research-context suite | Guarded SQL run, repeated against the same dedicated database without reset | **10/10 twice**; includes schema, migration, persistence, replay, and immutability coverage |
+| Final solution build | `dotnet build MarketOpportunityEngine.sln --artifacts-path M:\temp\MarketOpportunityEngine-artifacts` | **Succeeded, 0 warnings, 0 errors** |
+| Documentation/status consistency | Checked README, PROJECT_STATUS, master specification, ADR-010, and current-status searches | **PASS**; Batch 3 COMPLETE, A.2.4b IN PROGRESS, Batch 4 NOT STARTED |
+
+During final verification, a safe environment preflight found `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` unset, so the guarded full integration suite and same-database SQL repeat were not rerun after adding the hosted-only progression test. Existing Batch 3 guarded SQL results remain passing; SQL production code was not changed afterward. A first hosted-only run found a false-positive UI assertion matching `BUY` inside a generated encoded token; the assertion was narrowed to the prohibited actionable phrase, and the complete updated hosted suite then passed **5/5**. The first regular-output test build was blocked by the already-running web process locking its DLLs; subsequent hosted tests and the final full solution build passed using isolated artifacts. No process was terminated, no live provider was used, and no database was reset.
+
+The documentation updates are Batch 3 status reconciliation only. Batch 4 has not been started; do not infer authorization for out-of-scope work from this completion record. Historical validation entries above remain unchanged.

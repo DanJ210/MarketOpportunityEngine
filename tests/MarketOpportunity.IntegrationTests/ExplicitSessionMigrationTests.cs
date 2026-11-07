@@ -12,6 +12,7 @@ public sealed class ExplicitSessionMigrationTests
     private const string TrackedReadinessMigrationId = "20261101120000_AddTrackedOpportunityReadiness";
     private const string MarketSituationMigrationId = "20261105120000_AddMarketSituationHistory";
     private const string MarketReactionMigrationId = "20261106120000_AddLevelInteractionReactionPersistence";
+    private const string MarketReactionResearchContextMigrationId = "20261106150000_AddMarketReactionResearchContext";
 
     [Fact]
     public async Task Clean_schema_accepts_explicit_session_migration()
@@ -30,14 +31,17 @@ public sealed class ExplicitSessionMigrationTests
                 Assert.Contains(TrackedReadinessMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(MarketSituationMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(MarketReactionMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(MarketReactionResearchContextMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 await context.Database.MigrateAsync();
             }
 
+            await RemoveMigrationHistoryEntryAsync(database.ConnectionString, MarketReactionResearchContextMigrationId);
             await RemoveMigrationHistoryEntryAsync(database.ConnectionString, MarketReactionMigrationId);
             await using (var context = CreateContext(database.ConnectionString))
             {
                 await context.Database.MigrateAsync();
                 Assert.Contains(MarketReactionMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(MarketReactionResearchContextMigrationId, await context.Database.GetAppliedMigrationsAsync());
             }
 
             await AssertSessionColumnsAndIndexesAsync(database.ConnectionString);
@@ -45,6 +49,7 @@ public sealed class ExplicitSessionMigrationTests
             await AssertTrackedReadinessSchemaAsync(database.ConnectionString);
             await AssertMarketSituationSchemaAsync(database.ConnectionString);
             await AssertMarketReactionSchemaAsync(database.ConnectionString);
+            await AssertMarketReactionResearchContextSchemaAsync(database.ConnectionString);
         }
         finally
         {
@@ -90,6 +95,7 @@ public sealed class ExplicitSessionMigrationTests
                 Assert.Contains(TrackedReadinessMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(MarketSituationMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(MarketReactionMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(MarketReactionResearchContextMigrationId, await context.Database.GetAppliedMigrationsAsync());
 
                 var marketEvent = await context.MarketEvents.AsNoTracking().SingleAsync(item => item.Id == eventId);
                 Assert.Equal("legacy-unknown", marketEvent.SessionId);
@@ -136,6 +142,7 @@ public sealed class ExplicitSessionMigrationTests
             await AssertTrackedReadinessSchemaAsync(database.ConnectionString);
             await AssertMarketSituationSchemaAsync(database.ConnectionString);
             await AssertMarketReactionSchemaAsync(database.ConnectionString);
+            await AssertMarketReactionResearchContextSchemaAsync(database.ConnectionString);
         }
         finally
         {
@@ -559,6 +566,59 @@ public sealed class ExplicitSessionMigrationTests
                     N'IX_market_reaction_assessment_ReactionType');
                 """;
             Assert.Equal(8, Convert.ToInt32(await indexesCommand.ExecuteScalarAsync()));
+        }
+    }
+
+    private static async Task AssertMarketReactionResearchContextSchemaAsync(string connectionString)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using (var columnsCommand = connection.CreateCommand())
+        {
+            columnsCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.columns AS c
+                INNER JOIN sys.tables AS t ON c.object_id = t.object_id
+                WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                  AND t.name = N'market_reaction_research_context'
+                  AND c.name IN (N'AssessmentId', N'EpisodeId', N'Symbol', N'SessionId', N'AsOfUtc', N'ContextJson');
+                """;
+            Assert.Equal(6, Convert.ToInt32(await columnsCommand.ExecuteScalarAsync()));
+        }
+
+        await using (var constraintsCommand = connection.CreateCommand())
+        {
+            constraintsCommand.CommandText =
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM sys.key_constraints AS k
+                     INNER JOIN sys.tables AS t ON k.parent_object_id = t.object_id
+                     WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                       AND t.name = N'market_reaction_research_context' AND k.type = N'PK')
+                  + (SELECT COUNT(*) FROM sys.foreign_keys AS fk
+                     INNER JOIN sys.tables AS t ON fk.parent_object_id = t.object_id
+                     WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                       AND t.name = N'market_reaction_research_context'
+                       AND fk.name = N'FK_market_reaction_research_context_market_reaction_assessment_AssessmentId');
+                """;
+            Assert.Equal(2, Convert.ToInt32(await constraintsCommand.ExecuteScalarAsync()));
+        }
+
+        await using (var indexesCommand = connection.CreateCommand())
+        {
+            indexesCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.indexes AS i
+                INNER JOIN sys.tables AS t ON i.object_id = t.object_id
+                WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                  AND t.name = N'market_reaction_research_context'
+                  AND i.name IN (
+                    N'IX_market_reaction_research_context_Symbol_SessionId_AsOfUtc',
+                    N'IX_market_reaction_research_context_EpisodeId');
+                """;
+            Assert.Equal(2, Convert.ToInt32(await indexesCommand.ExecuteScalarAsync()));
         }
     }
 

@@ -4,7 +4,7 @@ A .NET 10 modular-monolith decision-support scanner for US equities/ETFs. The ap
 
 ## Current milestone
 
-**Milestone A.2.4a - Structural Level Interaction: COMPLETE. A.2.4b - Structural Level Reaction Classification: IN PROGRESS (Batches 1-2 COMPLETE; Batch 3 NEXT / AUTHORIZED).** Batch 2 adds SQL persistence and conservative restart continuity for reaction episodes and immutable assessments. This persistence is not wired into production scanning or exposed through a reaction API/dashboard; that remains Batch 3 scope. See [PROJECT_STATUS.md](./PROJECT_STATUS.md), [ADR-010](./docs/adr/ADR-010-market-reaction-confirmation.md), and the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md#a24b-structural-level-reaction-classification).
+**Milestone A.2.4a - Structural Level Interaction: COMPLETE. A.2.4b - Structural Level Reaction Classification: IN PROGRESS (Batches 1-3 COMPLETE; Batch 4 NOT STARTED).** Batch 3 integrates the event-driven reaction tracker, conservative live restart handling, immutable descriptive research context, the reaction API, and the dashboard. Batch 4 remains the final regression/SQL/documentation/checkpoint closeout; it has not started. See [PROJECT_STATUS.md](./PROJECT_STATUS.md), [ADR-010](./docs/adr/ADR-010-market-reaction-confirmation.md), and the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md#a24b-structural-level-reaction-classification).
 
 ## Architecture overview
 
@@ -15,6 +15,7 @@ Recorded fixture (default) or optional read-only adapter
   -> event-time state and versioned features
      -> confirmed MarketStructure + eligible PriorSessionContext
         -> separate descriptive MarketSituation assessment
+           -> event-driven MarketReaction episodes + descriptive research context
      -> Momentum Continuation setup
         -> immutable opportunity and candidate TradePlan
            -> current publication-health projection
@@ -34,7 +35,7 @@ The versioned configuration keys are `Scanner:MarketSituation:TestZonePercent` a
 
 The current `scanner-config-v19` also adds `Scanner:MarketReaction:ConfirmationDistancePercent` (0.10%) and `Scanner:MarketReaction:MaxEpisodeDurationSeconds` (300 seconds). These are provisional development defaults, not market-calibrated. Confirmation requires a later eligible trade to clear the original pinned zone edge by the configured percentage; unresolved episodes expire at the event-time duration boundary. Changing these policy values requires a new scanner configuration version.
 
-Batch 2 persists lifecycle state in `level_interaction_episode` and immutable assessment history in `market_reaction_assessment` via `20261106120000_AddLevelInteractionReactionPersistence`. Without proven continuous observation, restoring an unresolved episode in its explicit session terminates it as `ContinuityUnknown`; post-restart prices cannot confirm it. Confirmed and expired episodes remain terminal history. The persistence/restore service is not connected to the production scanner lifecycle yet.
+Batch 2 persists lifecycle state in `level_interaction_episode` and immutable assessment history in `market_reaction_assessment` via `20261106120000_AddLevelInteractionReactionPersistence`. Batch 3 connects the tracker to event-batch processing and live restart: an unresolved restored episode becomes `ContinuityUnknown` before new observations can advance it. Health/publication ticks do not progress reactions. Support and resistance episodes may coexist; per-level interaction latches prevent duplicate starts while an interaction remains eligible. Research context is a separately versioned, immutable sidecar in `market_reaction_research_context`, added by `20261106150000_AddMarketReactionResearchContext`; its event-time feature and situation data are descriptive, not confirmation gates. The algorithm remains `market-reaction-v1`; Momentum and PreTradeReadiness behavior are unchanged. See [ADR-010](./docs/adr/ADR-010-market-reaction-confirmation.md).
 
 ## A.2.3a prior-session context
 
@@ -102,7 +103,7 @@ Both adapters are market-data-only. Neither selects broker permissions, accesses
 
 The app requires SQL Server persistence. Development startup creates a clean database schema with EF Core `EnsureCreated`; if the database already exists, it applies the available reviewed migrations. Existing event/session migration behavior labels legacy rows `legacy-unknown`, rather than inferring a session.
 
-Schema management is deliberately mixed: clean development schemas may use `EnsureCreated`; existing schemas use reviewed hand-written, idempotent migrations. The repository has no EF model snapshot or initial migration. Do not generate a model migration blindly; it may describe the entire model. Review the migration-generation strategy before changing this convention. The current TradePlan schema is introduced by an explicit migration, tracked-candidate/readiness tables (`tracked_opportunity`, `pre_trade_readiness_assessment`) by `20261101120000_AddTrackedOpportunityReadiness`, MarketSituation history by `20261105120000_AddMarketSituationHistory`, and A.2.4b episode/reaction history by `20261106120000_AddLevelInteractionReactionPersistence`. See [ADR-002](./docs/adr/ADR-002-ef-sqlserver-conventions.md), [ADR-006](./docs/adr/ADR-006-immutable-trade-plan-persistence.md), [ADR-008](./docs/adr/ADR-008-tracked-opportunity-readiness.md), [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md), and [ADR-010](./docs/adr/ADR-010-market-reaction-confirmation.md).
+Schema management is deliberately mixed: clean development schemas may use `EnsureCreated`; existing schemas use reviewed hand-written, idempotent migrations. The repository has no EF model snapshot or initial migration. Do not generate a model migration blindly; it may describe the entire model. Review the migration-generation strategy before changing this convention. The current TradePlan schema is introduced by an explicit migration, tracked-candidate/readiness tables (`tracked_opportunity`, `pre_trade_readiness_assessment`) by `20261101120000_AddTrackedOpportunityReadiness`, MarketSituation history by `20261105120000_AddMarketSituationHistory`, and A.2.4b episode/reaction history and research context by `20261106120000_AddLevelInteractionReactionPersistence` and `20261106150000_AddMarketReactionResearchContext`. See [ADR-002](./docs/adr/ADR-002-ef-sqlserver-conventions.md), [ADR-006](./docs/adr/ADR-006-immutable-trade-plan-persistence.md), [ADR-008](./docs/adr/ADR-008-tracked-opportunity-readiness.md), [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md), and [ADR-010](./docs/adr/ADR-010-market-reaction-confirmation.md).
 
 SQL integration tests use `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` (environment variable first, then the integration-test project's User Secrets) and accept only `localhost,1433` with the exact `MarketOpportunityEngine_IntegrationTests` catalog. They must never target the development or live-validation database. Independently verify the effective connection's catalog with a read-only SQL Server query before any SQL test command; the code guard does not replace this preflight. If the dedicated catalog must be initialized on the repository's local Compose SQL Server, the explicit `sqlserver-test-init` service in the `validation` profile creates it only if absent and verifies it without dropping or resetting catalogs; it preserves the live-validation catalog setup and persistent SQL volume. Do not point that service or the tests at another SQL Server, and stop if the exact approved target cannot be confirmed. Follow the guarded procedure and database checks in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#milestone-a22---sql-validation-closeout-2026-10-30).
 
@@ -153,15 +154,16 @@ The separate Alpaca connectivity test project makes a network connection when cr
 - `GET /api/v1/system/status`
 - `GET /api/v1/opportunities`
 - `GET /api/v1/opportunities/{id}`
+- `GET /api/v1/reactions?symbol={symbol}&sessionId={sessionId}` (both filters are optional; returns current scanner reaction projections)
 - `GET /api/v1/symbols/{symbol}/snapshot?sessionId={sessionId}` (`sessionId` is optional)
 - `GET /api/v1/symbols/{symbol}/prior-context?sessionId={sessionId}` (`sessionId` is optional)
 - `GET /api/v1/configuration/effective`
 
-Opportunity list and detail include the immutable analytical opportunity, current publication decision/reason, candidate TradePlan, and a `readiness` read model for the tracked candidate (tracked identity, pinned `PlanId`, readiness state/reason, context mode, current price, entry zone, distance to entry and its risk multiple, invalidation, Target 1, reward/risk, `AsOfUtc`, assessment version, and prior-context completeness when attached); `readiness` is null when no tracked candidate exists. The snapshot endpoint returns the versioned feature snapshot, including market-structure fields. `GET /api/v1/system/diagnostics` is available only in Development when opt-in validation diagnostics are enabled; it is not a normal status endpoint.
+Opportunity list and detail include the immutable analytical opportunity, current publication decision/reason, candidate TradePlan, a `readiness` read model for the tracked candidate, and current `marketReactions` with episode, assessment, and descriptive research context. `readiness` remains null when no tracked candidate exists. The reactions endpoint filters the current scanner projection by optional symbol/session and does not query historical SQL assessments. The snapshot endpoint returns the versioned feature snapshot, including market-structure fields. `GET /api/v1/system/diagnostics` is available only in Development when opt-in validation diagnostics are enabled; it is not a normal status endpoint.
 
 ## Dashboard
 
-The dashboard at `/` shows source/feed health and coverage, symbol/session analyses, setup classification and quality, freshness, evidence, contradictions, vetoes, and publication state/reason. Each opportunity has a primary **PRE-TRADE READINESS** section with the plain-language states Unavailable, Suspended, Watching, Setup Forming, Entry Area, Entry Ready ("Candidate entry conditions are aligned."), and No Longer Actionable, a compact explanation (current price, entry area, distance, invalidation, Target 1, reward/risk), and the context line (Prior Session + Today, or Today Only when prior-session history is unavailable or incomplete). Each opportunity also keeps the **TRADE PLAN** section displaying candidate geometry and plan status. Publication health can suspend presentation without rewriting immutable setup, plan, or readiness records.
+The dashboard at `/` shows source/feed health and coverage, symbol/session analyses, setup classification and quality, freshness, evidence, contradictions, vetoes, and publication state/reason. Each opportunity has a **MARKET REACTION** section showing reaction status/type, pinned level, event times, and descriptive research context; the UI explicitly states that context is not a confirmation gate or trading instruction. It also retains the primary **PRE-TRADE READINESS** section with the plain-language states Unavailable, Suspended, Watching, Setup Forming, Entry Area, Entry Ready ("Candidate entry conditions are aligned."), and No Longer Actionable, a compact explanation, and the context line. Each opportunity also keeps the **TRADE PLAN** section displaying candidate geometry and plan status. Publication health can suspend presentation without rewriting immutable setup, plan, readiness, or reaction history.
 
 ## Current analytical capabilities
 
@@ -189,7 +191,7 @@ A tracked candidate pins one immutable `PlanDefined` plan per symbol/session; th
 - The recorded fixture produces no confirmed structure, so it yields no tracked candidates; readiness reports no tracked candidate in fixture mode.
 - The `Scanner:PreTrade:ApproachDistanceRiskMultiple` default (1.0) is provisional and not market calibrated; it makes no profitability claim.
 - The scanner has no `PositionContext` and cannot infer whether a user entered a trade. `MANAGE`, `TAKE PROFIT`, and `EXIT` states are not implemented.
-- Breakout, VWAP reclaim/rejection, and failed-breakout setup classifiers are not implemented. A.2.4a reports only descriptive approaching/testing/crossed support and resistance. The A.2.4b offline reaction evaluator implements the six approved mechanical reactions, but is not yet integrated, persisted, exposed as a reaction API, or shown in the dashboard.
+- Breakout, VWAP reclaim/rejection, and failed-breakout setup classifiers are not implemented. A.2.4a reports descriptive approaching/testing/crossed support and resistance; A.2.4b separately classifies the six approved mechanical reactions without changing setup or readiness. Reaction research context is descriptive and does not label outcomes or imply profitability.
 - No historical event-read path, outcome labeling, backtesting, ML, or ONNX inference.
 - Raw vendor payloads are not persisted; normalized-event retention has occurred for local evaluation. See [ADR-004](./docs/adr/ADR-004-market-event-retention.md) before sustained research/backtesting/model-training use.
 - No exchange-calendar integration or full historical gap recovery; Massive has no reconnect behavior.
@@ -201,6 +203,6 @@ A tracked candidate pins one immutable `PlanDefined` plan per symbol/session; th
 - [Master specification and roadmap](./Market_Opportunity_Engine_Final_Master_Spec.md): authoritative product, architecture, and future contracts.
 - [PROJECT_STATUS.md](./PROJECT_STATUS.md): current checkpoint, completed slices, blockers, and immediate next step.
 - [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md): historical test, live-run, SQL, and browser validation evidence.
-- [docs/adr/](./docs/adr/): durable architecture decisions (ADR-001 through ADR-008).
+- [docs/adr/](./docs/adr/): durable architecture decisions (ADR-001 through ADR-010).
 - [docs/providers/](./docs/providers/): provider protocol references and current adapter limitations.
 - [scripts/](./scripts/): opt-in live validation tooling.

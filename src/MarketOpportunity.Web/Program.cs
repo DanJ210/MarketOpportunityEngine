@@ -91,6 +91,9 @@ builder.Services.AddSingleton<PreTradeReadinessTracker>();
 builder.Services.AddSingleton<FeatureCalculator>();
 builder.Services.AddSingleton<PriorSessionContextBuilder>();
 builder.Services.AddSingleton<MomentumContinuationDetector>();
+builder.Services.AddSingleton<MarketReactionEvaluator>();
+builder.Services.AddScoped<IMarketReactionStore, EfMarketReactionStore>();
+builder.Services.AddScoped<MarketReactionTracker>();
 var marketDataProvider = builder.Configuration["MarketData:Provider"] ?? "Fixture";
 var fixturePath = Path.Combine(builder.Environment.ContentRootPath, "Fixtures", "momentum-continuation.json");
 if (string.Equals(marketDataProvider, "Fixture", StringComparison.OrdinalIgnoreCase))
@@ -165,7 +168,8 @@ app.MapGet("/api/v1/opportunities", (ScannerState scanner) =>
             result.Publication,
             result.TradePlan,
             PreTradeReadinessReadModel.From(result),
-            result.MarketSituation))
+            result.MarketSituation,
+            result.MarketReactions))
         .OrderByDescending(result => result.Opportunity.AsOfUtc)
         .ThenBy(result => result.Opportunity.Symbol, StringComparer.Ordinal)
         .ThenBy(result => result.Opportunity.SessionId, StringComparer.Ordinal)
@@ -181,8 +185,20 @@ app.MapGet("/api/v1/opportunities/{id:guid}", (Guid id, ScannerState scanner) =>
             result.Publication,
             result.TradePlan,
             PreTradeReadinessReadModel.From(result),
-            result.MarketSituation));
+            result.MarketSituation,
+            result.MarketReactions));
 });
+app.MapGet("/api/v1/reactions", (string? symbol, string? sessionId, ScannerState scanner) =>
+    Results.Ok(scanner.Read().Results
+        .Where(result => symbol is null
+            || result.Features.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
+        .Where(result => sessionId is null
+            || result.Features.SessionId.Equals(sessionId, StringComparison.Ordinal))
+        .SelectMany(result => result.MarketReactions ?? [])
+        .OrderByDescending(reaction => reaction.Assessment.AsOfUtc)
+        .ThenBy(reaction => reaction.Assessment.Symbol, StringComparer.Ordinal)
+        .ThenBy(reaction => reaction.Assessment.SessionId, StringComparer.Ordinal)
+        .ToArray()));
 app.MapGet("/api/v1/symbols/{symbol}/snapshot", (string symbol, string? sessionId, ScannerState scanner) =>
 {
     var snapshots = scanner.Read().Results

@@ -13,6 +13,12 @@ public interface IMarketReactionStore
     Task PersistAsync(
         MarketReactionEvaluation evaluation,
         CancellationToken cancellationToken);
+
+    Task PersistAsync(
+        MarketReactionEvaluation evaluation,
+        MarketReactionResearchContext? researchContext,
+        CancellationToken cancellationToken) =>
+        PersistAsync(evaluation, cancellationToken);
 }
 
 public sealed class MarketReactionContinuityService(

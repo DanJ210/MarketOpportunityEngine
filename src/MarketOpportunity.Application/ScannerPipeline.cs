@@ -69,14 +69,16 @@ public sealed record ScannerAnalysisResult(
     TradePlan TradePlan,
     PriorSessionContextView? PriorSessionContext = null,
     PreTradeReadinessProjection? Readiness = null,
-    MarketSituationAssessment? MarketSituation = null);
+    MarketSituationAssessment? MarketSituation = null,
+    IReadOnlyList<MarketReactionReadModel>? MarketReactions = null);
 
 public sealed record OpportunityPublicationReadModel(
     Opportunity Opportunity,
     PublicationDecision Publication,
     TradePlan TradePlan,
     PreTradeReadinessReadModel? Readiness = null,
-    MarketSituationAssessment? MarketSituation = null);
+    MarketSituationAssessment? MarketSituation = null,
+    IReadOnlyList<MarketReactionReadModel>? MarketReactions = null);
 
 public sealed record ScannerReadModel(
     ScannerStatus Status,
@@ -266,7 +268,8 @@ public sealed class ScannerPipeline(
     IOpportunityPublicationGate? publicationGate = null,
     PreTradeReadinessTracker? readinessTracker = null,
     IPreTradeReadinessStore? readinessStore = null,
-    IMarketSituationStore? marketSituationStore = null)
+    IMarketSituationStore? marketSituationStore = null,
+    MarketReactionTracker? marketReactionTracker = null)
 {
     private static readonly TimeSpan LiveAnalysisInterval = TimeSpan.FromSeconds(5);
     private readonly TradePlanBuilder _tradePlanBuilder = new();
@@ -381,6 +384,17 @@ public sealed class ScannerPipeline(
                 await marketSituationStore.PersistAsync(marketSituation, cancellationToken);
             }
 
+            var marketReactions = marketReactionTracker is null
+                ? null
+                : await marketReactionTracker.ObserveAsync(
+                    marketSituation,
+                    stateEvents,
+                    configuration,
+                    assessment => CaptureReactionResearchContext(
+                        assessment,
+                        symbolState,
+                        priorContext),
+                    cancellationToken);
             results.Add(key, new ScannerAnalysisResult(
                 snapshot,
                 opportunity,
@@ -388,7 +402,8 @@ public sealed class ScannerPipeline(
                 tradePlan,
                 priorContext,
                 readinessEvaluation?.Projection,
-                marketSituation));
+                marketSituation,
+                marketReactions));
         }
 
         state.SetResults(
@@ -676,6 +691,14 @@ public sealed class ScannerPipeline(
                     var key = (marketEvent.Symbol, marketEvent.SessionId);
                     if (!states.TryGetValue(key, out var symbolState))
                     {
+                        if (marketReactionTracker is not null)
+                        {
+                            await marketReactionTracker.RestoreAfterRestartAsync(
+                                marketEvent.SessionId,
+                                marketEvent.Symbol,
+                                persistenceCancellation.Token);
+                        }
+
                         symbolState = new SymbolEventState(
                             marketEvent.Symbol,
                             marketEvent.SessionId,
@@ -789,6 +812,7 @@ public sealed class ScannerPipeline(
                 }
 
                 var persistenceStart = timeProvider.GetTimestamp();
+                IReadOnlyList<MarketReactionReadModel>? marketReactions = null;
                 try
                 {
                     await store.PersistRunAsync(
@@ -809,6 +833,18 @@ public sealed class ScannerPipeline(
                     {
                         await marketSituationStore.PersistAsync(
                             marketSituation,
+                            persistenceCancellation.Token);
+                    }
+                    if (marketReactionTracker is not null)
+                    {
+                        marketReactions = await marketReactionTracker.ObserveAsync(
+                            marketSituation,
+                            batch,
+                            configuration,
+                            assessment => CaptureReactionResearchContext(
+                                assessment,
+                                symbolState,
+                                priorContext),
                             persistenceCancellation.Token);
                     }
                 }
@@ -839,7 +875,8 @@ public sealed class ScannerPipeline(
                     tradePlan,
                     priorContext,
                     readinessEvaluation?.Projection,
-                    marketSituation);
+                    marketSituation,
+                    marketReactions);
             }
 
             lock (statusSync)
@@ -1008,5 +1045,47 @@ public sealed class ScannerPipeline(
         ArgumentException.ThrowIfNullOrWhiteSpace(marketEvent.Symbol);
         ArgumentException.ThrowIfNullOrWhiteSpace(marketEvent.SessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(marketEvent.Provider);
+    }
+
+    private MarketReactionResearchContext CaptureReactionResearchContext(
+        MarketReactionAssessment assessment,
+        SymbolEventState symbolState,
+        PriorSessionContextView? priorContext)
+    {
+        var features = featureCalculator.Calculate(
+            symbolState,
+            assessment.AsOfUtc,
+            configuration,
+            source.Capabilities);
+        var opportunity = detector.Evaluate(features, configuration);
+        var marketSituation = _marketSituationEvaluator.Evaluate(
+            features,
+            symbolState.GetEventsAsOf(assessment.AsOfUtc),
+            priorContext,
+            configuration,
+            assessment.AsOfUtc);
+        return new MarketReactionResearchContext(
+            assessment.AsOfUtc,
+            features.Id,
+            features.FeatureSetVersion,
+            features.ReferencePrice,
+            features.SessionVwap,
+            features.ShortHorizonReturnPercent,
+            features.SecondaryHorizonReturnPercent,
+            features.ShortHorizonVolume,
+            features.ShortHorizonDollarVolumeUsd,
+            features.ShortHorizonDollarVolumeStatus,
+            features.SpreadBasisPoints,
+            features.SessionTrendDirection,
+            features.SessionPriceStructure,
+            features.DataQuality,
+            features.HasRequiredData,
+            features.HasCompleteSessionData,
+            opportunity.Classification,
+            opportunity.QualityScore,
+            marketSituation.Status,
+            marketSituation.ContextMode,
+            features.MarketData.Provider,
+            features.MarketData.Feed);
     }
 }

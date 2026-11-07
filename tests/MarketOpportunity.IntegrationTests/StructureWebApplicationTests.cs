@@ -1,6 +1,7 @@
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using MarketOpportunity.Analytics;
 using MarketOpportunity.Application;
 using MarketOpportunity.Domain;
 using Microsoft.AspNetCore.Hosting;
@@ -65,6 +66,15 @@ public sealed class StructureWebApplicationTests
                     or "PriorSwingLow" or "PriorSessionHigh" or "PriorSessionLow");
         }
 
+        using (var reactionsResponse = await client.GetAsync(
+                   "/api/v1/reactions?symbol=MOE&sessionId=fixture-2026-10-22",
+                   timeout.Token))
+        using (var json = JsonDocument.Parse(await reactionsResponse.Content.ReadAsStringAsync(timeout.Token)))
+        {
+            Assert.Equal(HttpStatusCode.OK, reactionsResponse.StatusCode);
+            Assert.Equal(JsonValueKind.Array, json.RootElement.ValueKind);
+        }
+
         using (var priorResponse = await client.GetAsync(
                    "/api/v1/symbols/MOE/prior-context?sessionId=fixture-2026-10-23",
                    timeout.Token))
@@ -120,6 +130,8 @@ public sealed class StructureWebApplicationTests
         Assert.Contains("PRIOR SESSION", html);
         Assert.Contains("PRE-TRADE READINESS", html);
         Assert.Contains("MARKET SITUATION", html);
+        Assert.Contains("MARKET REACTION", html);
+        Assert.Contains("Research context is descriptive", html);
         Assert.Contains("No tracked candidate opportunity", html);
         Assert.Contains("Support and resistance are historical reference areas, not guarantees.", html);
         Assert.Contains("Insufficient", html);
@@ -128,6 +140,114 @@ public sealed class StructureWebApplicationTests
         Assert.DoesNotContain("Sell now", html);
         Assert.DoesNotContain("Short now", html);
         Assert.DoesNotContain("Guaranteed", html);
+    }
+
+    [Fact]
+    public async Task Hosted_live_restart_marks_restored_episode_continuity_unknown_before_new_observations()
+    {
+        var reactionStore = new InMemoryReactionStore();
+        reactionStore.Seed(StructureApplicationFactory.CreateActiveEpisode());
+        await using var factory = new StructureApplicationFactory(
+            useRestartSource: true,
+            reactionStore: reactionStore);
+        using var client = factory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+        JsonDocument? responseJson = null;
+        while (!timeout.IsCancellationRequested)
+        {
+            responseJson?.Dispose();
+            using var response = await client.GetAsync(
+                "/api/v1/reactions?symbol=RSTART&sessionId=restart-session",
+                timeout.Token);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            responseJson = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+            if (responseJson.RootElement.GetArrayLength() > 0)
+            {
+                break;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token);
+        }
+
+        Assert.NotNull(responseJson);
+        using (responseJson)
+        {
+            var reaction = Assert.Single(responseJson.RootElement.EnumerateArray());
+            Assert.Equal("ContinuityUnknown", reaction.GetProperty("assessment").GetProperty("status").GetString());
+            Assert.Equal("restart-session", reaction.GetProperty("assessment").GetProperty("sessionId").GetString());
+            Assert.Equal(JsonValueKind.Null, reaction.GetProperty("assessment").GetProperty("reaction").ValueKind);
+        }
+
+        using var wrongSession = await client.GetAsync(
+            "/api/v1/reactions?symbol=RSTART&sessionId=other-session",
+            timeout.Token);
+        using var wrongSessionJson = JsonDocument.Parse(await wrongSession.Content.ReadAsStringAsync(timeout.Token));
+        Assert.Empty(wrongSessionJson.RootElement.EnumerateArray());
+        Assert.Contains(
+            reactionStore.Persisted,
+            evaluation => evaluation.Episode.Status == MarketReactionEpisodeStatus.ContinuityUnknown);
+    }
+
+    [Fact]
+    public async Task Hosted_pipeline_confirms_reaction_and_exposes_event_time_research_context()
+    {
+        await using var factory = new StructureApplicationFactory(useReactionSource: true);
+        using var client = factory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        JsonDocument? reactionsJson = null;
+        while (!timeout.IsCancellationRequested)
+        {
+            reactionsJson?.Dispose();
+            using var response = await client.GetAsync(
+                "/api/v1/reactions?symbol=REACTION&sessionId=reaction-session",
+                timeout.Token);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            reactionsJson = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+            if (reactionsJson.RootElement.EnumerateArray().Any(reaction =>
+                    reaction.GetProperty("assessment").GetProperty("status").GetString() == "Confirmed"))
+            {
+                break;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token);
+        }
+
+        Assert.NotNull(reactionsJson);
+        DateTimeOffset reactionAtUtc;
+        using (reactionsJson)
+        {
+            var reaction = Assert.Single(reactionsJson.RootElement.EnumerateArray());
+            var assessment = reaction.GetProperty("assessment");
+            Assert.Equal("Confirmed", assessment.GetProperty("status").GetString());
+            Assert.Equal("SupportHeld", assessment.GetProperty("reaction").GetString());
+            Assert.Equal(100.3m, assessment.GetProperty("reactionPrice").GetDecimal());
+            reactionAtUtc = assessment.GetProperty("reactionAtUtc").GetDateTimeOffset();
+            Assert.Equal(new DateTimeOffset(2026, 11, 6, 18, 30, 1, TimeSpan.Zero), reactionAtUtc);
+            var researchContext = reaction.GetProperty("researchContext");
+            Assert.Equal(
+                "market-reaction-research-context-v1",
+                researchContext.GetProperty("definitionVersion").GetString());
+            Assert.Equal(reactionAtUtc, researchContext.GetProperty("asOfUtc").GetDateTimeOffset());
+            Assert.Equal("features-v16", researchContext.GetProperty("featureSetVersion").GetString());
+            Assert.Equal("Available", researchContext.GetProperty("marketSituationStatus").GetString());
+        }
+
+        using (var opportunitiesResponse = await client.GetAsync("/api/v1/opportunities", timeout.Token))
+        using (var opportunitiesJson = JsonDocument.Parse(
+                   await opportunitiesResponse.Content.ReadAsStringAsync(timeout.Token)))
+        {
+            Assert.Equal(HttpStatusCode.OK, opportunitiesResponse.StatusCode);
+            var opportunity = Assert.Single(opportunitiesJson.RootElement.EnumerateArray());
+            var reaction = Assert.Single(opportunity.GetProperty("marketReactions").EnumerateArray());
+            Assert.Equal(reactionAtUtc,
+                reaction.GetProperty("assessment").GetProperty("reactionAtUtc").GetDateTimeOffset());
+        }
+
+        var html = await client.GetStringAsync("/", timeout.Token);
+        Assert.Contains("Support Held", html);
+        Assert.Contains("Research context at", html);
+        Assert.Contains("Research context is descriptive", html);
     }
 
     [Fact]
@@ -278,25 +398,57 @@ public sealed class StructureWebApplicationTests
         var html = await client.GetStringAsync("/", timeout.Token);
         Assert.Contains("Approaching Support", html);
         Assert.Contains("Approaching Resistance", html);
-        Assert.DoesNotContain("BUY", html, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("SELL", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Buy now", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Sell now", html, StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class StructureApplicationFactory : WebApplicationFactory<Program>
     {
         private readonly bool _useFixtureSource;
         private readonly bool _simultaneousSituationSource;
+        private readonly bool _useRestartSource;
+        private readonly bool _useReactionSource;
+        private readonly InMemoryReactionStore _reactionStore;
 
         public StructureApplicationFactory(
             bool useFixtureSource = false,
-            bool simultaneousSituationSource = false)
+            bool simultaneousSituationSource = false,
+            bool useRestartSource = false,
+            bool useReactionSource = false,
+            InMemoryReactionStore? reactionStore = null)
         {
             _useFixtureSource = useFixtureSource;
             _simultaneousSituationSource = simultaneousSituationSource;
+            _useRestartSource = useRestartSource;
+            _useReactionSource = useReactionSource;
+            _reactionStore = reactionStore ?? new InMemoryReactionStore();
         }
 
-        private static string WebProjectPath => Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "MarketOpportunity.Web"));
+        private static string WebProjectPath
+        {
+            get
+            {
+                var webOutput = Path.GetDirectoryName(typeof(Program).Assembly.Location);
+                if (webOutput is not null && Directory.Exists(Path.Combine(webOutput, "Fixtures")))
+                {
+                    return webOutput;
+                }
+
+                return new[] { Environment.CurrentDirectory, AppContext.BaseDirectory }
+                    .SelectMany(AncestorDirectories)
+                    .Select(directory => Path.Combine(directory, "src", "MarketOpportunity.Web"))
+                    .FirstOrDefault(Directory.Exists)
+                    ?? throw new DirectoryNotFoundException("Could not locate src/MarketOpportunity.Web for the hosted test.");
+            }
+        }
+
+        private static IEnumerable<string> AncestorDirectories(string path)
+        {
+            for (var directory = new DirectoryInfo(path); directory is not null; directory = directory.Parent)
+            {
+                yield return directory.FullName;
+            }
+        }
 
         public CapturingStore Store { get; } = new();
 
@@ -319,7 +471,19 @@ public sealed class StructureWebApplicationTests
                 configuration.AddInMemoryCollection(Settings()));
             builder.ConfigureServices(services =>
             {
-                if (!_useFixtureSource)
+                if (_useReactionSource)
+                {
+                    services.RemoveAll<IMarketDataSource>();
+                    services.AddSingleton<IMarketDataSource>(new ReactionMarketDataSource());
+                    services.RemoveAll<IPriorSessionContextProvider>();
+                    services.AddSingleton<IPriorSessionContextProvider>(new CompletePriorSessionContextProvider());
+                }
+                else if (_useRestartSource)
+                {
+                    services.RemoveAll<IMarketDataSource>();
+                    services.AddSingleton<IMarketDataSource>(new RestartMarketDataSource());
+                }
+                else if (!_useFixtureSource)
                 {
                     services.RemoveAll<IMarketDataSource>();
                     services.AddScoped<IMarketDataSource>(_ =>
@@ -331,7 +495,59 @@ public sealed class StructureWebApplicationTests
                 services.AddSingleton<IPreTradeReadinessStore>(ReadinessStore);
                 services.RemoveAll<IMarketSituationStore>();
                 services.AddSingleton<IMarketSituationStore>(MarketSituationStore);
+                services.RemoveAll<IMarketReactionStore>();
+                services.AddSingleton<IMarketReactionStore>(_reactionStore);
             });
+        }
+
+        public static MarketReactionEvaluation CreateActiveEpisode()
+        {
+            var start = new DateTimeOffset(2026, 11, 6, 18, 30, 0, TimeSpan.Zero);
+            var configuration = new ScannerConfiguration();
+            var level = new ImportantPriceLevel(
+                Guid.NewGuid(),
+                "RSTART",
+                "restart-session",
+                "restart-session",
+                100m,
+                ImportantPriceLevelRole.Support,
+                ImportantPriceLevelSource.CurrentSwingLow,
+                Guid.NewGuid(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                MarketSituationContextMode.CurrentSessionOnly,
+                "Complete current-session retained event history",
+                null,
+                null,
+                null,
+                "market-structure-v1",
+                "features-v16",
+                null);
+            var interaction = new MarketSituationInteraction(
+                MarketSituationType.TestingSupport,
+                level,
+                99.9m,
+                100.1m,
+                0m,
+                0m,
+                0m,
+                0m,
+                0m);
+            var startObservation = new TradeEvent(
+                "RSTART",
+                "restart-session",
+                start,
+                start,
+                "UnitTest",
+                "restart-start",
+                100.05m,
+                10);
+            var evaluator = new MarketReactionEvaluator();
+            var episode = evaluator.StartEpisode(interaction, startObservation, configuration);
+            return evaluator.Evaluate(episode, [], start);
         }
 
         private static Dictionary<string, string?> Settings() => new()
@@ -389,6 +605,153 @@ public sealed class StructureWebApplicationTests
         {
             Persisted.Add(assessment);
             return Task.CompletedTask;
+        }
+
+    }
+
+    private sealed class InMemoryReactionStore : IMarketReactionStore
+    {
+        private readonly Dictionary<Guid, LevelInteractionEpisode> _episodes = [];
+
+        public List<MarketReactionEvaluation> Persisted { get; } = [];
+        public Dictionary<Guid, MarketReactionResearchContext?> ResearchContexts { get; } = [];
+
+        public void Seed(MarketReactionEvaluation evaluation) =>
+            _episodes.Add(evaluation.Episode.Id, evaluation.Episode);
+
+        public Task<IReadOnlyList<LevelInteractionEpisode>> RestoreActiveEpisodesAsync(
+            string sessionId,
+            IReadOnlyCollection<string>? symbols,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<LevelInteractionEpisode>>(_episodes.Values
+                .Where(item => item.Status == MarketReactionEpisodeStatus.Active
+                    && item.SessionId == sessionId
+                    && (symbols is null || symbols.Contains(item.Symbol, StringComparer.OrdinalIgnoreCase)))
+                .ToArray());
+
+        public Task PersistAsync(
+            MarketReactionEvaluation evaluation,
+            CancellationToken cancellationToken)
+        {
+            _episodes[evaluation.Episode.Id] = evaluation.Episode;
+            Persisted.Add(evaluation);
+            return Task.CompletedTask;
+        }
+
+        public Task PersistAsync(
+            MarketReactionEvaluation evaluation,
+            MarketReactionResearchContext? researchContext,
+            CancellationToken cancellationToken)
+        {
+            ResearchContexts[evaluation.Assessment.Id] = researchContext;
+            return PersistAsync(evaluation, cancellationToken);
+        }
+    }
+
+    private sealed class CompletePriorSessionContextProvider : IPriorSessionContextProvider
+    {
+        public Task<PriorSessionContextView> GetContextAsync(
+            string symbol,
+            string currentSessionId,
+            DateTimeOffset currentEventTimeUtc,
+            decimal? currentReferencePrice,
+            CancellationToken cancellationToken)
+        {
+            var priorStart = currentEventTimeUtc.AddDays(-1);
+            var priorEnd = priorStart.AddHours(6);
+            var context = new PriorSessionContext(
+                Guid.NewGuid(),
+                symbol,
+                currentSessionId,
+                "reaction-prior-session",
+                priorStart,
+                priorEnd,
+                110m,
+                100m,
+                105m,
+                priorEnd,
+                PriorSessionCloseSemantics.LastEligibleTradeAtOrBeforeSessionEnd,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                MarketStructureState.Insufficient,
+                [],
+                [],
+                PriorSessionContextStatus.Available,
+                "Complete synthetic prior-session context for hosted reaction coverage.",
+                new MarketDataCapabilities(
+                    "RecordedFixture", "Synthetic", MarketDataCoverage.Synthetic, false, true, true),
+                "synthetic-prior-history",
+                priorStart,
+                priorEnd,
+                true,
+                true,
+                false,
+                "prior-session-context-v1");
+            return Task.FromResult(new PriorSessionContextView(
+                context,
+                currentReferencePrice,
+                null,
+                currentReferencePrice is { } referencePrice
+                    ? new PriceDistance(referencePrice, 100m, Math.Abs(referencePrice - 100m), null)
+                    : null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null));
+        }
+    }
+
+    private sealed class ReactionMarketDataSource : ILiveMarketDataSource
+    {
+        public MarketDataCapabilities Capabilities { get; } =
+            new("RecordedFixture", "Synthetic", MarketDataCoverage.Synthetic, false, true, true);
+
+        public async IAsyncEnumerable<MarketEvent> ReadEventsAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var start = new DateTimeOffset(2026, 11, 6, 18, 30, 0, TimeSpan.Zero);
+            yield return new TradeEvent(
+                "REACTION", "reaction-session", start, start, "RecordedFixture", "reaction-start", 100.05m, 10);
+            await Task.Delay(TimeSpan.FromSeconds(6), cancellationToken);
+            yield return new TradeEvent(
+                "REACTION", "reaction-session", start.AddSeconds(1), start.AddSeconds(1),
+                "RecordedFixture", "reaction-confirm", 100.3m, 10);
+            yield return new QuoteEvent(
+                "REACTION", "reaction-session", start.AddSeconds(2), start.AddSeconds(2),
+                "RecordedFixture", "reaction-final-quote", 100.04m, 100.06m, 100, 100);
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class RestartMarketDataSource : ILiveMarketDataSource
+    {
+        public MarketDataCapabilities Capabilities { get; } =
+            new("RecordedFixture", "Synthetic", MarketDataCoverage.Synthetic, false, true, true);
+
+        public async IAsyncEnumerable<MarketEvent> ReadEventsAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var eventTime = new DateTimeOffset(2026, 11, 6, 18, 30, 1, TimeSpan.Zero);
+            yield return new TradeEvent(
+                "RSTART",
+                "restart-session",
+                eventTime,
+                eventTime,
+                "RecordedFixture",
+                "restart-after",
+                100.05m,
+                10);
+            await Task.CompletedTask;
         }
     }
 

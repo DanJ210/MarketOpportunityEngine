@@ -48,19 +48,39 @@ public sealed class EfMarketReactionStore(MarketOpportunityDbContext dbContext) 
 
     public async Task PersistAsync(
         MarketReactionEvaluation evaluation,
+        CancellationToken cancellationToken) =>
+        await PersistAsync(evaluation, null, cancellationToken);
+
+    public async Task PersistAsync(
+        MarketReactionEvaluation evaluation,
+        MarketReactionResearchContext? researchContext,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(evaluation);
         ValidateEvaluation(evaluation);
+        if (researchContext is not null
+            && !researchContext.AsOfUtc.EqualsExact(evaluation.Assessment.AsOfUtc))
+        {
+            throw new ArgumentException(
+                "Reaction research context must use the assessment's exact event time.",
+                nameof(researchContext));
+        }
 
         var episode = evaluation.Episode;
         var assessment = evaluation.Assessment;
         var episodeJson = JsonSerializer.Serialize(episode, JsonOptions);
         var assessmentJson = JsonSerializer.Serialize(assessment, JsonOptions);
+        var contextJson = researchContext is null
+            ? null
+            : JsonSerializer.Serialize(researchContext, JsonOptions);
         var episodeEntity = await dbContext.LevelInteractionEpisodes
             .SingleOrDefaultAsync(item => item.Id == episode.Id, cancellationToken);
         var assessmentEntity = await dbContext.MarketReactionAssessments
             .SingleOrDefaultAsync(item => item.Id == assessment.Id, cancellationToken);
+        var contextEntity = researchContext is null
+            ? null
+            : await dbContext.MarketReactionResearchContexts
+                .SingleOrDefaultAsync(item => item.AssessmentId == assessment.Id, cancellationToken);
 
         LevelInteractionEpisode? previousEpisode = null;
         if (episodeEntity is not null)
@@ -74,6 +94,13 @@ public sealed class EfMarketReactionStore(MarketOpportunityDbContext dbContext) 
         {
             throw new InvalidOperationException(
                 $"Market reaction assessment '{assessment.Id}' is immutable and already has different values.");
+        }
+
+        if (contextEntity is not null
+            && !string.Equals(contextEntity.ContextJson, contextJson, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Market reaction research context for assessment '{assessment.Id}' is immutable and already has different values.");
         }
 
         if (assessment.Reaction is not null
@@ -101,6 +128,18 @@ public sealed class EfMarketReactionStore(MarketOpportunityDbContext dbContext) 
         if (assessmentEntity is null)
         {
             dbContext.MarketReactionAssessments.Add(ToEntity(assessment, assessmentJson));
+        }
+        if (researchContext is not null && contextEntity is null)
+        {
+            dbContext.MarketReactionResearchContexts.Add(new MarketReactionResearchContextEntity
+            {
+                AssessmentId = assessment.Id,
+                EpisodeId = assessment.EpisodeId,
+                Symbol = assessment.Symbol,
+                SessionId = assessment.SessionId,
+                AsOfUtc = assessment.AsOfUtc,
+                ContextJson = contextJson!
+            });
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
