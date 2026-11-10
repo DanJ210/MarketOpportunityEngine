@@ -27,6 +27,29 @@ main { width: 100%; }
 .feed-stale .status-dot { background: #c83d3d; }
 .feed-error { color: #8a2929; border-color: #edc2c2; background: #fff5f4; }
 .feed-error .status-dot { background: #c83d3d; }
+.symbol-overview { margin: 0 0 22px; }
+.symbol-overview h2 { margin: 0 0 10px; font-size: 13px; letter-spacing: .8px; }
+.symbol-overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 10px; }
+.symbol-overview-card { display: flex; min-width: 0; flex-direction: column; gap: 5px; padding: 12px 14px; border: 1px solid #dfe6eb; border-left: 4px solid #82909b; border-radius: 9px; background: #fff; color: #17212b; text-decoration: none; box-shadow: 0 3px 12px #19374b0a; }
+.symbol-overview-card:hover { border-color: #9aaab5; box-shadow: 0 4px 14px #19374b18; }
+.symbol-overview-card:focus-visible { outline: 3px solid #176b9b; outline-offset: 2px; }
+.symbol-overview-card > strong { overflow: hidden; font-size: 16px; text-overflow: ellipsis; }
+.symbol-overview-status { font-size: 12px; font-weight: 800; letter-spacing: .35px; }
+.symbol-overview-session { overflow: hidden; color: #657580; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.symbol-overview-context { overflow: hidden; color: #536471; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.overview-positive { border-left-color: #167a56; }
+.overview-positive .symbol-overview-status { color: #126a49; }
+.overview-attention { border-left-color: #287c91; }
+.overview-attention .symbol-overview-status { color: #176078; }
+.overview-caution { border-left-color: #c58a16; }
+.overview-caution .symbol-overview-status { color: #835c00; }
+.overview-suspended { border-left-color: #bd3434; background: #fff8f7; }
+.overview-suspended .symbol-overview-status { color: #8a2929; }
+.overview-neutral { border-left-color: #82909b; }
+.overview-neutral .symbol-overview-status { color: #4b5c68; }
+.overview-muted { border-left-color: #a4afb7; background: #f8fafb; }
+.overview-muted .symbol-overview-status { color: #536471; }
+.symbol-overview-empty { margin: 0; padding: 12px 14px; border: 1px solid #dfe6eb; border-radius: 9px; color: #536471; background: #fff; font-size: 13px; }
 .summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
 .metric-card, .opportunity-card, .empty-state { border: 1px solid #dfe6eb; border-radius: 12px; background: #fff; box-shadow: 0 3px 12px #19374b0a; }
 .metric-card { padding: 18px; }

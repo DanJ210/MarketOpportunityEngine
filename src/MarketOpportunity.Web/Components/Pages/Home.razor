@@ -37,6 +37,10 @@
 
     @if (_results.Count == 0)
     {
+        <section class="symbol-overview" aria-labelledby="symbol-overview-heading">
+            <h2 id="symbol-overview-heading">SYMBOL OVERVIEW</h2>
+            <p class="symbol-overview-empty" role="status">No symbols are currently available in the scanner.</p>
+        </section>
         <div class="empty-state" role="status">
             <h2>@(_status.Source != "Fixture" ? "Waiting for live market data" : "Waiting for fixture analysis")</h2>
             <p>@(_status.Message ?? (_status.Source == "Fixture"
@@ -69,13 +73,33 @@
             </article>
         </section>
 
+        <section class="symbol-overview" aria-labelledby="symbol-overview-heading">
+            <h2 id="symbol-overview-heading">SYMBOL OVERVIEW</h2>
+            <div class="symbol-overview-grid">
+                @foreach (var tile in _overview)
+                {
+                    <a class="symbol-overview-card @tile.StatusClass"
+                       href="#@tile.DetailAnchor"
+                       aria-label="@OverviewAccessibleLabel(tile)">
+                        <strong>@tile.Result.Opportunity.Symbol</strong>
+                        <span class="symbol-overview-status">@tile.PrimaryStatus</span>
+                        <small class="symbol-overview-session">Session @tile.Result.Opportunity.SessionId</small>
+                        @if (tile.SecondaryContext is not null)
+                        {
+                            <span class="symbol-overview-context">@tile.SecondaryContext</span>
+                        }
+                    </a>
+                }
+            </div>
+        </section>
+
         <section class="opportunity-list" aria-label="Symbol and session analyses">
             @foreach (var result in _results.OrderBy(item => item.Opportunity.SessionId, StringComparer.Ordinal)
                 .ThenBy(item => item.Opportunity.Symbol, StringComparer.Ordinal))
             {
                 var opportunity = result.Opportunity;
                 var features = result.Features;
-                <article class="opportunity-card" @key="opportunity.Id">
+                <article class="opportunity-card" id="@DetailAnchorFor(result)" @key="opportunity.Id">
                     <header class="opportunity-heading">
                         <div>
                             <p class="eyebrow">SETUP · @opportunity.SetupType</p>
@@ -514,7 +538,7 @@
         </section>
     }
 
-    <p class="disclaimer">Read-only market-data analysis. A setup quality score is not a probability of profit or a trading recommendation.</p>
+    <p class="disclaimer">Read-only market-data analysis. A setup quality score is descriptive and is not a trading recommendation.</p>
 </section>
 
 @code {
@@ -526,7 +550,15 @@
         null,
         Capabilities: MarketDataCapabilities.Unknown);
     private IReadOnlyList<ScannerAnalysisResult> _results = [];
+    private IReadOnlyList<SymbolOverviewTile> _overview = [];
     private IJSObjectReference? _localTimeModule;
+
+    private sealed record SymbolOverviewTile(
+        ScannerAnalysisResult Result,
+        string DetailAnchor,
+        string PrimaryStatus,
+        string StatusClass,
+        string? SecondaryContext);
 
     private string FeedClass => _status.FeedStatus switch
     {
@@ -578,6 +610,84 @@
         var result = Scanner.Read();
         _status = result.Status;
         _results = result.Results;
+        _overview = BuildOverview(_results);
+    }
+
+    private static IReadOnlyList<SymbolOverviewTile> BuildOverview(
+        IReadOnlyList<ScannerAnalysisResult> results) =>
+        results
+            .OrderBy(item => item.Opportunity.SessionId, StringComparer.Ordinal)
+            .ThenBy(item => item.Opportunity.Symbol, StringComparer.Ordinal)
+            .GroupBy(item => (item.Opportunity.Symbol, item.Opportunity.SessionId))
+            .Select(group => group.First())
+            .Select(result =>
+            {
+                var (status, statusClass) = OverviewPrimaryStatus(result);
+                return new SymbolOverviewTile(
+                    result,
+                    CreateDetailAnchor(result.Opportunity.Symbol, result.Opportunity.SessionId),
+                    status,
+                    statusClass,
+                    OverviewSecondaryContext(result));
+            })
+            .ToArray();
+
+    private static (string Status, string StatusClass) OverviewPrimaryStatus(ScannerAnalysisResult result)
+    {
+        if (result.Publication.State == OpportunityLifecycleState.Suspended)
+        {
+            return ("SUSPENDED", "overview-suspended");
+        }
+
+        if (result.Readiness is not { } readiness
+            || readiness.Assessment.Reason == PreTradeReadinessReason.NoTrackedOpportunity)
+        {
+            return ("NO TRACKED CANDIDATE", "overview-muted");
+        }
+
+        var state = readiness.Assessment.State;
+        var statusClass = state switch
+        {
+            PreTradeReadinessState.EntryReady => "overview-positive",
+            PreTradeReadinessState.EntryZoneActive => "overview-attention",
+            PreTradeReadinessState.SetupForming => "overview-caution",
+            PreTradeReadinessState.Suspended => "overview-suspended",
+            PreTradeReadinessState.Unavailable or PreTradeReadinessState.NoLongerActionable => "overview-muted",
+            _ => "overview-neutral"
+        };
+        return (ReadinessLabel(state), statusClass);
+    }
+
+    private static string? OverviewSecondaryContext(ScannerAnalysisResult result)
+    {
+        var latestReaction = result.MarketReactions?
+            .OrderByDescending(item => item.Assessment.AsOfUtc)
+            .FirstOrDefault();
+        if (latestReaction is not null)
+        {
+            return latestReaction.Assessment.Status == MarketReactionStatus.Confirmed
+                && latestReaction.Assessment.Reaction is { } reaction
+                    ? ReactionLabel(reaction)
+                    : "Unresolved Reaction";
+        }
+
+        return result.MarketSituation?.PrimarySituation is { } primary
+            ? MarketSituationLabel(primary.SituationType)
+            : null;
+    }
+
+    private string? DetailAnchorFor(ScannerAnalysisResult result) =>
+        _overview.FirstOrDefault(tile => ReferenceEquals(tile.Result, result))?.DetailAnchor;
+
+    private static string CreateDetailAnchor(string symbol, string sessionId) =>
+        $"symbol-{Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(symbol))}" +
+        $"-{Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(sessionId))}";
+
+    private static string OverviewAccessibleLabel(SymbolOverviewTile tile)
+    {
+        var context = tile.SecondaryContext is null ? string.Empty : $", {tile.SecondaryContext}";
+        return $"{tile.Result.Opportunity.Symbol}, session {tile.Result.Opportunity.SessionId}, " +
+            $"{tile.PrimaryStatus}{context}. Jump to detailed analysis.";
     }
 
     private string FreshnessClass(FeatureSnapshot features) =>

@@ -125,6 +125,11 @@ public sealed class StructureWebApplicationTests
         }
 
         var html = await client.GetStringAsync("/", timeout.Token);
+        var overview = ExtractSymbolOverview(html);
+        Assert.True(html.IndexOf("SYMBOL OVERVIEW", StringComparison.Ordinal)
+            < html.IndexOf("MARKET STRUCTURE", StringComparison.Ordinal));
+        Assert.Contains("href=\"#symbol-", overview);
+        Assert.Contains("id=\"symbol-", html);
         Assert.Contains("MARKET STRUCTURE", html);
         Assert.Contains("TRADE PLAN", html);
         Assert.Contains("PRIOR SESSION", html);
@@ -135,11 +140,69 @@ public sealed class StructureWebApplicationTests
         Assert.Contains("No tracked candidate opportunity", html);
         Assert.Contains("Support and resistance are historical reference areas, not guarantees.", html);
         Assert.Contains("Insufficient", html);
-        Assert.Contains("not a probability of profit or a trading recommendation", html);
+        Assert.DoesNotContain("probability of profit", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Buy now", html);
         Assert.DoesNotContain("Sell now", html);
         Assert.DoesNotContain("Short now", html);
         Assert.DoesNotContain("Guaranteed", html);
+    }
+
+    [Fact]
+    public async Task Hosted_dashboard_overview_deduplicates_current_symbols_and_links_to_details()
+    {
+        await using var factory = new StructureApplicationFactory(useMultipleSymbols: true);
+        using var client = factory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        JsonDocument? opportunitiesJson = null;
+        while (!timeout.IsCancellationRequested)
+        {
+            opportunitiesJson?.Dispose();
+            using var response = await client.GetAsync("/api/v1/opportunities", timeout.Token);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            opportunitiesJson = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+            if (opportunitiesJson.RootElement.GetArrayLength() >= 3)
+            {
+                break;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token);
+        }
+
+        Assert.NotNull(opportunitiesJson);
+        using (opportunitiesJson)
+        {
+            Assert.Equal(3, opportunitiesJson.RootElement.GetArrayLength());
+        }
+
+        var scanner = factory.Services.GetRequiredService<ScannerState>();
+        var readModel = scanner.Read();
+        var aapl = Assert.Single(readModel.Results, item => item.Opportunity.Symbol == "AAPL");
+        var results = readModel.Results
+            .Select(item => ReferenceEquals(item, aapl)
+                ? item with { Readiness = WithReadinessState(item, PreTradeReadinessState.EntryReady) }
+                : item)
+            .ToArray();
+        scanner.SetResults(readModel.Status, results, aapl.Opportunity.AsOfUtc);
+
+        var html = await client.GetStringAsync("/", timeout.Token);
+        var overview = ExtractSymbolOverview(html);
+        Assert.Equal(3, overview.Split("symbol-overview-card", StringSplitOptions.None).Length - 1);
+        Assert.True(overview.IndexOf("AAPL", StringComparison.Ordinal)
+            < overview.IndexOf("MSFT", StringComparison.Ordinal));
+        Assert.True(overview.IndexOf("MSFT", StringComparison.Ordinal)
+            < overview.IndexOf("NVDA", StringComparison.Ordinal));
+        Assert.Contains("ENTRY READY", overview);
+        Assert.Contains("NO TRACKED CANDIDATE", overview);
+        Assert.Contains("href=\"#symbol-", overview);
+        Assert.Contains("id=\"symbol-", html);
+        Assert.DoesNotContain("BUY NOW", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("SELL NOW", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("GUARANTEED", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("probability of profit", html, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("PRE-TRADE READINESS", html);
+        Assert.Contains("MARKET SITUATION", html);
+        Assert.Contains("MARKET REACTION", html);
+        Assert.Contains("TRADE PLAN", html);
     }
 
     [Fact]
@@ -247,8 +310,40 @@ public sealed class StructureWebApplicationTests
 
         var html = await client.GetStringAsync("/", timeout.Token);
         Assert.Contains("Support Held", html);
+        Assert.Contains("Support Held", ExtractSymbolOverview(html));
         Assert.Contains("Research context at", html);
         Assert.Contains("Research context is descriptive", html);
+
+        var scanner = factory.Services.GetRequiredService<ScannerState>();
+        var result = Assert.Single(scanner.Read().Results);
+        scanner.SetResults(
+            new ScannerStatus(
+                MarketDataHealthStatus.Recorded,
+                "Test",
+                0,
+                result.Opportunity.AsOfUtc,
+                null),
+            [result with { Readiness = WithReadinessState(result, PreTradeReadinessState.Unavailable) }],
+            result.Opportunity.AsOfUtc);
+        var unavailableOverview = ExtractSymbolOverview(await client.GetStringAsync("/", timeout.Token));
+        Assert.Contains("UNAVAILABLE", unavailableOverview);
+        Assert.Contains("Support Held", unavailableOverview);
+        Assert.True(unavailableOverview.IndexOf("UNAVAILABLE", StringComparison.Ordinal)
+            < unavailableOverview.IndexOf("Support Held", StringComparison.Ordinal));
+
+        scanner.SetStatus(
+            new ScannerStatus(
+                MarketDataHealthStatus.Stale,
+                "Test",
+                0,
+                result.Opportunity.AsOfUtc,
+                null),
+            result.Opportunity.AsOfUtc.AddSeconds(1));
+        var suspendedOverview = ExtractSymbolOverview(await client.GetStringAsync("/", timeout.Token));
+        Assert.Contains("SUSPENDED", suspendedOverview);
+        Assert.Contains("Support Held", suspendedOverview);
+        Assert.True(suspendedOverview.IndexOf("SUSPENDED", StringComparison.Ordinal)
+            < suspendedOverview.IndexOf("Support Held", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -446,7 +541,7 @@ public sealed class StructureWebApplicationTests
         Assert.Contains("MARKET STRUCTURE", html);
         Assert.Contains("Nearest resistance candidate: $105.00 · support candidate: $104.00", html);
         Assert.Contains("structure-observations", html);
-        Assert.Contains("not a probability of profit or a trading recommendation", html);
+        Assert.DoesNotContain("probability of profit", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("BREAKDOWN CONFIRMED", html);
         Assert.DoesNotContain("BREAKOUT CONFIRMED", html);
     }
@@ -490,11 +585,77 @@ public sealed class StructureWebApplicationTests
             Assert.Equal("Support", marketSituation.GetProperty("primarySituation").GetProperty("side").GetString());
         }
 
+        var scanner = factory.Services.GetRequiredService<ScannerState>();
+        var readModel = scanner.Read();
+        var result = Assert.Single(readModel.Results);
+        scanner.SetResults(
+            readModel.Status,
+            [result with { MarketReactions = [] }],
+            result.Opportunity.AsOfUtc);
         var html = await client.GetStringAsync("/", timeout.Token);
         Assert.Contains("Approaching Support", html);
         Assert.Contains("Approaching Resistance", html);
+        Assert.Contains("Approaching Support", ExtractSymbolOverview(html));
         Assert.DoesNotContain("Buy now", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Sell now", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static PreTradeReadinessProjection WithReadinessState(
+        ScannerAnalysisResult result,
+        PreTradeReadinessState state)
+    {
+        var opportunity = result.Opportunity;
+        var plan = result.TradePlan;
+        var direction = plan.Direction ?? TradeDirection.Long;
+        var tracked = new TrackedOpportunity(
+            Guid.NewGuid(),
+            plan.Id,
+            opportunity.Id,
+            opportunity.Symbol,
+            opportunity.SessionId,
+            direction,
+            opportunity.AsOfUtc,
+            plan.AsOfUtc,
+            "hosted-dashboard-test",
+            TrackedOpportunityStatus.SessionEnded,
+            "TestProjection",
+            "Test-only terminal projection",
+            false,
+            opportunity.AsOfUtc,
+            "SessionEnded",
+            "Test-only terminal projection");
+        var assessment = new PreTradeReadinessAssessment(
+            Guid.NewGuid(),
+            tracked.Id,
+            plan.Id,
+            opportunity.Id,
+            opportunity.Symbol,
+            opportunity.SessionId,
+            opportunity.AsOfUtc,
+            opportunity.AsOfUtc,
+            state,
+            PreTradeReadinessReason.None,
+            direction,
+            ReadinessContextMode.CurrentSessionOnly,
+            result.Features.ReferencePrice,
+            null,
+            null,
+            false,
+            "hosted-dashboard-test",
+            result.Features.FeatureSetVersion,
+            opportunity.ConfigurationVersion,
+            opportunity.MarketData,
+            []);
+        return new PreTradeReadinessProjection(tracked, plan, assessment);
+    }
+
+    private static string ExtractSymbolOverview(string html)
+    {
+        var start = html.IndexOf("<section class=\"symbol-overview\"", StringComparison.Ordinal);
+        Assert.True(start >= 0, "The dashboard did not render the SYMBOL OVERVIEW section.");
+        var end = html.IndexOf("</section>", start, StringComparison.Ordinal);
+        Assert.True(end >= 0, "The SYMBOL OVERVIEW section was not closed.");
+        return html[start..(end + "</section>".Length)];
     }
 
     private sealed class StructureApplicationFactory : WebApplicationFactory<Program>
@@ -502,6 +663,7 @@ public sealed class StructureWebApplicationTests
         private readonly bool _useFixtureSource;
         private readonly bool _simultaneousSituationSource;
         private readonly bool _useRestartSource;
+        private readonly bool _useMultipleSymbols;
         private readonly ReactionMarketDataSource? _reactionSource;
         private readonly InMemoryReactionStore _reactionStore;
 
@@ -509,12 +671,14 @@ public sealed class StructureWebApplicationTests
             bool useFixtureSource = false,
             bool simultaneousSituationSource = false,
             bool useRestartSource = false,
+            bool useMultipleSymbols = false,
             ReactionMarketDataSource? reactionSource = null,
             InMemoryReactionStore? reactionStore = null)
         {
             _useFixtureSource = useFixtureSource;
             _simultaneousSituationSource = simultaneousSituationSource;
             _useRestartSource = useRestartSource;
+            _useMultipleSymbols = useMultipleSymbols;
             _reactionSource = reactionSource;
             _reactionStore = reactionStore ?? new InMemoryReactionStore();
         }
@@ -577,6 +741,11 @@ public sealed class StructureWebApplicationTests
                 {
                     services.RemoveAll<IMarketDataSource>();
                     services.AddSingleton<IMarketDataSource>(new RestartMarketDataSource());
+                }
+                else if (_useMultipleSymbols)
+                {
+                    services.RemoveAll<IMarketDataSource>();
+                    services.AddSingleton<IMarketDataSource>(new MultipleSymbolStructureSource());
                 }
                 else if (!_useFixtureSource)
                 {
@@ -880,6 +1049,37 @@ public sealed class StructureWebApplicationTests
                 yield return new TradeEvent(
                     "STRUCT", "hosted-structure", start.AddSeconds(index), start.AddSeconds(index + 1),
                     "RecordedFixture", $"hosted-{index:D3}", prices[index], 10);
+            }
+
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class MultipleSymbolStructureSource : IMarketDataSource
+    {
+        public MarketDataCapabilities Capabilities { get; } =
+            new("RecordedFixture", "Synthetic", MarketDataCoverage.Synthetic, false, true, true);
+
+        public async IAsyncEnumerable<MarketEvent> ReadEventsAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var start = new DateTimeOffset(2026, 10, 23, 14, 30, 0, TimeSpan.Zero);
+            decimal[] prices = [101.5m, 101m, 105m, 103m, 102m, 104m, 103m, 107m, 105m, 104m, 106m, 105m];
+            foreach (var symbol in new[] { "AAPL", "MSFT", "NVDA" })
+            {
+                for (var index = 0; index < prices.Length; index++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    yield return new TradeEvent(
+                        symbol,
+                        "overview-session",
+                        start.AddSeconds(index),
+                        start.AddSeconds(index + 1),
+                        "RecordedFixture",
+                        $"{symbol}-{index:D3}",
+                        prices[index],
+                        10);
+                }
             }
 
             await Task.CompletedTask;
