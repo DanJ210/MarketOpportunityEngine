@@ -1635,3 +1635,29 @@ The hand-written idempotent migration is `20261106120000_AddLevelInteractionReac
 During final verification, a safe environment preflight found `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` unset, so the guarded full integration suite and same-database SQL repeat were not rerun after adding the hosted-only progression test. Existing Batch 3 guarded SQL results remain passing; SQL production code was not changed afterward. A first hosted-only run found a false-positive UI assertion matching `BUY` inside a generated encoded token; the assertion was narrowed to the prohibited actionable phrase, and the complete updated hosted suite then passed **5/5**. The first regular-output test build was blocked by the already-running web process locking its DLLs; subsequent hosted tests and the final full solution build passed using isolated artifacts. No process was terminated, no live provider was used, and no database was reset.
 
 The documentation updates are Batch 3 status reconciliation only. Batch 4 has not been started; do not infer authorization for out-of-scope work from this completion record. Historical validation entries above remain unchanged.
+
+## A.2.4b Final Closeout 2026-11-10
+
+**A.2.4b Structural Level Reaction Classification: COMPLETE.** Final validation used source tree based on commit `8a6cfc00c653c00d0e68fc2a8999e06e9bcaa5c6` plus test-only hosted coverage changes in `StructureWebApplicationTests.cs`. The guarded SQL preflight passed **1/1** and verified `DB_NAME()` was `MarketOpportunityEngine_IntegrationTests`; no connection string, secret, or password was printed.
+
+| Scope | Command / evidence | Result |
+|---|---|---|
+| Reaction evaluator | `FullyQualifiedName~MarketReactionEvaluatorTests` | **16/16** |
+| Reaction persistence, lifecycle, continuity, research-context SQL | `FullyQualifiedName~MarketReactionPersistenceTests`, repeated against the same dedicated DB without reset | **10/10 twice** |
+| Reaction tracker | `FullyQualifiedName~MarketReactionTrackerTests` | **3/3** |
+| Hosted restart continuity | `Hosted_live_restart_marks_restored_episode_continuity_unknown_before_new_observations` | **1/1** |
+| Hosted reaction progression/presentation | `StructureWebApplicationTests` | **7/7**, including confirmed support and resistance, unresolved API/UI state, ContinuityUnknown, opportunity projection, simultaneous interaction, and session filtering |
+| A.2.4a MarketSituation | `FullyQualifiedName~MarketSituationEvaluatorTests` | **18/18** |
+| A.2.3b readiness/pipeline/publication | `FullyQualifiedName~PreTradeReadinessTests|FullyQualifiedName~ScannerPipelineTests|FullyQualifiedName~OpportunityPublicationGateTests` | **95/95** |
+| A.2.3a prior context | `FullyQualifiedName~PriorSessionContextTests` | **11/11** |
+| TradePlan / MomentumContinuation | `TradePlanBuilderTests` / `MomentumContinuationTests` | **17/17; 22/22** |
+| Guarded SQL persistence | `SqlServerPersistenceTests` | **8/8** |
+| Guarded migration validation | `ExplicitSessionMigrationTests` | **2/2**, including clean and legacy schemas, idempotent rerun, PK/FK, nullability, and reaction indexes |
+| SQL-backed hosted fixture | `FixtureWebApplicationTests`, repeated against the same dedicated DB without reset | **1/1 twice** |
+| Final guarded integration suite on final source tree | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --no-restore` | **40/40** |
+| Full unit suite | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj --no-restore` | **398/398** |
+| Solution build | `dotnet build MarketOpportunityEngine.sln --no-restore` | **Succeeded, 0 warnings, 0 errors** |
+
+During test-only coverage work, the first resistance assertion found the synthetic prior-context fixture generated a new context identity on each observation, which could create a second level identity for the same level. The fixture now uses a stable context identity; the final hosted suite and final full guarded integration suite pass with that deterministic test input. An initial HTML assertion also required whitespace normalization, and the final check passed. No production code, migration, configuration, or analytical behavior changed. The six `market-reaction-v1` classifications remain deterministic; confirmation remains event-time and non-gating, with pinned level geometry, immutable reaction history, conservative restart continuity, and descriptive research context.
+
+README, PROJECT_STATUS, master specification, `.github/copilot-instructions.md`, and ADR-010 agree that A.2.4b and all four batches are COMPLETE. No subsequent product checkpoint was approved; the next checkpoint is **REQUIRES DESIGN / APPROVAL**. No live provider was used. Historical Batch 1-3 entries above were not rewritten.

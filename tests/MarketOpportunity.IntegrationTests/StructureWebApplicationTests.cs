@@ -192,7 +192,8 @@ public sealed class StructureWebApplicationTests
     [Fact]
     public async Task Hosted_pipeline_confirms_reaction_and_exposes_event_time_research_context()
     {
-        await using var factory = new StructureApplicationFactory(useReactionSource: true);
+        await using var factory = new StructureApplicationFactory(
+            reactionSource: new ReactionMarketDataSource());
         using var client = factory.CreateClient();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         JsonDocument? reactionsJson = null;
@@ -248,6 +249,100 @@ public sealed class StructureWebApplicationTests
         Assert.Contains("Support Held", html);
         Assert.Contains("Research context at", html);
         Assert.Contains("Research context is descriptive", html);
+    }
+
+    [Fact]
+    public async Task Hosted_unresolved_reaction_is_exposed_as_unresolved_in_api_and_dashboard()
+    {
+        await using var factory = new StructureApplicationFactory(
+            reactionSource: new ReactionMarketDataSource(
+                "UNRESOLVED",
+                "unresolved-session",
+                100.05m,
+                confirmationPrice: null));
+        using var client = factory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        JsonDocument? reactionsJson = null;
+        while (!timeout.IsCancellationRequested)
+        {
+            reactionsJson?.Dispose();
+            using var response = await client.GetAsync(
+                "/api/v1/reactions?symbol=UNRESOLVED&sessionId=unresolved-session",
+                timeout.Token);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            reactionsJson = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+            if (reactionsJson.RootElement.EnumerateArray().Any(reaction =>
+                    reaction.GetProperty("assessment").GetProperty("status").GetString() == "Unresolved"))
+            {
+                break;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token);
+        }
+
+        Assert.NotNull(reactionsJson);
+        using (reactionsJson)
+        {
+            var reaction = Assert.Single(reactionsJson.RootElement.EnumerateArray());
+            var assessment = reaction.GetProperty("assessment");
+            Assert.Equal("Unresolved", assessment.GetProperty("status").GetString());
+            Assert.Equal(JsonValueKind.Null, assessment.GetProperty("reaction").ValueKind);
+            Assert.Equal("unresolved-session", assessment.GetProperty("sessionId").GetString());
+        }
+
+        var html = await client.GetStringAsync("/", timeout.Token);
+        Assert.Contains("Unresolved Reaction · Unresolved", html);
+        Assert.Contains("Pinned support level: $100.00",
+            System.Text.RegularExpressions.Regex.Replace(html, @"\s+", " "));
+    }
+
+    [Fact]
+    public async Task Hosted_pipeline_confirms_resistance_reaction_in_api_and_dashboard()
+    {
+        await using var factory = new StructureApplicationFactory(
+            reactionSource: new ReactionMarketDataSource(
+                "RESISTANCE",
+                "resistance-session",
+                110.05m,
+                110.3m));
+        using var client = factory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        JsonDocument? reactionsJson = null;
+        while (!timeout.IsCancellationRequested)
+        {
+            reactionsJson?.Dispose();
+            using var response = await client.GetAsync(
+                "/api/v1/reactions?symbol=RESISTANCE&sessionId=resistance-session",
+                timeout.Token);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            reactionsJson = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+            if (reactionsJson.RootElement.EnumerateArray().Any(reaction =>
+                    reaction.GetProperty("assessment").GetProperty("status").GetString() == "Confirmed"))
+            {
+                break;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token);
+        }
+
+        Assert.NotNull(reactionsJson);
+        using (reactionsJson)
+        {
+            Assert.Single(reactionsJson.RootElement.EnumerateArray());
+            var reaction = Assert.Single(
+                reactionsJson.RootElement.EnumerateArray(),
+                item => item.GetProperty("assessment").GetProperty("status").GetString() == "Confirmed");
+            var assessment = reaction.GetProperty("assessment");
+            Assert.Equal("Confirmed", assessment.GetProperty("status").GetString());
+            Assert.Equal("ResistanceBreakout", assessment.GetProperty("reaction").GetString());
+            Assert.Equal(110.3m, assessment.GetProperty("reactionPrice").GetDecimal());
+            Assert.Equal("resistance-session", assessment.GetProperty("sessionId").GetString());
+        }
+
+        var html = await client.GetStringAsync("/", timeout.Token);
+        Assert.Contains("Resistance Breakout", html);
+        Assert.Contains("Pinned resistance level: $110.00",
+            System.Text.RegularExpressions.Regex.Replace(html, @"\s+", " "));
     }
 
     [Fact]
@@ -407,20 +502,20 @@ public sealed class StructureWebApplicationTests
         private readonly bool _useFixtureSource;
         private readonly bool _simultaneousSituationSource;
         private readonly bool _useRestartSource;
-        private readonly bool _useReactionSource;
+        private readonly ReactionMarketDataSource? _reactionSource;
         private readonly InMemoryReactionStore _reactionStore;
 
         public StructureApplicationFactory(
             bool useFixtureSource = false,
             bool simultaneousSituationSource = false,
             bool useRestartSource = false,
-            bool useReactionSource = false,
+            ReactionMarketDataSource? reactionSource = null,
             InMemoryReactionStore? reactionStore = null)
         {
             _useFixtureSource = useFixtureSource;
             _simultaneousSituationSource = simultaneousSituationSource;
             _useRestartSource = useRestartSource;
-            _useReactionSource = useReactionSource;
+            _reactionSource = reactionSource;
             _reactionStore = reactionStore ?? new InMemoryReactionStore();
         }
 
@@ -471,10 +566,10 @@ public sealed class StructureWebApplicationTests
                 configuration.AddInMemoryCollection(Settings()));
             builder.ConfigureServices(services =>
             {
-                if (_useReactionSource)
+                if (_reactionSource is not null)
                 {
                     services.RemoveAll<IMarketDataSource>();
-                    services.AddSingleton<IMarketDataSource>(new ReactionMarketDataSource());
+                    services.AddSingleton<IMarketDataSource>(_reactionSource);
                     services.RemoveAll<IPriorSessionContextProvider>();
                     services.AddSingleton<IPriorSessionContextProvider>(new CompletePriorSessionContextProvider());
                 }
@@ -650,6 +745,8 @@ public sealed class StructureWebApplicationTests
 
     private sealed class CompletePriorSessionContextProvider : IPriorSessionContextProvider
     {
+        private static readonly Guid ContextId = Guid.Parse("150bde7f-9f62-4f34-883f-4f62ac6b1c47");
+
         public Task<PriorSessionContextView> GetContextAsync(
             string symbol,
             string currentSessionId,
@@ -660,7 +757,7 @@ public sealed class StructureWebApplicationTests
             var priorStart = currentEventTimeUtc.AddDays(-1);
             var priorEnd = priorStart.AddHours(6);
             var context = new PriorSessionContext(
-                Guid.NewGuid(),
+                ContextId,
                 symbol,
                 currentSessionId,
                 "reaction-prior-session",
@@ -711,7 +808,11 @@ public sealed class StructureWebApplicationTests
         }
     }
 
-    private sealed class ReactionMarketDataSource : ILiveMarketDataSource
+    private sealed class ReactionMarketDataSource(
+        string symbol = "REACTION",
+        string sessionId = "reaction-session",
+        decimal initialPrice = 100.05m,
+        decimal? confirmationPrice = 100.3m) : ILiveMarketDataSource
     {
         public MarketDataCapabilities Capabilities { get; } =
             new("RecordedFixture", "Synthetic", MarketDataCoverage.Synthetic, false, true, true);
@@ -721,14 +822,20 @@ public sealed class StructureWebApplicationTests
         {
             var start = new DateTimeOffset(2026, 11, 6, 18, 30, 0, TimeSpan.Zero);
             yield return new TradeEvent(
-                "REACTION", "reaction-session", start, start, "RecordedFixture", "reaction-start", 100.05m, 10);
+                symbol, sessionId, start, start, "RecordedFixture", "reaction-start", initialPrice, 10);
+            if (confirmationPrice is null)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                yield break;
+            }
+
             await Task.Delay(TimeSpan.FromSeconds(6), cancellationToken);
             yield return new TradeEvent(
-                "REACTION", "reaction-session", start.AddSeconds(1), start.AddSeconds(1),
-                "RecordedFixture", "reaction-confirm", 100.3m, 10);
+                symbol, sessionId, start.AddSeconds(1), start.AddSeconds(1),
+                "RecordedFixture", "reaction-confirm", confirmationPrice.Value, 10);
             yield return new QuoteEvent(
-                "REACTION", "reaction-session", start.AddSeconds(2), start.AddSeconds(2),
-                "RecordedFixture", "reaction-final-quote", 100.04m, 100.06m, 100, 100);
+                symbol, sessionId, start.AddSeconds(2), start.AddSeconds(2),
+                "RecordedFixture", "reaction-final-quote", initialPrice - 0.01m, initialPrice + 0.01m, 100, 100);
             await Task.CompletedTask;
         }
     }
