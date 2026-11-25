@@ -4,7 +4,7 @@ A .NET 10 modular-monolith decision-support scanner for US equities/ETFs. The ap
 
 ## Current milestone
 
-**Milestone A.2.4a - Structural Level Interaction: COMPLETE. A.2.4b - Structural Level Reaction Classification: COMPLETE (Batches 1-4 COMPLETE).** The production-wired reaction tracker uses conservative live restart handling, persists immutable assessments and descriptive research context, exposes current projections through the reaction API and opportunity responses, and renders MARKET REACTION on the dashboard. No subsequent product checkpoint is authorized; further work requires design/approval. See [PROJECT_STATUS.md](./PROJECT_STATUS.md), [ADR-010](./docs/adr/ADR-010-market-reaction-confirmation.md), and the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md#a24b-structural-level-reaction-classification).
+**Milestone A.2.4b - Structural Level Reaction Classification: COMPLETE. A.2.5 Live Prior-Session Historical Context: IN PROGRESS (Batch 1 COMPLETE; Batch 2 NEXT / AUTHORIZED).** The production-wired reaction tracker remains unchanged. Batch 1 adds provider-independent calendar/historical contracts and offline-tested Alpaca calendar plus historical SIP infrastructure, but does not wire prior-session warm-up into the scanner. See [PROJECT_STATUS.md](./PROJECT_STATUS.md), [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md), and the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md#a25-live-prior-session-historical-context).
 
 ## Architecture overview
 
@@ -41,7 +41,7 @@ The current `scanner-config-v19` also adds `Scanner:MarketReaction:ConfirmationD
 
 The separate `prior-session-context-v1` contract reports prior-session trade-point pivots, structural references, completeness, and feed/source provenance at `/api/v1/symbols/{symbol}/prior-context`. The dashboard labels partial-session extrema as observed values and reports session high/low/close only when full, gap-free coverage is established. Close means the last eligible trade by event time at or before session end, not an asserted official exchange close.
 
-Only the recorded fixture currently supplies historical data and an explicit fixture calendar; that calendar maps session identities to U.S. equity regular-session boundaries in `America/New_York` semantics. It does not infer dates or holidays. Synthetic fixture coverage is partial. Live Alpaca/Massive history and an authoritative live calendar remain unavailable/unverified, so the scanner keeps running and shows prior context as unavailable. Context is deterministically rebuilt from approved fixture input, not stored in SQL; persisted live events are not currently exposed as an approved historical replay source. See [ADR-007](./docs/adr/ADR-007-prior-session-context.md).
+The recorded fixture remains the only production-wired historical source and supplies its explicit fixture calendar. A.2.5 Batch 1 adds separate Alpaca market-calendar and explicit-SIP historical trade infrastructure, including provider-independent status/provenance contracts and bounded pagination, but it is not wired into production prior-session reconstruction. The fixture calendar maps explicit session identities to U.S. equity regular-session boundaries in `America/New_York` semantics; it does not infer dates or holidays. Synthetic fixture coverage is partial. Live scanner prior context therefore remains unavailable when history is not fixture-wired. Context is not stored in SQL, and persisted live events are not an approved historical replay source. See [ADR-007](./docs/adr/ADR-007-prior-session-context.md) and [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md).
 
 ## A.2.3b tracked opportunity and pre-trade readiness
 
@@ -85,6 +85,8 @@ dotnet user-secrets set "Scanner:Universe:Symbols" "AAPL,MSFT" --project src\Mar
 
 Store provider credentials and the explicit provider session ID in User Secrets as appropriate; never check them into source, pass them in command arguments, or expose them to browser code. User Secrets are not encrypted and are for local development only. Deployed secrets belong in Azure Key Vault. See the [provider configuration and criteria](./docs/adr/ADR-005-market-data-provider-criteria.md).
 
+Alpaca historical infrastructure reuses `MarketData:Alpaca:ApiKey` and `SecretKey`; it does not introduce a second credential. Optional `MarketData:Alpaca:Historical` safety settings are `MaximumPages` (100), `MaximumRecords` (1,000,000), `PageSize` (10,000), and `CalendarLookbackDays` (14). They bound infrastructure retrieval only and do not establish session completeness.
+
 ## Scanner universe
 
 Live adapters use the single comma-separated `Scanner:Universe:Symbols` setting. Entries are trimmed, uppercased, rejected if empty, and deduplicated case-insensitively while preserving first occurrence. Live mode requires a non-empty list. The fixture does not use this setting.
@@ -97,7 +99,7 @@ There is no fallback to legacy `MarketData:Alpaca:Symbols` or `MarketData:Massiv
 - **Alpaca:** optional market-data adapter; current provider for development/live-stream evaluation. Configure `MarketData:Alpaca:ApiKey`, `MarketData:Alpaca:SecretKey`, `MarketData:Alpaca:Feed`, and `MarketData:Alpaca:SessionId` in User Secrets. Feed entitlements and coverage are provider-defined.
 - **Massive:** supported live trades/quotes adapter. Configure `MarketData:Massive:ApiKey` and `MarketData:Massive:SessionId` in User Secrets. The adapter does not currently reconnect.
 
-Both adapters are market-data-only. Neither selects broker permissions, accesses a brokerage account, or submits orders. Alpaca reconnects after disconnect, but historical gap backfill is not implemented; unresolved gaps suspend publication. Both live adapters start without historical warm-up. Consult [Alpaca protocol and limitations](./docs/providers/alpaca-websocket.md) and [Massive protocol and limitations](./docs/providers/massive-websocket.md). Review [ADR-005](./docs/adr/ADR-005-market-data-provider-criteria.md) before changing provider behavior.
+Both adapters are market-data-only. Neither selects broker permissions, accesses a brokerage account, or submits orders. Alpaca reconnects after disconnect, but historical gap backfill and startup warm-up are not production-wired; unresolved gaps suspend publication. A.2.5 Batch 1 historical infrastructure requests SIP explicitly and never falls back to IEX, but it is separate from live provider selection. A historical `ReceivedTimeUtc` is the HTTP retrieval/normalization time, not an invented original market-receipt time, and is excluded from historical identity. Consult [Alpaca protocol and limitations](./docs/providers/alpaca-websocket.md) and [Massive protocol and limitations](./docs/providers/massive-websocket.md). Review [ADR-005](./docs/adr/ADR-005-market-data-provider-criteria.md) before changing provider behavior.
 
 ## Local SQL Server
 
@@ -192,9 +194,9 @@ A tracked candidate pins one immutable `PlanDefined` plan per symbol/session; th
 - The `Scanner:PreTrade:ApproachDistanceRiskMultiple` default (1.0) is provisional and not market calibrated; it makes no profitability claim.
 - The scanner has no `PositionContext` and cannot infer whether a user entered a trade. `MANAGE`, `TAKE PROFIT`, and `EXIT` states are not implemented.
 - Breakout, VWAP reclaim/rejection, and failed-breakout setup classifiers are not implemented. A.2.4a reports descriptive approaching/testing/crossed support and resistance; A.2.4b separately classifies the six approved mechanical reactions without changing setup or readiness. Reaction research context is descriptive and does not label outcomes or imply profitability.
-- No historical event-read path, outcome labeling, backtesting, ML, or ONNX inference.
+- No production historical event-read or warm-up path, outcome labeling, backtesting, ML, or ONNX inference. A.2.5 Batch 1 only adds bounded Alpaca historical infrastructure that is not production-wired.
 - Raw vendor payloads are not persisted; normalized-event retention has occurred for local evaluation. See [ADR-004](./docs/adr/ADR-004-market-event-retention.md) before sustained research/backtesting/model-training use.
-- No exchange-calendar integration or full historical gap recovery; Massive has no reconnect behavior.
+- No production exchange-calendar integration or full historical gap recovery; Massive has no reconnect behavior.
 - No Azure deployment infrastructure or production migration orchestration.
 - No broker integration or order execution.
 

@@ -115,6 +115,33 @@ public static class MarketEventIdentity
         };
 }
 
+public static class HistoricalTradeIdentity
+{
+    public static string Create(
+        string provider,
+        string feed,
+        string symbol,
+        string exchange,
+        string tradeId,
+        DateTimeOffset eventTimeUtc)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(feed);
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
+        ArgumentException.ThrowIfNullOrWhiteSpace(exchange);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tradeId);
+        var canonical = string.Join(
+            "\u001f",
+            provider,
+            feed,
+            symbol,
+            exchange,
+            tradeId,
+            eventTimeUtc.UtcDateTime.Ticks.ToString(CultureInfo.InvariantCulture));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+    }
+}
+
 public enum DataQualityStatus
 {
     Good,

@@ -28,7 +28,7 @@ public sealed class PriorSessionContextTests
     private readonly PriorSessionContextBuilder _builder = new(new FeatureCalculator());
 
     [Fact]
-    public void Explicit_calendar_uses_recorded_prior_session_across_weekend_and_holiday()
+    public async Task Explicit_calendar_uses_recorded_prior_session_across_weekend_and_holiday()
     {
         var friday = new MarketSession(
             "friday",
@@ -49,20 +49,23 @@ public sealed class PriorSessionContextTests
         var calendar = new ExplicitMarketSessionCalendar(
             "test-calendar",
             [
-                new MarketSessionCalendarEntry(friday, PriorSession),
-                new MarketSessionCalendarEntry(monday, friday),
-                new MarketSessionCalendarEntry(postHolidayTuesday, preHolidayFriday)
+                new MarketSessionCalendarEntry(Definition(friday), Definition(PriorSession)),
+                new MarketSessionCalendarEntry(Definition(monday), Definition(friday)),
+                new MarketSessionCalendarEntry(Definition(postHolidayTuesday), Definition(preHolidayFriday))
             ]);
 
-        var weekend = calendar.ResolvePreviousSession("MOE", monday.SessionId, monday.StartUtc);
-        var holiday = calendar.ResolvePreviousSession(
+        var weekend = await calendar.ResolvePreviousSessionAsync(
+            "MOE", monday.SessionId, monday.StartUtc, CancellationToken.None);
+        var holiday = await calendar.ResolvePreviousSessionAsync(
             "MOE",
             postHolidayTuesday.SessionId,
-            postHolidayTuesday.StartUtc);
-        var missing = calendar.ResolvePreviousSession(
+            postHolidayTuesday.StartUtc,
+            CancellationToken.None);
+        var missing = await calendar.ResolvePreviousSessionAsync(
             "MOE",
             "unmapped-session",
-            postHolidayTuesday.StartUtc);
+            postHolidayTuesday.StartUtc,
+            CancellationToken.None);
 
         Assert.Equal("friday", weekend.PreviousSession?.SessionId);
         Assert.Equal("pre-holiday-friday", holiday.PreviousSession?.SessionId);
@@ -351,7 +354,7 @@ public sealed class PriorSessionContextTests
     {
         var calendar = new ExplicitMarketSessionCalendar(
             "test-calendar",
-            [new MarketSessionCalendarEntry(CurrentSession, PriorSession)]);
+            [new MarketSessionCalendarEntry(Definition(CurrentSession), Definition(PriorSession))]);
         var provider = new PriorSessionContextProvider(
             calendar,
             new FailingHistoricalSource(),
@@ -387,6 +390,18 @@ public sealed class PriorSessionContextTests
             complete,
             HasKnownGaps: false);
     }
+
+    private static MarketSessionDefinition Definition(MarketSession session) =>
+        new(
+            session.SessionId,
+            DateOnly.FromDateTime(session.StartUtc.UtcDateTime),
+            session.StartUtc,
+            session.EndUtc,
+            "RecordedFixture",
+            "test-calendar",
+            "test-calendar-v1",
+            MarketSessionType.Regular,
+            MarketSessionValidity.Valid);
 
     private static TradeEvent[] CreateTrades(
         decimal[]? sourcePrices = null,

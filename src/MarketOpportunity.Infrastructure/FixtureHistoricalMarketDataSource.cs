@@ -51,16 +51,37 @@ public sealed class FixtureMarketSessionCalendar : IMarketSessionCalendar
         "fixture-explicit-us-equity-rth-v1",
         [
             new MarketSessionCalendarEntry(
-                new MarketSession("fixture-2026-10-22", Session22Start, Session22End),
+                Definition("fixture-2026-10-22", new DateOnly(2026, 10, 22), Session22Start, Session22End),
                 null),
             new MarketSessionCalendarEntry(
-                new MarketSession("fixture-2026-10-23", Session23Start, Session23End),
-                new MarketSession("fixture-2026-10-22", Session22Start, Session22End))
+                Definition("fixture-2026-10-23", new DateOnly(2026, 10, 23), Session23Start, Session23End),
+                Definition("fixture-2026-10-22", new DateOnly(2026, 10, 22), Session22Start, Session22End))
         ]);
 
-    public MarketSessionCalendarResolution ResolvePreviousSession(
+    public Task<MarketSessionCalendarResolution> ResolvePreviousSessionAsync(
         string symbol,
         string currentSessionId,
-        DateTimeOffset currentEventTimeUtc) =>
-        _calendar.ResolvePreviousSession(symbol, currentSessionId, currentEventTimeUtc);
+        DateTimeOffset currentEventTimeUtc,
+        CancellationToken cancellationToken) =>
+        _calendar.ResolvePreviousSessionAsync(
+            symbol,
+            currentSessionId,
+            currentEventTimeUtc,
+            cancellationToken);
+
+    private static MarketSessionDefinition Definition(
+        string sessionId,
+        DateOnly tradingDate,
+        DateTimeOffset openAtUtc,
+        DateTimeOffset closeAtUtc) =>
+        new(
+            sessionId,
+            tradingDate,
+            openAtUtc,
+            closeAtUtc,
+            "RecordedFixture",
+            "explicit-fixture-calendar",
+            "fixture-explicit-us-equity-rth-v1",
+            MarketSessionType.Regular,
+            MarketSessionValidity.Valid);
 }

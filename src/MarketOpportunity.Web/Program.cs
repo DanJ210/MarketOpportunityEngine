@@ -50,6 +50,12 @@ builder.Services.AddSingleton<Action<string, string>>(serviceProvider =>
         exceptionType);
 });
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(_ =>
+    AlpacaHistoricalMarketDataOptions.FromConfiguration(builder.Configuration));
+builder.Services.AddHttpClient<AlpacaMarketSessionCalendar>(client =>
+    client.BaseAddress = new Uri("https://api.alpaca.markets/"));
+builder.Services.AddHttpClient<AlpacaHistoricalMarketDataSource>(client =>
+    client.BaseAddress = new Uri("https://data.alpaca.markets/"));
 var diagnosticEnabled = builder.Configuration.GetValue<bool>("MarketData:Diagnostics:Enabled");
 if (diagnosticEnabled)
 {

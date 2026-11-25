@@ -19,7 +19,7 @@ A.2.3a needs stable, auditable historical reference levels for the immediately p
 ## Consequences
 
 - No SQL migration or provider-specific DTO is added.
-- Live Alpaca/Massive historical retrieval and authoritative session-calendar resolution remain unavailable/unverified.
+- A.2.5 Batch 1 adds Alpaca historical SIP and market-calendar infrastructure behind provider-independent contracts, but neither is production-wired into prior-context reconstruction. Live prior context remains unavailable until the approved completeness and warm-up batches integrate them; Massive has no historical adapter in this checkpoint.
 - Future readiness work must not treat incomplete or unavailable prior-session context as complete, and must not use unavailable prior-session levels as confirmed historical support or resistance. Readiness may fall back to explicitly labeled current-session-only analysis when the current-session setup, TradePlan, publication health, and data-quality requirements remain satisfied. Persistence of provider-backed prior-session context may be added only after the historical source and its retention/entitlement policy are approved.
 - Readiness must expose which context mode it used: PriorSessionEnhanced when complete prior-session context participated in the assessment, or CurrentSessionOnly when readiness was derived without usable prior-session context.
 

@@ -1661,3 +1661,28 @@ The documentation updates are Batch 3 status reconciliation only. Batch 4 has no
 During test-only coverage work, the first resistance assertion found the synthetic prior-context fixture generated a new context identity on each observation, which could create a second level identity for the same level. The fixture now uses a stable context identity; the final hosted suite and final full guarded integration suite pass with that deterministic test input. An initial HTML assertion also required whitespace normalization, and the final check passed. No production code, migration, configuration, or analytical behavior changed. The six `market-reaction-v1` classifications remain deterministic; confirmation remains event-time and non-gating, with pinned level geometry, immutable reaction history, conservative restart continuity, and descriptive research context.
 
 README, PROJECT_STATUS, master specification, `.github/copilot-instructions.md`, and ADR-010 agree that A.2.4b and all four batches are COMPLETE. No subsequent product checkpoint was approved; the next checkpoint is **REQUIRES DESIGN / APPROVAL**. No live provider was used. Historical Batch 1-3 entries above were not rewritten.
+
+## A.2.5 Batch 1 validation (2026-11-24)
+
+**A.2.5 Live Prior-Session Historical Context - Batch 1: COMPLETE. A.2.5 overall remains IN PROGRESS.** Validation was sequential and offline; no Alpaca request, SQL connection, User Secret, or provider credential was used.
+
+| Scope | Result |
+|---|---|
+| Calendar adapter | **5/5**: normal prior session, weekend/holiday semantics, early close/UTC normalization, malformed/no previous range, cancellation/provider failure |
+| Historical identity | **1/1**: deterministic replay; exchange, event-time, symbol, provider, and feed collisions covered |
+| Historical pagination/status | **4/4**: 81-page-like traversal, repeated token, page/record bounds, cancellation, malformed/auth/entitlement/provider failure, and replay deduplication/conflict |
+| Historical normalization | **1/1**: symbol/time/price/size/order/retrieval-time/provenance and explicit SIP enforcement |
+| Alpaca live adapter regression | **18/18** |
+| PriorSessionContext regression | **11/11** |
+| A.2.4a MarketSituation regression | **18/18** |
+| A.2.4b MarketReaction evaluator/tracker regression | **19/19** |
+| Readiness/pipeline/publication regression | **95/95** |
+| TradePlan/Momentum regression | **39/39** |
+| Full offline unit suite | **410/410** |
+| Hosted offline structure/configuration suite | **8/8** |
+| Solution build | **Succeeded, 0 warnings, 0 errors** |
+| SQL validation | **Not required/not run** because no SQL model, migration, store, or production persistence behavior changed |
+
+Batch 1 adds `ADR-011`, provider-independent calendar and historical result/status/provenance contracts, Alpaca calendar and historical SIP adapters, a separate historical DTO, composite provider/feed/symbol/exchange/trade-ID/event-time identity, HTTP retrieval receive-time semantics, and bounded pagination. SIP is explicit with no IEX fallback. Pagination exhaustion remains distinct from complete session coverage. Fixture remains the shared default; the concrete Alpaca historical services are not registered as production `IMarketSessionCalendar`/`IHistoricalMarketDataSource` interfaces. `PriorSessionContextBuilder`, `ScannerPipeline`, MarketSituation, MarketReaction, the swing algorithm, and SQL behavior are unchanged.
+
+README, PROJECT_STATUS, master specification, `.github/copilot-instructions.md`, ADR-007, and ADR-011 were reconciled to **Batch 1 COMPLETE / Batch 2 NEXT / AUTHORIZED / Batches 3-4 NOT STARTED**. This record does not authorize Batch 2 implementation automatically.

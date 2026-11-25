@@ -14,10 +14,77 @@ public enum PriorSessionCloseSemantics
     LastEligibleTradeAtOrBeforeSessionEnd
 }
 
+public enum MarketSessionType
+{
+    Regular
+}
+
+public enum MarketSessionValidity
+{
+    Valid,
+    Invalid
+}
+
+public enum MarketSessionCalendarStatus
+{
+    Success,
+    NoPreviousSession,
+    InvalidReference,
+    LimitExceeded,
+    Cancelled,
+    AuthenticationFailure,
+    EntitlementFailure,
+    ProviderFailure,
+    MalformedResponse
+}
+
+public enum HistoricalRetrievalStatus
+{
+    SuccessPaginationExhausted,
+    LimitExceeded,
+    Cancelled,
+    AuthenticationFailure,
+    EntitlementFailure,
+    ProviderFailure,
+    MalformedResponse
+}
+
 public sealed record MarketSession(
     string SessionId,
     DateTimeOffset StartUtc,
     DateTimeOffset EndUtc);
+
+public sealed record MarketSessionDefinition(
+    string SessionId,
+    DateOnly TradingDate,
+    DateTimeOffset OpenAtUtc,
+    DateTimeOffset CloseAtUtc,
+    string Provider,
+    string SourceKind,
+    string CalendarVersion,
+    MarketSessionType SessionType,
+    MarketSessionValidity Validity)
+{
+    public DateTimeOffset StartUtc => OpenAtUtc;
+    public DateTimeOffset EndUtc => CloseAtUtc;
+
+    public MarketSession ToMarketSession() =>
+        new(SessionId, OpenAtUtc, CloseAtUtc);
+}
+
+public sealed record HistoricalDataRequest(
+    string Symbol,
+    string SessionId,
+    DateTimeOffset StartUtc,
+    DateTimeOffset EndUtc);
+
+public sealed record HistoricalDataProvenance(
+    string Provider,
+    string Feed,
+    string SourceKind,
+    DateTimeOffset RetrievedAtUtc,
+    int PagesRetrieved,
+    int DuplicateRecordsIgnored);
 
 public sealed record HistoricalMarketSessionData(
     IReadOnlyList<MarketEvent> Events,
@@ -26,7 +93,12 @@ public sealed record HistoricalMarketSessionData(
     DateTimeOffset? CoverageStartUtc,
     DateTimeOffset? CoverageEndUtc,
     bool DeclaresCompleteCoverage,
-    bool HasKnownGaps);
+    bool HasKnownGaps,
+    HistoricalDataRequest? Request = null,
+    HistoricalRetrievalStatus RetrievalStatus = HistoricalRetrievalStatus.SuccessPaginationExhausted,
+    HistoricalDataProvenance? Provenance = null,
+    bool PaginationExhausted = true,
+    string? StatusMessage = null);
 
 public sealed record PriorSessionContext(
     Guid ContextId,

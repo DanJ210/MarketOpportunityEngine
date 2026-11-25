@@ -4,21 +4,23 @@ using MarketOpportunity.Analytics;
 namespace MarketOpportunity.Application;
 
 public sealed record MarketSessionCalendarEntry(
-    MarketSession CurrentSession,
-    MarketSession? PreviousSession);
+    MarketSessionDefinition CurrentSession,
+    MarketSessionDefinition? PreviousSession);
 
 public sealed record MarketSessionCalendarResolution(
-    MarketSession? CurrentSession,
-    MarketSession? PreviousSession,
+    MarketSessionDefinition? CurrentSession,
+    MarketSessionDefinition? PreviousSession,
     string CalendarId,
-    string? Message);
+    string? Message,
+    MarketSessionCalendarStatus Status = MarketSessionCalendarStatus.Success);
 
 public interface IMarketSessionCalendar
 {
-    MarketSessionCalendarResolution ResolvePreviousSession(
+    Task<MarketSessionCalendarResolution> ResolvePreviousSessionAsync(
         string symbol,
         string currentSessionId,
-        DateTimeOffset currentEventTimeUtc);
+        DateTimeOffset currentEventTimeUtc,
+        CancellationToken cancellationToken);
 }
 
 public sealed class ExplicitMarketSessionCalendar : IMarketSessionCalendar
@@ -41,7 +43,7 @@ public sealed class ExplicitMarketSessionCalendar : IMarketSessionCalendar
             {
                 ValidateSession(previous);
                 if (previous.SessionId == entry.CurrentSession.SessionId
-                    || previous.EndUtc > entry.CurrentSession.StartUtc)
+                    || previous.CloseAtUtc > entry.CurrentSession.OpenAtUtc)
                 {
                     throw new ArgumentException(
                         "A configured previous session must precede and differ from its current session.",
@@ -56,45 +58,52 @@ public sealed class ExplicitMarketSessionCalendar : IMarketSessionCalendar
             StringComparer.Ordinal);
     }
 
-    public MarketSessionCalendarResolution ResolvePreviousSession(
+    public Task<MarketSessionCalendarResolution> ResolvePreviousSessionAsync(
         string symbol,
         string currentSessionId,
-        DateTimeOffset currentEventTimeUtc)
+        DateTimeOffset currentEventTimeUtc,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
         ArgumentException.ThrowIfNullOrWhiteSpace(currentSessionId);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!_entries.TryGetValue(currentSessionId, out var entry))
         {
-            return new MarketSessionCalendarResolution(
+            return Task.FromResult(new MarketSessionCalendarResolution(
                 null,
                 null,
                 _calendarId,
-                $"The explicit calendar has no entry for session '{currentSessionId}'.");
+                $"The explicit calendar has no entry for session '{currentSessionId}'.",
+                MarketSessionCalendarStatus.InvalidReference));
         }
 
-        if (currentEventTimeUtc < entry.CurrentSession.StartUtc
-            || currentEventTimeUtc > entry.CurrentSession.EndUtc)
+        if (currentEventTimeUtc < entry.CurrentSession.OpenAtUtc
+            || currentEventTimeUtc > entry.CurrentSession.CloseAtUtc)
         {
-            return new MarketSessionCalendarResolution(
+            return Task.FromResult(new MarketSessionCalendarResolution(
                 entry.CurrentSession,
                 null,
                 _calendarId,
-                "The event time is outside the configured exchange-local session boundaries.");
+                "The event time is outside the configured exchange-local session boundaries.",
+                MarketSessionCalendarStatus.InvalidReference));
         }
 
-        return new MarketSessionCalendarResolution(
+        return Task.FromResult(new MarketSessionCalendarResolution(
             entry.CurrentSession,
             entry.PreviousSession,
             _calendarId,
             entry.PreviousSession is null
                 ? "No immediately preceding eligible session is configured."
-                : null);
+                : null,
+            entry.PreviousSession is null
+                ? MarketSessionCalendarStatus.NoPreviousSession
+                : MarketSessionCalendarStatus.Success));
     }
 
-    private static void ValidateSession(MarketSession session)
+    private static void ValidateSession(MarketSessionDefinition session)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(session.SessionId);
-        if (session.StartUtc >= session.EndUtc)
+        if (session.OpenAtUtc >= session.CloseAtUtc)
         {
             throw new ArgumentException("Session boundaries must have a positive UTC interval.");
         }
@@ -156,10 +165,11 @@ public sealed class PriorSessionContextProvider(
                 "Historical market data or an authoritative session calendar is unavailable for this source."));
         }
 
-        var resolution = calendar.ResolvePreviousSession(
+        var resolution = await calendar.ResolvePreviousSessionAsync(
             symbol,
             currentSessionId,
-            currentEventTimeUtc);
+            currentEventTimeUtc,
+            cancellationToken);
         if (resolution.CurrentSession is null || resolution.PreviousSession is null)
         {
             return View(builder.BuildUnavailable(
@@ -176,12 +186,13 @@ public sealed class PriorSessionContextProvider(
                 "The session calendar returned an invalid previous-session relationship.");
         }
 
+        var priorSession = resolution.PreviousSession.ToMarketSession();
         HistoricalMarketSessionData? historicalData;
         try
         {
             historicalData = await historicalSource.ReadSessionAsync(
                 symbol,
-                resolution.PreviousSession,
+                priorSession,
                 cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -208,7 +219,7 @@ public sealed class PriorSessionContextProvider(
         var context = builder.Build(
             symbol,
             currentSessionId,
-            resolution.PreviousSession,
+            priorSession,
             historicalData,
             configuration);
         return View(context);
