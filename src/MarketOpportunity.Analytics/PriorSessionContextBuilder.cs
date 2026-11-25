@@ -5,8 +5,13 @@ using MarketOpportunity.Domain;
 
 namespace MarketOpportunity.Analytics;
 
-public sealed class PriorSessionContextBuilder(FeatureCalculator featureCalculator)
+public sealed class PriorSessionContextBuilder
 {
+    public PriorSessionContextBuilder(FeatureCalculator featureCalculator)
+    {
+        ArgumentNullException.ThrowIfNull(featureCalculator);
+    }
+
     public const string DefinitionVersion = "prior-session-context-v1";
 
     public PriorSessionContext Build(
@@ -14,7 +19,9 @@ public sealed class PriorSessionContextBuilder(FeatureCalculator featureCalculat
         string currentSessionId,
         MarketSession priorSession,
         HistoricalMarketSessionData historicalData,
-        ScannerConfiguration configuration)
+        ScannerConfiguration configuration,
+        PriorSessionContextStatus? completenessOverride = null,
+        string? completenessReasonOverride = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
         ArgumentException.ThrowIfNullOrWhiteSpace(currentSessionId);
@@ -26,23 +33,42 @@ public sealed class PriorSessionContextBuilder(FeatureCalculator featureCalculat
             throw new ArgumentException("The prior session must have a positive time range.", nameof(priorSession));
         }
 
-        var eligibleEvents = historicalData.Events
+        if (completenessOverride.HasValue != (completenessReasonOverride is not null))
+        {
+            throw new ArgumentException(
+                "A completeness override and reason must be supplied together.",
+                nameof(completenessOverride));
+        }
+
+        var trades = historicalData.Events
+            .OfType<TradeEvent>()
             .Where(item => item.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase)
                 && item.SessionId.Equals(priorSession.SessionId, StringComparison.Ordinal)
                 && item.EventTimeUtc >= priorSession.StartUtc
                 && item.EventTimeUtc <= priorSession.EndUtc)
+            .DistinctBy(MarketEventIdentity.Create)
+            .OrderBy(item => item.EventTimeUtc)
+            .ThenBy(item => item.Provider, StringComparer.Ordinal)
+            .ThenBy(item => item.SequenceId, StringComparer.Ordinal)
+            .ThenBy(MarketEventIdentity.Create, StringComparer.Ordinal)
             .ToArray();
-        var state = new SymbolEventState(symbol, priorSession.SessionId, Math.Max(1, eligibleEvents.Length));
-        foreach (var marketEvent in eligibleEvents)
+        decimal? observedHigh = null;
+        decimal? observedLow = null;
+        foreach (var trade in trades)
         {
-            state.Add(marketEvent);
+            if (trade.Price <= 0)
+            {
+                continue;
+            }
+
+            observedHigh = observedHigh is null || trade.Price > observedHigh
+                ? trade.Price
+                : observedHigh;
+            observedLow = observedLow is null || trade.Price < observedLow
+                ? trade.Price
+                : observedLow;
         }
 
-        var orderedEvents = state.GetEventsAsOf(priorSession.EndUtc);
-        var trades = orderedEvents.OfType<TradeEvent>().ToArray();
-        var validTrades = trades.Where(trade => trade.Price > 0).ToArray();
-        decimal? observedHigh = validTrades.Length == 0 ? null : validTrades.Max(trade => trade.Price);
-        decimal? observedLow = validTrades.Length == 0 ? null : validTrades.Min(trade => trade.Price);
         var lastObservedTrade = trades.LastOrDefault();
         var sessionStartCovered = historicalData.CoverageStartUtc is { } coverageStart
             && coverageStart <= priorSession.StartUtc;
@@ -53,49 +79,53 @@ public sealed class PriorSessionContextBuilder(FeatureCalculator featureCalculat
             && sessionStartCovered
             && sessionEndCovered
             && !historicalData.HasKnownGaps;
-        var invalidPrice = trades.Any(trade => trade.Price <= 0);
+        var invalidTrade = trades.Any(trade => trade.Price <= 0 || trade.Size <= 0);
 
-        FeatureSnapshot? features = null;
-        if (trades.Length > 0)
-        {
-            features = featureCalculator.Calculate(
-                state,
-                priorSession.EndUtc,
-                configuration,
-                historicalData.Capabilities);
-        }
-
-        var completeness = trades.Length == 0
+        var computedCompleteness = trades.Length == 0
             ? PriorSessionContextStatus.Unavailable
-            : invalidPrice
+            : invalidTrade
                 ? PriorSessionContextStatus.Invalid
                 : completeCoverage
                     ? PriorSessionContextStatus.Available
                     : PriorSessionContextStatus.Partial;
-        var completenessReason = completeness switch
+        var computedReason = computedCompleteness switch
         {
             PriorSessionContextStatus.Available =>
                 "Historical trade coverage spans the complete prior session with no declared gaps.",
             PriorSessionContextStatus.Partial =>
                 "Historical trades are available, but full-session coverage or gap-free completeness is not established; extrema and the last observed trade are not session high, low, or close.",
             PriorSessionContextStatus.Invalid =>
-                "At least one eligible prior-session trade has a non-positive price; session levels are invalid.",
+                "At least one eligible prior-session trade has a non-positive price or size; session levels are invalid.",
             _ => "No eligible prior-session trades are available."
         };
-        // Candidate selection uses every eligible confirmed pivot from the shared swing
-        // calculation; latest/previous swings remain only the structure summary.
+        if (completenessOverride == PriorSessionContextStatus.Available
+            && computedCompleteness != PriorSessionContextStatus.Available)
+        {
+            throw new ArgumentException(
+                "A completeness override cannot promote an incomplete or invalid context to Available.",
+                nameof(completenessOverride));
+        }
+
+        var completeness = completenessOverride ?? computedCompleteness;
+        var completenessReason = completenessReasonOverride ?? computedReason;
         var (confirmedHighs, confirmedLows) = FeatureCalculator.CalculateConfirmedSwings(
             trades,
             symbol,
             priorSession.SessionId,
             configuration.FeatureSetVersion);
+        var latestHigh = confirmedHighs.Count > 0 ? confirmedHighs[^1] : null;
+        var previousHigh = confirmedHighs.Count > 1 ? confirmedHighs[^2] : null;
+        var latestLow = confirmedLows.Count > 0 ? confirmedLows[^1] : null;
+        var previousLow = confirmedLows.Count > 1 ? confirmedLows[^2] : null;
+        var structureState = CalculateStructureState(latestHigh, previousHigh, latestLow, previousLow);
         var supportCandidates = confirmedLows
             .Select(ToCandidate)
             .ToArray();
         var resistanceCandidates = confirmedHighs
             .Select(ToCandidate)
             .ToArray();
-        var canPublishSessionLevels = completeness == PriorSessionContextStatus.Available && !invalidPrice;
+        var canPublishSessionLevels =
+            completeness == PriorSessionContextStatus.Available && !invalidTrade;
         var contextContent = new
         {
             Symbol = symbol,
@@ -114,11 +144,11 @@ public sealed class PriorSessionContextBuilder(FeatureCalculator featureCalculat
             ObservedLow = observedLow,
             LastObservedTrade = lastObservedTrade?.Price,
             LastObservedTradeEventTimeUtc = lastObservedTrade?.EventTimeUtc,
-            LatestConfirmedSwingHigh = features?.LatestConfirmedSwingHigh,
-            LatestConfirmedSwingLow = features?.LatestConfirmedSwingLow,
-            PreviousConfirmedSwingHigh = features?.PreviousConfirmedSwingHigh,
-            PreviousConfirmedSwingLow = features?.PreviousConfirmedSwingLow,
-            StructureState = features?.StructureState ?? MarketStructureState.Insufficient,
+            LatestConfirmedSwingHigh = latestHigh,
+            LatestConfirmedSwingLow = latestLow,
+            PreviousConfirmedSwingHigh = previousHigh,
+            PreviousConfirmedSwingLow = previousLow,
+            StructureState = structureState,
             SupportCandidates = supportCandidates,
             ResistanceCandidates = resistanceCandidates,
             Completeness = completeness,
@@ -132,7 +162,7 @@ public sealed class PriorSessionContextBuilder(FeatureCalculator featureCalculat
             IsSessionEndCovered = sessionEndCovered,
             HasKnownGaps = historicalData.HasKnownGaps,
             ContextDefinitionVersion = DefinitionVersion,
-            EventInputs = orderedEvents.Select(Fingerprint).ToArray(),
+            EventInputs = trades.Select(Fingerprint).ToArray(),
             AlgorithmVersion = "session-swing-fractal-v1",
             FeatureSetVersion = configuration.FeatureSetVersion
         };
@@ -155,11 +185,11 @@ public sealed class PriorSessionContextBuilder(FeatureCalculator featureCalculat
             observedLow,
             lastObservedTrade?.Price,
             lastObservedTrade?.EventTimeUtc,
-            features?.LatestConfirmedSwingHigh,
-            features?.LatestConfirmedSwingLow,
-            features?.PreviousConfirmedSwingHigh,
-            features?.PreviousConfirmedSwingLow,
-            features?.StructureState ?? MarketStructureState.Insufficient,
+            latestHigh,
+            latestLow,
+            previousHigh,
+            previousLow,
+            structureState,
             supportCandidates,
             resistanceCandidates,
             completeness,
@@ -287,14 +317,40 @@ public sealed class PriorSessionContextBuilder(FeatureCalculator featureCalculat
             swing.FeatureSetVersion,
             swing.AlgorithmVersion);
 
-    private static string Fingerprint(MarketEvent marketEvent)
-    {
-        return marketEvent switch
+    private static string Fingerprint(TradeEvent trade) =>
+        JsonSerializer.Serialize(new
         {
-            TradeEvent trade => JsonSerializer.Serialize(trade),
-            QuoteEvent quote => JsonSerializer.Serialize(quote),
-            _ => throw new NotSupportedException(
-                $"Unsupported normalized market event type: {marketEvent.GetType().Name}.")
+            trade.Symbol,
+            trade.SessionId,
+            trade.EventTimeUtc,
+            trade.Provider,
+            trade.SequenceId,
+            trade.Price,
+            trade.Size
+        });
+
+    private static MarketStructureState CalculateStructureState(
+        ConfirmedSwing? latestHigh,
+        ConfirmedSwing? previousHigh,
+        ConfirmedSwing? latestLow,
+        ConfirmedSwing? previousLow)
+    {
+        if (latestHigh is null
+            || previousHigh is null
+            || latestLow is null
+            || previousLow is null)
+        {
+            return MarketStructureState.Insufficient;
+        }
+
+        var high = latestHigh.Price.CompareTo(previousHigh.Price);
+        var low = latestLow.Price.CompareTo(previousLow.Price);
+        return (high, low) switch
+        {
+            (> 0, > 0) => MarketStructureState.Bullish,
+            (< 0, < 0) => MarketStructureState.Bearish,
+            (0, 0) => MarketStructureState.Range,
+            _ => MarketStructureState.Mixed
         };
     }
 

@@ -1686,3 +1686,32 @@ README, PROJECT_STATUS, master specification, `.github/copilot-instructions.md`,
 Batch 1 adds `ADR-011`, provider-independent calendar and historical result/status/provenance contracts, Alpaca calendar and historical SIP adapters, a separate historical DTO, composite provider/feed/symbol/exchange/trade-ID/event-time identity, HTTP retrieval receive-time semantics, and bounded pagination. SIP is explicit with no IEX fallback. Pagination exhaustion remains distinct from complete session coverage. Fixture remains the shared default; the concrete Alpaca historical services are not registered as production `IMarketSessionCalendar`/`IHistoricalMarketDataSource` interfaces. `PriorSessionContextBuilder`, `ScannerPipeline`, MarketSituation, MarketReaction, the swing algorithm, and SQL behavior are unchanged.
 
 README, PROJECT_STATUS, master specification, `.github/copilot-instructions.md`, ADR-007, and ADR-011 were reconciled to **Batch 1 COMPLETE / Batch 2 NEXT / AUTHORIZED / Batches 3-4 NOT STARTED**. This record does not authorize Batch 2 implementation automatically.
+
+## A.2.5 Batch 2 validation (2026-11-24)
+
+**A.2.5 Live Prior-Session Historical Context - Batch 2: COMPLETE. A.2.5 overall remains IN PROGRESS.** Validation was sequential and offline; no Alpaca request, SQL connection, User Secret, production warm-up invocation, or provider credential was used.
+
+| Scope | Result |
+|---|---|
+| Reconstruction + MarketSituation/MarketReaction compatibility | **3/3** |
+| Completeness/failure/provenance/duplicate/boundary coverage | **15/15** |
+| End-of-session pivot isolation | **1/1**; current-session trades did not confirm a prior-session end pivot |
+| Early-close reconstruction | **1/1**; extended-hours record excluded |
+| Deterministic replay | **2/2**; changed retrieval timing did not change context identity or analytics |
+| PriorSessionContext full regression | **11/11** |
+| MarketSituation regression | **18/18** |
+| MarketReaction evaluator/tracker regression | **19/19** |
+| Alpaca historical adapter regression | **12/12** |
+| Alpaca live adapter regression | **18/18** |
+| Readiness/pipeline/publication regression | **95/95** |
+| TradePlan/Momentum regression | **39/39** |
+| Full offline unit suite | **432/432** |
+| Hosted offline structure/configuration suite | **8/8** |
+| Solution build | **Succeeded, 0 warnings, 0 errors** |
+| SQL validation | **Not required/not run**; no historical persistence, migration, store, or SQL behavior changed |
+
+Batch 2 adds a provider-independent `PriorSessionHistoricalReconstructor` while retaining `prior-session-context-v1`. `Available` requires matching provider/feed/source/request bounds, successful exhausted transport, an explicit declaration of complete coverage, full inclusive session-bound coverage, no known gaps, and valid canonical trades. Failed transport, malformed/provenance-conflicting data, invalid trades, absent eligible trades, and unknown coverage remain `Partial`, `Unavailable`, or `Invalid` as applicable. No near-open/near-close tolerance was invented.
+
+High/low use decimal eligible in-session extrema, and analytical close remains the last eligible canonical trade at or before the inclusive session close. `session-swing-fractal-v1` is reused unchanged over one deduplicated sequence entirely inside the prior session. Current-session records cannot confirm prior pivots. The existing latest/previous summaries and all-confirmed-pivot candidates remain unchanged and bounded by the upstream historical record limit; no micro-pivot significance filtering was added. Reconstructed identities exclude retrieval receive time.
+
+No historical SQL persistence/cache, production scanner registration, startup warm-up, provider selection, scanner configuration/version, MarketSituation rule, MarketReaction rule, or swing algorithm change was added. README, PROJECT_STATUS, master specification, `.github/copilot-instructions.md`, ADR-007, and ADR-011 are reconciled to **Batches 1-2 COMPLETE / Batch 3 NEXT / AUTHORIZED / Batch 4 NOT STARTED**. This record does not begin Batch 3.
