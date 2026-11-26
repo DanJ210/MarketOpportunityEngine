@@ -4,7 +4,7 @@ A .NET 10 modular-monolith decision-support scanner for US equities/ETFs. The ap
 
 ## Current milestone
 
-**Milestone A.2.4b - Structural Level Reaction Classification: COMPLETE. A.2.5 Live Prior-Session Historical Context: COMPLETE (Batches 1-4 COMPLETE).** The production-wired reaction tracker remains unchanged. A.2.5 terminally warms approved live Alpaca symbol/session scopes before their first eligible analysis, reconstructs the immediately preceding calendar-resolved regular session from explicit historical SIP, and honestly falls back to `CurrentSessionOnly` when context is partial or unavailable. The next checkpoint requires design/approval. See [PROJECT_STATUS.md](./PROJECT_STATUS.md), [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md), and the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md#a25-live-prior-session-historical-context).
+**A.2.5 Live Prior-Session Historical Context: COMPLETE.** Live Alpaca symbol/session scopes warm from calendar-resolved prior regular-session SIP history before their first eligible analysis, while partial or unavailable history falls back to `CurrentSessionOnly`. The next checkpoint requires design/approval. See [PROJECT_STATUS.md](./PROJECT_STATUS.md), [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md), and the [product roadmap](./PRODUCT_ROADMAP.md#a25-live-prior-session-historical-context).
 
 ## Architecture overview
 
@@ -23,7 +23,7 @@ Recorded fixture (default) or optional read-only adapter
   -> ASP.NET Core API and Blazor Interactive Server dashboard
 ```
 
-The solution targets .NET 10, ASP.NET Core 10, Blazor Interactive Server, EF Core 10, and SQL Server locally / Azure SQL Database as the deployment target. Domain and analytics remain independent of provider DTOs and persistence. Blazor's circuit transport updates the UI; there is no separate application SignalR hub. See [the master specification](./Market_Opportunity_Engine_Final_Master_Spec.md) and [docs/adr/](./docs/adr/).
+The solution targets .NET 10, ASP.NET Core 10, Blazor Interactive Server, EF Core 10, and SQL Server locally / Azure SQL Database as the deployment target. Domain and analytics remain independent of provider DTOs and persistence. Blazor's circuit transport updates the UI; there is no separate application SignalR hub. See the [product roadmap](./PRODUCT_ROADMAP.md) and [docs/adr/](./docs/adr/).
 
 ## A.2.4a market situation
 
@@ -109,7 +109,7 @@ The app requires SQL Server persistence. Development startup creates a clean dat
 
 Schema management is deliberately mixed: clean development schemas may use `EnsureCreated`; existing schemas use reviewed hand-written, idempotent migrations. The repository has no EF model snapshot or initial migration. Do not generate a model migration blindly; it may describe the entire model. Review the migration-generation strategy before changing this convention. The current TradePlan schema is introduced by an explicit migration, tracked-candidate/readiness tables (`tracked_opportunity`, `pre_trade_readiness_assessment`) by `20261101120000_AddTrackedOpportunityReadiness`, MarketSituation history by `20261105120000_AddMarketSituationHistory`, and A.2.4b episode/reaction history and research context by `20261106120000_AddLevelInteractionReactionPersistence` and `20261106150000_AddMarketReactionResearchContext`. See [ADR-002](./docs/adr/ADR-002-ef-sqlserver-conventions.md), [ADR-006](./docs/adr/ADR-006-immutable-trade-plan-persistence.md), [ADR-008](./docs/adr/ADR-008-tracked-opportunity-readiness.md), [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md), and [ADR-010](./docs/adr/ADR-010-market-reaction-confirmation.md).
 
-SQL integration tests use `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` (environment variable first, then the integration-test project's User Secrets) and accept only `127.0.0.1,14333` with the exact `MarketOpportunityEngine_IntegrationTests` catalog. They must never target the development or live-validation database. Independently verify the effective connection's catalog with a read-only SQL Server query before any SQL test command; the code guard does not replace this preflight. If the dedicated catalog must be initialized on the repository's local Compose SQL Server, the explicit `sqlserver-test-init` service in the `validation` profile creates it only if absent and verifies it without dropping or resetting catalogs; it preserves the live-validation catalog setup and persistent SQL volume. Do not point that service or the tests at another SQL Server, and stop if the exact approved target cannot be confirmed. Follow the guarded procedure and database checks in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#milestone-a22---sql-validation-closeout-2026-10-30).
+SQL integration tests use `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` (environment variable first, then the integration-test project's User Secrets) and accept only `127.0.0.1,14333` with the exact `MarketOpportunityEngine_IntegrationTests` catalog. They must never target the development or live-validation database. Independently verify the effective connection's catalog with a read-only SQL Server query before any SQL test command; the code guard does not replace this preflight. If the dedicated catalog must be initialized on the repository's local Compose SQL Server, the explicit `sqlserver-test-init` service in the `validation` profile creates it only if absent and verifies it without dropping or resetting catalogs; it preserves the live-validation catalog setup and persistent SQL volume. Do not point that service or the tests at another SQL Server, and stop if the exact approved target cannot be confirmed. See the [historical A.2.2 guarded SQL procedure](./docs/archive/VALIDATION_HISTORY.md#milestone-a22---sql-validation-closeout-2026-10-30) only when provenance or prior behavior is relevant.
 
 ## Offline fixture mode
 
@@ -133,7 +133,7 @@ pwsh -NoProfile -File .\scripts\Start-AlpacaValidation.ps1 -Feed iex
 pwsh -NoProfile -File .\scripts\Start-AlpacaValidation.ps1 -Feed iex -ValidationSymbol AAPL
 ```
 
-The launcher uses process-scoped validation configuration and does not migrate User Secrets. `-ValidationSymbol` bounds a validation run to one symbol without changing the configured universe; omit it only when the approved full-universe validation scope is intentional. Never point the launcher at the development database. For setup, preflight requirements, exact-session persistence checks, browser observations, and safe shutdown, follow the [A.1 validation record and runbook](./VALIDATION_HISTORY.md#consolidated-a1-validation-record-2026-10-29) and [Alpaca reference](./docs/providers/alpaca-websocket.md). Do not repeat provider validation simply because documentation changed.
+The launcher uses process-scoped validation configuration and does not migrate User Secrets. `-ValidationSymbol` bounds a validation run to one symbol without changing the configured universe; omit it only when the approved full-universe validation scope is intentional. Never point the launcher at the development database. For historical setup, preflight, exact-session persistence, browser, and shutdown evidence, consult the [archived A.1 validation record](./docs/archive/VALIDATION_HISTORY.md#consolidated-a1-validation-record-2026-10-29) and [Alpaca reference](./docs/providers/alpaca-websocket.md) as needed. Do not repeat provider validation simply because documentation changed.
 
 ## Tests
 
@@ -151,7 +151,7 @@ dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.Integrati
 dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter FullyQualifiedName~FixtureWebApplicationTests
 ```
 
-The separate Alpaca connectivity test project makes a network connection when credentials are configured; it is not part of the solution's offline unit suite. Do not run it unless explicitly validating that provider. Latest checkpoint results are summarized in [PROJECT_STATUS.md](./PROJECT_STATUS.md); full historical results are in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md).
+The separate Alpaca connectivity test project makes a network connection when credentials are configured; it is not part of the solution's offline unit suite. Do not run it unless explicitly validating that provider. Current status is in [PROJECT_STATUS.md](./PROJECT_STATUS.md), concise final checkpoint evidence is in [VALIDATION_SUMMARY.md](./VALIDATION_SUMMARY.md), and detailed chronological evidence is retained in the [validation archive](./docs/archive/VALIDATION_HISTORY.md).
 
 ## API
 
@@ -205,9 +205,11 @@ A tracked candidate pins one immutable `PlanDefined` plan per symbol/session; th
 
 ## Documentation map
 
-- [Master specification and roadmap](./Market_Opportunity_Engine_Final_Master_Spec.md): authoritative product, architecture, and future contracts.
-- [PROJECT_STATUS.md](./PROJECT_STATUS.md): current checkpoint, completed slices, blockers, and immediate next step.
-- [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md): historical test, live-run, SQL, and browser validation evidence.
+- [README.md](./README.md): application overview, setup, current capabilities, and limitations.
+- [PROJECT_STATUS.md](./PROJECT_STATUS.md): authoritative current implementation checkpoint, completed milestones, latest status, blockers, and next approval gate.
+- [PRODUCT_ROADMAP.md](./PRODUCT_ROADMAP.md): durable product direction, architecture, principles, and future roadmap.
+- [VALIDATION_SUMMARY.md](./VALIDATION_SUMMARY.md): concise final evidence for completed checkpoints.
 - [docs/adr/](./docs/adr/): durable architecture decisions (ADR-001 through ADR-011).
 - [docs/providers/](./docs/providers/): provider protocol references and current adapter limitations.
+- [docs/archive/VALIDATION_HISTORY.md](./docs/archive/VALIDATION_HISTORY.md): detailed chronological validation, troubleshooting, and superseded-checkpoint archive; not routine development context.
 - [scripts/](./scripts/): opt-in live validation tooling.

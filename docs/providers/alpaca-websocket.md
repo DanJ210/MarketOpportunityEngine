@@ -74,7 +74,7 @@ Alpaca quote sizes are passed through as reported round-lot counts; no conversio
 
 The application retries an unexpected Alpaca stream close or source failure after `MarketData:Recovery:ReconnectDelayMilliseconds` (default 5000 ms; valid range 10-300000 ms). Authentication/subscription failures are also retried with the same delay. Shutdown cancellation stops the retry loop. Failures are logged with the provider and exception type only; provider error text and credentials are not logged.
 
-Feed health becomes unhealthy immediately on disconnect, suspending current publications. It remains `Connecting` until a valid market event is received after reconnect. Since this checkpoint does not backfill or reconcile missed events, a disconnect sets an unresolved-gap flag; the dashboard displays the limitation and the publication gate keeps candidates suspended after the stream resumes. Historical warm-up, correction processing, and gap backfill are not implemented.
+Feed health becomes unhealthy immediately on disconnect, suspending current publications. It remains `Connecting` until a valid market event is received after reconnect. Since the live stream does not backfill or reconcile missed events, a disconnect sets an unresolved-gap flag; the dashboard displays the limitation and the publication gate keeps candidates suspended after the stream resumes. Approved Alpaca prior-session historical warm-up is implemented separately from the live feed; correction processing and live-gap backfill are not implemented.
 
 ## Opt-in final A.1 diagnostics
 
@@ -88,7 +88,7 @@ Each connection attempt gets a fresh diagnostic GUID and sanitized Connecting/Au
 
 Metrics use the `MarketOpportunity.LiveValidation` meter, `moe.live.*` instrument names, and a fixed `provider=Alpaca` label, never connection IDs/symbols as metric labels. Local diagnostic files/logs carry bounded connection/symbol evidence for correlation. Message-to-creation, creation-to-analysis, channel waits, and analysis/persistence durations use monotonic time; provider-to-message lag uses the two UTC clocks and can be negative. No histogram percentile should be described as exact; the local export reports quantile intervals and exact observed min/max.
 
-Complete-message receipt is an adapter observation, not a wire timestamp. If the application has stopped reading under backpressure or a host pause, socket/provider buffering can precede that observation. Clock status, connection transitions, and channel/persistence evidence must be considered together before assigning causation. See the [consolidated A.1 validation history](../../VALIDATION_HISTORY.md#consolidated-a1-validation-record-2026-10-29).
+Complete-message receipt is an adapter observation, not a wire timestamp. If the application has stopped reading under backpressure or a host pause, socket/provider buffering can precede that observation. Clock status, connection transitions, and channel/persistence evidence must be considered together before assigning causation. See the [archived consolidated A.1 validation record](../archive/VALIDATION_HISTORY.md#consolidated-a1-validation-record-2026-10-29).
 
 ## Optional test-stream connectivity check
 

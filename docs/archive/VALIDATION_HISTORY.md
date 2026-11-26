@@ -1,7 +1,12 @@
-# Archived Project Status and Validation Record (2026-10-27)
+# Archived Historical Validation Evidence
 
-This document is chronological historical evidence. Statements about "current status", blockers, versions, or missing capabilities inside older sections describe that historical checkpoint and may be superseded.
-For current project truth, see PROJECT_STATUS.md.
+> **ARCHIVED HISTORICAL EVIDENCE**
+>
+> This file preserves chronological validation records, including historical failures, troubleshooting, and superseded checkpoints. Statements about current status, blockers, versions, or missing capabilities inside older sections describe those historical checkpoints and may have been superseded.
+>
+> For current project truth, see [PROJECT_STATUS.md](../../PROJECT_STATUS.md). For concise final milestone evidence, see [VALIDATION_SUMMARY.md](../../VALIDATION_SUMMARY.md).
+
+Do not use this archive as routine coding-agent context. Use it when historical validation, a previous failure, an old live-provider run, SQL provenance, browser evidence, or a historical contradiction must be investigated.
 
 ## Final same-page browser observation (2026-10-30)
 
@@ -65,7 +70,7 @@ The matching launcher result records **exit code 0 at 18:11:27.3556604Z**; final
 
 ## Consolidated A.1 validation record (2026-10-29)
 
-This section preserves durable evidence from the live IEX, forensic, instrumentation, and shutdown work. At this checkpoint, the latest 30-minute closeout supplied the missing logs, shutdown trigger, and exit code; the remaining browser evidence gap was subsequently closed by the [2026-10-30 same-page observation](#final-same-page-browser-observation-2026-10-30). The current checkpoint is in [PROJECT_STATUS.md](./PROJECT_STATUS.md), and the optional operator procedure is in [README.md](./README.md#optional-live-alpaca-validation).
+This section preserves durable evidence from the live IEX, forensic, instrumentation, and shutdown work. At this checkpoint, the latest 30-minute closeout supplied the missing logs, shutdown trigger, and exit code; the remaining browser evidence gap was subsequently closed by the [2026-10-30 same-page observation](#final-same-page-browser-observation-2026-10-30). The current checkpoint is in [PROJECT_STATUS.md](../../PROJECT_STATUS.md), and the optional operator procedure is in [README.md](../../README.md#optional-live-alpaca-validation).
 
 ### Self-describing 30-minute IEX closeout (2026-10-29)
 
@@ -503,7 +508,7 @@ All four results carried `RecordedFixture` / `Synthetic` / `Synthetic` provider/
 - **Completeness:** Read volume with `HasCompleteSessionData`. True means no event eviction; false marks a non-null retained sum as partial, never complete session volume. This sticky flag includes quote eviction and does not establish upstream feed/session-start coverage. After eviction, no eligible trades or invalid retained sizes still yields null. Future events are excluded but may evict earlier state; this is not historical replay/backfill.
 - **Feature contract versions:** bumped from v5 to `features-v6` and `scanner-config-v6`; serialized configuration and new volume participate in deterministic identity. Setup remains `momentum-continuation-v1`. Prior persisted configurations/snapshots/decisions remain immutable. No detector, scoring, classification, publication, veto, UI, provider, dependency, or migration change was made.
 - **Preserved test isolation:** The fixture host remains non-Development, uses early host configuration, explicitly registers Fixture/configuration/SQL, and does not load provider User Secrets. The non-empty test database-name guard remains intact.
-- **Preserved fix:** [SqlServerPersistenceTests](tests/MarketOpportunity.IntegrationTests/SqlServerPersistenceTests.cs) still migrates when `EnsureCreatedAsync` returns false. No test-database guard was weakened.
+- **Preserved fix:** [SqlServerPersistenceTests](../../tests/MarketOpportunity.IntegrationTests/SqlServerPersistenceTests.cs) still migrates when `EnsureCreatedAsync` returns false. No test-database guard was weakened.
 - **Final-run database safety:** The variable was absent; reused the existing healthy Compose SQL Server as authorized by this request, targeting `MarketOpportunityEngine_IntegrationTests` plus uniquely named migration-test databases. The non-empty catalog containing `test` was validated with `Microsoft.Data.SqlClient.SqlConnectionStringBuilder`. Credentials were held in process memory, not printed/saved. Fixture records were retained; no configured database was dropped.
 - **Last verified cleanup:** Test hosts disposed; no separate web process was started for this slice. The pre-existing SQL container remained healthy/running. Connection settings were process-only. The prior port-5228 cleanup/browser walkthrough is historical, not rechecked here.
 - **Remaining limits:** API/history reads remain memory-backed; publication history is not persisted; live reconnect/gap recovery, three additional detectors, and broader Milestone A feature/risk coverage are absent. Local fixture verification does not establish Azure SQL or live-provider readiness.
@@ -885,11 +890,11 @@ No project-specific metrics or spans exist for the minimum observability list in
 
 | ADR | Decision | Status / consequences |
 |---|---|---|
-| [ADR-001](docs/adr/ADR-001-blazor-render-mode.md) | Blazor Web App with Interactive Server; no separate app SignalR hub for current checkpoint. | Accepted. Server keeps analysis/credentials off browser; circuit transport is used. |
-| [ADR-002](docs/adr/ADR-002-ef-sqlserver-conventions.md) | EF Core 10 and SQL Server; Infrastructure owns persistence; singular snake_case tables; development `EnsureCreated`, reviewed migrations for existing schema. | Accepted. Production migration orchestration remains follow-up. |
-| [ADR-003](docs/adr/ADR-003-in-process-event-transport.md) | Fixture runs direct/in-process; use bounded `Channel<MarketEvent>` only for continuous producer/consumer. | Accepted. Live pipeline uses bounded channel with `Wait`; no distributed broker. |
-| [ADR-004](docs/adr/ADR-004-market-event-retention.md) | Persist normalized trade/quote events; no raw vendor payload retention until reviewed. | Accepted. No raw-source reconstruction; retention/licensing duration still needs decision before live use beyond evaluation. |
-| [ADR-005](docs/adr/ADR-005-market-data-provider-criteria.md) | Massive first live trade/quote provider; Alpaca approved alternative, not broker authorization. | Accepted. Fixture remains default; provider entitlements and terms must be confirmed. |
+| [ADR-001](../adr/ADR-001-blazor-render-mode.md) | Blazor Web App with Interactive Server; no separate app SignalR hub for current checkpoint. | Accepted. Server keeps analysis/credentials off browser; circuit transport is used. |
+| [ADR-002](../adr/ADR-002-ef-sqlserver-conventions.md) | EF Core 10 and SQL Server; Infrastructure owns persistence; singular snake_case tables; development `EnsureCreated`, reviewed migrations for existing schema. | Accepted. Production migration orchestration remains follow-up. |
+| [ADR-003](../adr/ADR-003-in-process-event-transport.md) | Fixture runs direct/in-process; use bounded `Channel<MarketEvent>` only for continuous producer/consumer. | Accepted. Live pipeline uses bounded channel with `Wait`; no distributed broker. |
+| [ADR-004](../adr/ADR-004-market-event-retention.md) | Persist normalized trade/quote events; no raw vendor payload retention until reviewed. | Accepted. No raw-source reconstruction; retention/licensing duration still needs decision before live use beyond evaluation. |
+| [ADR-005](../adr/ADR-005-market-data-provider-criteria.md) | Massive first live trade/quote provider; Alpaca approved alternative, not broker authorization. | Accepted. Fixture remains default; provider entitlements and terms must be confirmed. |
 
 The requested render mode, EF/SQL Server, `Channel<T>`, retention, and provider-selection decisions are all documented.
 
@@ -1133,7 +1138,7 @@ No outstanding verification blocker remains for this feature slice. The hosted f
 
 ### Earlier 2026-10-25 hosted API negative-lookup regression evidence
 
-Added hosted API `404` assertions in [FixtureWebApplicationTests](tests/MarketOpportunity.IntegrationTests/FixtureWebApplicationTests.cs) and directly related documentation; the existing fixture-to-SQL-to-API assertions and persistence-test schema migration fix remain unchanged. The final sequence used the already-running Compose SQL Server with a process-only, guarded connection to `MarketOpportunityEngine_IntegrationTests`. The test connection variable was initially absent; local SQL credentials were obtained in memory without printing or saving them. No test records were deleted to make replay pass.
+Added hosted API `404` assertions in [FixtureWebApplicationTests](../../tests/MarketOpportunity.IntegrationTests/FixtureWebApplicationTests.cs) and directly related documentation; the existing fixture-to-SQL-to-API assertions and persistence-test schema migration fix remain unchanged. The final sequence used the already-running Compose SQL Server with a process-only, guarded connection to `MarketOpportunityEngine_IntegrationTests`. The test connection variable was initially absent; local SQL credentials were obtained in memory without printing or saving them. No test records were deleted to make replay pass.
 
 | Order | Exact command | New final result |
 |---|---|---|
@@ -1166,7 +1171,7 @@ The first SQL persistence run failed with missing provenance columns (`DataCover
 | Command / check | Final result after fix |
 |---|---|
 | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter FullyQualifiedName~FixtureWebApplicationTests` | Exit **0**; **1 passed, 0 failed, 0 skipped**. Ran first, then again after the setup fix. |
-| Filtered persistence/migration command in [README tests](README.md#tests) | Exit **0**; **3 passed, 0 failed, 0 skipped** (one persistence test and two migration tests). Initial pre-fix run: 2 passed, 1 failed. |
+| Filtered persistence/migration command in [README tests](../../README.md#tests) | Exit **0**; **3 passed, 0 failed, 0 skipped** (one persistence test and two migration tests). Initial pre-fix run: 2 passed, 1 failed. |
 | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj` | Exit **0**; **69 passed, 0 failed, 0 skipped** after the code change. |
 | `dotnet build MarketOpportunityEngine.sln` | Exit **0**; **0 warnings, 0 errors** after the code change. |
 | `dotnet run --project src\MarketOpportunity.Web --launch-profile http --no-build` | Started with process-only Fixture/provider and guarded SQL overrides. `/health` returned Healthy; status reported Recorded / RecordedFixture / 26 events. |
@@ -1189,7 +1194,7 @@ Inspected `FixtureWebApplicationTests`, `SqlServerPersistenceTests`, `ExplicitSe
 | Process-environment preflight for `MARKETOPPORTUNITY_SQL_TEST_CONNECTION` | **Absent**. No connection value, credentials, or User Secrets were displayed. No SQL connection was attempted. |
 | `dotnet --version` | **10.0.402**. |
 | `dotnet test tests\MarketOpportunity.IntegrationTests\MarketOpportunity.IntegrationTests.csproj --filter FullyQualifiedName~FixtureWebApplicationTests` | **Not run**: missing dedicated SQL test connection. |
-| Filtered SQL persistence/migration command in [README tests](README.md#tests) | **Not run**: same safety gate. |
+| Filtered SQL persistence/migration command in [README tests](../../README.md#tests) | **Not run**: same safety gate. |
 | Manual Fixture-mode dashboard / HTTP walkthrough | **Not run**: no safely configured local test database was established. No app or Docker process was started and no database was altered. |
 | `dotnet test tests\MarketOpportunity.UnitTests\MarketOpportunity.UnitTests.csproj` | **Succeeded**, exit code **0**; **69 passed, 0 failed, 0 skipped**; reported test duration **2 seconds**. |
 | `dotnet build MarketOpportunityEngine.sln` | **Succeeded**, exit code **0**; **0 warnings, 0 errors**; elapsed **00:00:02.60**. Includes the hosted integration-test project, but does not execute it. |
@@ -1565,7 +1570,7 @@ The existing-schema migration test previously verified that the migration was ap
 
 ## A.2.4a - Structural Level Interaction (2026-11-05)
 
-**Result: COMPLETE.** `market-situation-v1` adds descriptive, independently selected support and resistance interactions from complete eligible structural levels. It preserves current/prior provenance, may report both sides simultaneously, persists immutable SQL history, and is exposed through the hosted opportunity API and dashboard. It does not classify reactions or change opportunity, TradePlan, publication, tracking, or readiness. Threshold defaults remain provisional and not market calibrated. See [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
+**Result: COMPLETE.** `market-situation-v1` adds descriptive, independently selected support and resistance interactions from complete eligible structural levels. It preserves current/prior provenance, may report both sides simultaneously, persists immutable SQL history, and is exposed through the hosted opportunity API and dashboard. It does not classify reactions or change opportunity, TradePlan, publication, tracking, or readiness. Threshold defaults remain provisional and not market calibrated. See [ADR-009](../adr/ADR-009-market-situation-level-interaction.md).
 
 | Sequential verification | Result |
 |---|---|

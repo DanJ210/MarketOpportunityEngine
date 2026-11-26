@@ -1,9 +1,9 @@
-# Real-Time AI Market Opportunity Engine
+# Real-Time AI Market Opportunity Engine: Product Roadmap
 
 **Application name:** Real-Time AI Market Opportunity Engine  
 **Working solution/repository name:** `MarketOpportunityEngine`
 
-## Master Architecture and Roadmap
+## Product and Architecture Direction
 
 ### Purpose
 A personal-use .NET decision-support application that analyzes US stock/ETF market data with transparent, testable rules; explains candidate setups and their structural trade geometry; and records immutable decisions for later research. The current product defaults to recorded fixtures and supports optional read-only Alpaca and Massive market-data adapters. Fixture, provider, and broker permissions are distinct.
@@ -211,7 +211,7 @@ Track:
 - Consolidation boundaries.
 - Prior-session reference levels when historical data is available.
 
-**A.2.3a Prior-Session Market Context defines the only approved prior-session input to A.2.3b pre-trade readiness.** When readiness uses prior-session levels, it must consume an explicit, versioned context for the immediately preceding eligible session; it must not select a session by subtracting a calendar day. The context must preserve provider/feed provenance, structural-observation identity, and explicit completeness. Prior-session swings reuse the versioned two-left/two-right trade-point algorithm and cannot be confirmed by later-session events. Partial, unavailable, or invalid history must remain distinguishable, must not be presented as complete prior-session levels, and must not be used as confirmed historical support or resistance. If no approved historical source or authoritative calendar is configured, readiness must treat prior context as unavailable rather than infer it. Readiness may fall back to explicitly labeled current-session-only analysis when the current-session setup, TradePlan, publication health, and data-quality requirements remain satisfied, and must expose the context mode it used: `PriorSessionEnhanced` when complete prior-session context participated, or `CurrentSessionOnly` when readiness was derived without usable prior-session context (see [ADR-007](./docs/adr/ADR-007-prior-session-context.md)).
+`PriorSessionContext` is the approved provider-independent source for historical context. Any approved consuming contract must use an explicit, versioned context for the immediately preceding eligible session; it must not select a session by subtracting a calendar day. The context must preserve provider/feed provenance, structural-observation identity, and explicit completeness. Prior-session swings reuse the versioned two-left/two-right trade-point algorithm and cannot be confirmed by later-session events. Partial, unavailable, or invalid history must remain distinguishable, must not be presented as complete prior-session levels, and must not be used as confirmed historical support or resistance. If no approved historical source or authoritative calendar is configured, the consumer must treat prior context as unavailable rather than infer it. A consumer may fall back to explicitly labeled `CurrentSessionOnly` analysis when its current-session requirements remain satisfied, and must expose the context mode it used: `PriorSessionEnhanced` only when complete prior-session context actually participated, or `CurrentSessionOnly` when it did not (see [ADR-007](./docs/adr/ADR-007-prior-session-context.md)).
 
 A level crossing alone is insufficient for breakout-quality analysis. Participation, momentum, relative strength, liquidity, broader context, and whether price holds or rejects the level may be relevant to separate setup-quality work; these inputs do not define A.2.4b `market-reaction-v1` confirmation.
 
@@ -221,7 +221,7 @@ A level crossing alone is insufficient for breakout-quality analysis. Participat
 
 ### A.2.4b Structural Level Reaction Classification
 
-**A.2.4b status: COMPLETE. Batches 1-4 are COMPLETE.** Reaction episodes/assessments persist with conservative live restart continuity; the event-driven tracker is wired into the production pipeline and `ScannerState`, with current-projection API and Blazor surfaces. A separate immutable, event-time-bounded research context is persisted without participating in confirmation. A.2.4b describes what happens after an A.2.4a structural-level interaction. It is separate from `MarketSituation` (current geometric relationship to a level), setup detection, `TradePlan` geometry, tracked-candidate identity, and `PreTradeReadiness` (`pre-trade-readiness-v2`). A reaction is not an entry-readiness gate, a trade instruction, a new setup detector, or a probability/profitability claim. Final closeout evidence is recorded in [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#a24b-final-closeout-2026-11-10). See [ADR-010](./docs/adr/ADR-010-market-reaction-confirmation.md).
+Reaction episodes and assessments persist with conservative live restart continuity. The event-driven tracker participates in the production pipeline and current API/UI projections, while a separate immutable, event-time-bounded research context does not participate in confirmation. This layer describes what happens after an A.2.4a structural-level interaction. It is separate from `MarketSituation` (the current geometric relationship to a level), setup detection, `TradePlan` geometry, tracked-candidate identity, and `PreTradeReadiness`. A reaction is not an entry-readiness gate, trading instruction, setup detector, probability, or profitability claim. Final evidence is summarized in [VALIDATION_SUMMARY.md](./VALIDATION_SUMMARY.md#a24b-structural-level-reaction-classification); durable decisions are in [ADR-010](./docs/adr/ADR-010-market-reaction-confirmation.md).
 
 The approved v1 reaction vocabulary is:
 
@@ -233,29 +233,19 @@ An episode starts from an A.2.4a interaction and pins the original `LevelId` and
 
 The only approved v1 reaction-policy configuration values are `Scanner:MarketReaction:ConfirmationDistancePercent` and `Scanner:MarketReaction:MaxEpisodeDurationSeconds`. The initial defaults are `0.10` percent and `300` seconds; both are **PROVISIONAL / NOT MARKET CALIBRATED**. Confirmation is not based on volume, Momentum, VWAP, EMA, ADX, trend direction, Opportunity classification, TradePlan, PreTradeReadiness, or reward/risk; such values may later be retained as research context only.
 
-Episodes are scoped by exact symbol/session. Support and resistance interactions can have simultaneous episodes; per-level latches avoid repeated starts until an interaction leaves the eligible start situations. Only event batches processed by analysis advance reactions; health/publication ticks do not. In live mode, restore runs before the first observation for each symbol/session, and unresolved restored episodes become terminal `ContinuityUnknown` before new prices can be applied. `Confirmed`, `Expired`, and `ContinuityUnknown` are terminal. `level_interaction_episode` stores the actual mutable Batch 1 episode lifecycle with immutable start/geometry fields, and `market_reaction_assessment` stores deterministic immutable assessment history. The hand-written idempotent SQL migration is `20261106120000_AddLevelInteractionReactionPersistence`.
+Episodes are scoped by exact symbol/session. Support and resistance interactions can have simultaneous episodes; per-level latches avoid repeated starts until an interaction leaves the eligible start situations. Only event batches processed by analysis advance reactions; health/publication ticks do not. In live mode, restore runs before the first observation for each symbol/session, and unresolved restored episodes become terminal `ContinuityUnknown` before new prices can be applied. `Confirmed`, `Expired`, and `ContinuityUnknown` are terminal. `level_interaction_episode` stores mutable lifecycle with immutable start/geometry fields, and `market_reaction_assessment` stores deterministic immutable assessment history. The hand-written idempotent SQL migration is `20261106120000_AddLevelInteractionReactionPersistence`.
 
-The separately versioned `market-reaction-research-context-v1` captures feature identity and event-time market context for each assessment, including market-situation status/context mode, data completeness, momentum/volume/VWAP/spread/trend, opportunity classification/score, and feed metadata. It is persisted immutably in one-to-one `market_reaction_research_context` by `20261106150000_AddMarketReactionResearchContext`. This context is not passed to the reaction evaluator and cannot create, advance, confirm, or veto an episode. `GET /api/v1/reactions` and opportunity responses expose current scanner projections; historical SQL data is not queried by the endpoint. The dashboard displays the pinned interaction and descriptive context with a non-gating disclaimer. `market-reaction-v1`, Momentum, and PreTradeReadiness behavior remain unchanged. The Batch 1 records do not define separate `EvaluatedAtUtc` or evidence-collection fields.
+The separately versioned `market-reaction-research-context-v1` captures feature identity and event-time market context for each assessment, including market-situation status/context mode, data completeness, momentum/volume/VWAP/spread/trend, opportunity classification/score, and feed metadata. It is persisted immutably in one-to-one `market_reaction_research_context` by `20261106150000_AddMarketReactionResearchContext`. This context is not passed to the reaction evaluator and cannot create, advance, confirm, or veto an episode. `GET /api/v1/reactions` and opportunity responses expose current scanner projections; historical SQL data is not queried by the endpoint. The dashboard displays the pinned interaction and descriptive context with a non-gating disclaimer. `market-reaction-v1`, Momentum, and PreTradeReadiness behavior remain unchanged. Reaction identity does not invent separate evaluation-time or evidence-collection semantics.
 
-Approved implementation batches:
-
-1. **Batch 1 - Domain + Reaction Algorithm (COMPLETE):** reaction/episode domain contracts; `market-reaction-v1`; the two policy values and scanner configuration version advancement; episode lifecycle/evaluator; six mechanical reaction algorithms; offline deterministic tests/regressions.
-2. **Batch 2 - Restart/Continuity Safety + SQL Persistence/Migration (COMPLETE):** terminal restart continuity handling; explicit-session unresolved restore/read path; mutable episode and immutable assessment persistence; guarded SQL and migration tests; ADR-010.
-3. **Batch 3 - Pipeline Integration + Research Context + API + Blazor (COMPLETE):** event-driven runtime tracking, conservative live restart wiring, immutable non-gating research context, current reaction API projections, dashboard display, and hosted/integration coverage.
-4. **Batch 4 - Final Documentation and Complete Regression/SQL/Checkpoint Closeout (COMPLETE).**
-
-All four A.2.4b batches are complete. Completing this checkpoint does not authorize role reversal, confluence scoring, ATR or relative-volume confirmation, new momentum thresholds or setup detectors, a reaction requirement for `EntryReady`, Target 2, hard reward/risk vetoes, position/account management, broker execution, outcome labeling, backtesting, ML/ONNX, LLM trading decisions, provider changes, or historical-provider integration.
+This checkpoint does not authorize role reversal, confluence scoring, ATR or relative-volume confirmation, new momentum thresholds or setup detectors, a reaction requirement for `EntryReady`, Target 2, hard reward/risk vetoes, position/account management, broker execution, outcome labeling, backtesting, ML/ONNX, LLM trading decisions, or provider changes.
 
 ### A.2.5 Live Prior-Session Historical Context
 
-**Status: COMPLETE. Batches 1-4 COMPLETE.** The approved checkpoint adds source infrastructure and production live warm-up needed for today's scanner to obtain trustworthy immediately preceding regular-session context; it does not change the `session-swing-fractal-v1` definition or any reaction/setup behavior.
+Provider-independent calendar and historical-source contracts support trustworthy immediately preceding regular-session context without changing the `session-swing-fractal-v1` definition or setup, TradePlan, readiness, or reaction behavior. Alpaca is the approved historical provider for this capability. Calendar resolution uses provider sessions, and historical trades explicitly use SIP with no IEX fallback. Historical retrieval identity and provenance remain distinct from the configured live feed.
 
-1. **Batch 1 - Historical Contracts + Alpaca Calendar/Historical SIP Adapter (COMPLETE):** provider-independent calendar and historical-source contracts; Alpaca market-calendar adapter; explicit paginated SIP trade adapter; separate historical DTO; deterministic provider/feed/symbol/exchange/trade-ID/event-time identity; honest retrieval-time receive semantics; provenance/status records; bounded requests and offline deterministic tests. Pagination exhaustion alone does not establish session completeness.
-2. **Batch 2 - Completeness + Bounded PriorSessionContext Reconstruction (COMPLETE):** provider-independent reconstruction, strict transport-versus-session completeness, explicit provenance and failure behavior, inclusive regular-session boundaries, extrema/last-eligible-trade semantics, unchanged in-session swing confirmation, deterministic replay, and offline complete/partial coverage.
-3. **Batch 3 - Live Startup Warm-up + Production MarketSituation Integration (COMPLETE):** terminal-before-first-analysis warm-up per live symbol/session, bounded single-flight coordination, explicit `CurrentSessionOnly` fallback, frozen prior context, and MarketSituation/MarketReaction/API/Blazor provenance integration.
-4. **Batch 4 - Final Guarded Validation + Documentation/Checkpoint Closeout (COMPLETE).**
+Bounded pagination must exhaust normally before transport completion, but pagination alone is not analytical completeness. The reconstructor may produce usable `prior-session-context-v1` only when the exact inclusive session request has declared gap-free full coverage, matching provider/request provenance, and valid canonical observations. Prior-session pivots may be confirmed only by eligible observations inside that prior session; later-session events cannot confirm them. Incomplete, failed, or unknown coverage never masquerades as complete.
 
-Alpaca is the approved initial A.2.5 historical provider. Calendar resolution uses provider sessions, and historical trades explicitly use SIP with no IEX fallback. Exhausted bounded pagination for the exact inclusive Alpaca regular-session request may declare complete response coverage, but only the Batch 2 reconstructor can promote it to usable `prior-session-context-v1`. Live warm-up is independently scoped and bounded; a failure does not become a live-feed failure or block unrelated symbols. Fixture remains the shared offline default. See [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md).
+Live warm-up is terminal-before-first-eligible-analysis for each exact provider/feed/symbol/session scope, uses bounded single-flight coordination, freezes its result, and falls back explicitly to `CurrentSessionOnly` on terminal failure. A historical failure is not a live-feed failure and does not block unrelated symbols. Downloaded historical trades are not persisted or retained after reconstruction. Fixture remains the offline default, and Massive has no equivalent warm-up. See [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md) and [VALIDATION_SUMMARY.md](./VALIDATION_SUMMARY.md#a25-live-prior-session-historical-context).
 
 ## 4.8 Volatility and risk
 
@@ -652,7 +642,7 @@ The dashboard should prioritize:
 
 # 17. Replay and Research
 
-Fixture and optional live inputs use the same normalized `MarketEvent` pipeline. A.2.5 Batch 3 production-wires bounded Alpaca prior-session warm-up, while general deterministic replay tooling and backtesting remain separate scope; persisted events are not a historical read path.
+Fixture and optional live inputs use the same normalized `MarketEvent` pipeline. Bounded Alpaca prior-session warm-up is production-wired, while general deterministic replay tooling and backtesting remain separate scope; persisted live events are not an approved historical research read path.
 
 Replay requirements:
 
@@ -765,22 +755,7 @@ Trace provider reception -> normalization -> state -> features -> setup detector
 
 # 22. Delivery Roadmap
 
-## Current Milestone A checkpoint
-
-- **A.1 Live Scanner Validation:** COMPLETE.
-- **A.2.1 Market Structure Foundation:** COMPLETE.
-- **A.2.2 Trade Plan Foundation:** COMPLETE.
-- **A.2.3a Prior-Session Market Context:** COMPLETE.
-- **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** COMPLETE, including PR #2 correction guarded SQL revalidation.
-- **A.2.4a Structural Level Interaction:** COMPLETE.
-- **A.2.4b Structural Level Reaction Classification:** COMPLETE; Batches 1-4 COMPLETE.
-- **A.2.5 Live Prior-Session Historical Context:** COMPLETE; Batches 1-4 COMPLETE.
-
-A.2.3b defines the user-facing pre-trade readiness contract over current setup, pinned TradePlan, publication, and data-quality evidence. Readiness stays separate from setup, immutable TradePlan geometry, and current publication health, and does not require knowing the user's holdings. Position/account management is a separate future concern if approved and is not required for market-opportunity analysis.
-
-A.2.4a adds the versioned `market-situation-v1` descriptive assessment and immutable SQL history. Its default test-zone half-width is 0.10% of level price and its default approach/crossed relevance is 0.25% of zone-edge price; both are provisional and not market calibrated. See [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
-
-**Immediate next task:** No implementation checkpoint is underway. The next checkpoint REQUIRES DESIGN / APPROVAL. A.2.4b's approved v1 vocabulary, confirmation principles, configuration boundary, architectural boundary, exclusions, and four-batch limits remain recorded in [A.2.4b Structural Level Reaction Classification](#a24b-structural-level-reaction-classification).
+Current completion state, the next approval gate, and latest validation evidence belong in [PROJECT_STATUS.md](./PROJECT_STATUS.md) and [VALIDATION_SUMMARY.md](./VALIDATION_SUMMARY.md). Roadmap status does not authorize implementation beyond the explicitly approved checkpoint.
 
 ## Phase 0: Minimal foundations
 
@@ -797,7 +772,7 @@ A.2.4a adds the versioned `market-situation-v1` descriptive assessment and immut
 
 - Provider-independent normalized ingestion and basic feed-health presentation.
 
-**Current repository note:** Fixture remains the default. Optional Alpaca and Massive live adapters are present; Alpaca live evaluation has occurred. A.2.5 production-wires calendar-resolved explicit-SIP warm-up for live Alpaca symbol/session scopes with bounded fallback to current-session-only analysis; it does not add live-gap backfill. Massive has no historical warm-up and does not yet reconnect. Neither adapter provides brokerage or order execution. See [ADR-005](./docs/adr/ADR-005-market-data-provider-criteria.md) and [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md).
+Fixture remains the offline default. Optional Alpaca and Massive live adapters must stay read-only; calendar-resolved explicit-SIP warm-up is limited to the approved live Alpaca path and has bounded current-session-only fallback. It does not add live-gap backfill. Massive has no historical warm-up and does not yet reconnect. Neither adapter provides brokerage or order execution. See [ADR-005](./docs/adr/ADR-005-market-data-provider-criteria.md) and [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md).
 
 **Exit:** full-session soak has no unexplained data loss and recovery tests pass.
 
@@ -878,7 +853,7 @@ No autonomous real-money execution is authorized by this phase.
 - Use Microsoft SQL Server locally and Azure SQL Database for Azure deployment.
 - Use Microsoft Azure as the cloud platform; do not substitute AWS/GCP services.
 - Default to Azure App Service, Azure Key Vault, Azure Monitor/Application Insights, Bicep, and Azure DevOps Pipelines as specified in Section 2.
-- Do not implement future infrastructure solely because it appears in this master document.
+- Do not implement future infrastructure solely because it appears in this roadmap.
 - No provider DTOs in domain/application projects.
 - Inject `TimeProvider`.
 - No future events in feature generation.
@@ -899,7 +874,7 @@ No autonomous real-money execution is authorized by this phase.
 
 # 24. Checkpoint Guidance
 
-Deliver Milestone A in small tested vertical slices. Before each slice, read the current project status and README and inspect the implementation. Status is evidence of current state, not permission to expand scope; this specification is the product/architecture roadmap.
+Deliver Milestone A in small tested vertical slices. Before each slice, read the current project status and README and inspect the implementation. Status is evidence of current state, not permission to expand scope; this document is the durable product and architecture roadmap.
 
 ---
 

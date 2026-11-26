@@ -4,12 +4,14 @@
 
 - **Implementation and tests:** what currently exists and behaves in this repository.
 - [PROJECT_STATUS](../PROJECT_STATUS.md): concise current checkpoint, completed checkpoints, blockers, latest validation summary, and immediate next step.
-- [Master specification](../Market_Opportunity_Engine_Final_Master_Spec.md): approved product direction, architecture contracts, milestone roadmap, and scope.
+- [PRODUCT_ROADMAP](../PRODUCT_ROADMAP.md): durable product direction, architecture contracts, principles, roadmap, and scope.
 - [ADRs](../docs/adr/): durable architectural decisions and their reasoning.
 - [README](../README.md): current developer/operator guide, including what the application is today, its capabilities and limitations, and how to configure, run, and test it.
-- [VALIDATION_HISTORY](../VALIDATION_HISTORY.md): chronological historical evidence.
+- [VALIDATION_SUMMARY](../VALIDATION_SUMMARY.md): concise final milestone-level evidence.
 
-Older `VALIDATION_HISTORY.md` sections describe what was true at that checkpoint. Historical statements may be superseded; they do not override current implementation, `PROJECT_STATUS.md`, later validation evidence, or accepted ADRs.
+For ordinary engineering work, establish context from these instructions, `PROJECT_STATUS.md`, `README.md`, `PRODUCT_ROADMAP.md`, relevant ADRs, and implementation/tests. Read `VALIDATION_SUMMARY.md` when checkpoint proof is relevant.
+
+The full [archived validation history](../docs/archive/VALIDATION_HISTORY.md) is not mandatory context for ordinary work. Use it only to investigate historical validation, a previous failure, an old provider run, SQL/browser provenance, a historical contradiction, or why an old decision was made. Archived statements may be superseded and never override current implementation, `PROJECT_STATUS.md`, concise final evidence, or accepted ADRs.
 
 ### Resolving conflicts
 
@@ -54,7 +56,7 @@ This is a conceptual architecture ordering, not a causal dependency: MarketSitua
 
 `MarketSituation` v1 may report approaching, testing, or crossed support and resistance from independently selected eligible levels; it can report both sides simultaneously. Current swings require complete current-session structure/data, and prior swings/extrema require complete, usable, gap-free prior context. Preserve deterministic level provenance and immutable assessment history. Its provisional thresholds are not market calibrated. Do not infer a hold, bounce, reversal, breakdown, rejection, breakout, or failed breakout, and do not use MarketSituation to mutate setup, TradePlan, publication, tracked opportunity, or readiness.
 
-`MarketReaction` v1 is an implemented, production-wired descriptive layer that tracks event-time episodes against pinned structural levels/zones and classifies `SupportHeld`, `SupportBreakdown`, `SupportReclaimed`, `ResistanceRejected`, `ResistanceBreakout`, or `ResistanceFailedBreakout`. Batches 1-4 and A.2.4b are COMPLETE. Batch 2 provides conservative restart continuity and SQL persistence; Batch 3 integrates the tracker with `ScannerPipeline`/`ScannerState`, persists non-gating research context, exposes the reaction API and current opportunity projections, and renders MARKET REACTION in Blazor; Batch 4 completed final regression, guarded SQL, and documentation closeout. MarketReaction remains separate from Opportunity, TradePlan, TrackedOpportunity, and PreTradeReadiness; it is not an `EntryReady` gate, setup detector, trading instruction, calibrated probability, or profitability claim. A.2.4b closeout does not itself authorize other roadmap work. Follow [ADR-009](../docs/adr/ADR-009-market-situation-level-interaction.md) and [ADR-010](../docs/adr/ADR-010-market-reaction-confirmation.md) for the architectural decisions and the [master specification](../Market_Opportunity_Engine_Final_Master_Spec.md#a24b-structural-level-reaction-classification) for the approved A.2.4b scope.
+`MarketReaction` v1 is an implemented, production-wired descriptive layer that tracks event-time episodes against pinned structural levels/zones and classifies `SupportHeld`, `SupportBreakdown`, `SupportReclaimed`, `ResistanceRejected`, `ResistanceBreakout`, or `ResistanceFailedBreakout`. It provides conservative restart continuity and SQL persistence, integrates with `ScannerPipeline`/`ScannerState`, exposes current projections and a Blazor presentation, and retains non-gating research context. MarketReaction remains separate from Opportunity, TradePlan, TrackedOpportunity, and PreTradeReadiness; it is not an `EntryReady` gate, setup detector, trading instruction, calibrated probability, or profitability claim. Follow [ADR-009](../docs/adr/ADR-009-market-situation-level-interaction.md), [ADR-010](../docs/adr/ADR-010-market-reaction-confirmation.md), and the [product roadmap](../PRODUCT_ROADMAP.md#a24b-structural-level-reaction-classification) for the approved boundary.
 
 A.2.5 Live Prior-Session Historical Context is COMPLETE with Batches 1-4 COMPLETE. Batch 1 provides provider-independent calendar/history contracts and bounded Alpaca calendar plus explicit SIP historical REST infrastructure. Batch 2 reconstructs `prior-session-context-v1`, requiring transport exhaustion plus explicitly declared gap-free full-session coverage and matching provider/request provenance. Batch 3 production-wires terminal-before-first-analysis live Alpaca warm-up per symbol/session with bounded single-flight coordination, frozen current-scope state, explicit `CurrentSessionOnly` fallback, and MarketSituation/MarketReaction/API/Blazor provenance; caller cancellation cannot cancel another same-scope waiter’s shared work. Batch 4 completed guarded offline, hosted, and provider validation. Swings remain unchanged and setup, TradePlan, readiness, and `market-reaction-v1` behavior remain unchanged. Raw history is not persisted. Fixture remains the default, and Alpaca SIP history is distinct from configured live feed provenance. Follow [ADR-011](../docs/adr/ADR-011-live-prior-session-historical-source.md); the next checkpoint requires design/approval.
 
@@ -81,11 +83,11 @@ Before any implementation task returns a checkpoint **COMPLETE**, verify this cl
 - solution build passes;
 - `PROJECT_STATUS.md` marks the checkpoint COMPLETE and names the correct next checkpoint;
 - README current-milestone/capability statements agree with status and implementation;
-- the master spec recognizes approved new architectural concepts, and relevant ADRs capture durable decisions;
-- concise validation evidence is appended to `VALIDATION_HISTORY.md`;
+- the product roadmap recognizes approved new architectural concepts, and relevant ADRs capture durable decisions;
+- concise milestone evidence is recorded in `VALIDATION_SUMMARY.md`, with detailed chronology retained in the archive when needed;
 - current documents have been searched for contradictory current-status claims.
 
-If these cannot be reconciled, return **PARTIAL** or **BLOCKED**, not COMPLETE. Historical validation entries need not match current state and must remain unrewritten. Keep ADRs concise; link to the master spec, README, and ADRs rather than duplicating their detailed contents.
+If these cannot be reconciled, return **PARTIAL** or **BLOCKED**, not COMPLETE. Historical validation entries need not match current state and must remain unrewritten. Keep ADRs concise; link to the product roadmap, README, and other ADRs rather than duplicating their detailed contents.
 
 ## Internal slice/batch closeout
 
@@ -100,7 +102,7 @@ A batch may be marked COMPLETE when:
   - the overall checkpoint as IN PROGRESS,
   - the completed batch as COMPLETE,
   - the next approved batch/slice as the immediate next task;
-- README/master-spec wording does not contradict the batch boundary.
+- README/product-roadmap wording does not contradict the batch boundary.
 
 Do not keep a successfully validated batch in IMPLEMENTED or "validation pending" state merely because later batches contain SQL, integration, API, UI, or final checkpoint validation that was explicitly excluded from the completed batch.
 
