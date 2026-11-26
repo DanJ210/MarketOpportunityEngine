@@ -208,6 +208,6 @@ A tracked candidate pins one immutable `PlanDefined` plan per symbol/session; th
 - [Master specification and roadmap](./Market_Opportunity_Engine_Final_Master_Spec.md): authoritative product, architecture, and future contracts.
 - [PROJECT_STATUS.md](./PROJECT_STATUS.md): current checkpoint, completed slices, blockers, and immediate next step.
 - [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md): historical test, live-run, SQL, and browser validation evidence.
-- [docs/adr/](./docs/adr/): durable architecture decisions (ADR-001 through ADR-010).
+- [docs/adr/](./docs/adr/): durable architecture decisions (ADR-001 through ADR-011).
 - [docs/providers/](./docs/providers/): provider protocol references and current adapter limitations.
 - [scripts/](./scripts/): opt-in live validation tooling.
