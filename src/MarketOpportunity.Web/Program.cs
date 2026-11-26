@@ -39,6 +39,11 @@ var livePipelineOptions = builder.Configuration.GetSection("Operations")
     .Get<LivePipelineOptions>() ?? new LivePipelineOptions();
 livePipelineOptions.Validate();
 builder.Services.AddSingleton(livePipelineOptions);
+var priorSessionWarmupOptions = builder.Configuration
+    .GetSection("Operations:PriorSessionWarmup")
+    .Get<PriorSessionWarmupOptions>() ?? new PriorSessionWarmupOptions();
+priorSessionWarmupOptions.Validate();
+builder.Services.AddSingleton(priorSessionWarmupOptions);
 builder.Services.Configure<HostOptions>(options =>
     options.ShutdownTimeout = livePipelineOptions.GracefulShutdownTimeout + TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<Action<string, string>>(serviceProvider =>
@@ -50,8 +55,6 @@ builder.Services.AddSingleton<Action<string, string>>(serviceProvider =>
         exceptionType);
 });
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton(_ =>
-    AlpacaHistoricalMarketDataOptions.FromConfiguration(builder.Configuration));
 builder.Services.AddHttpClient<AlpacaMarketSessionCalendar>(client =>
     client.BaseAddress = new Uri("https://api.alpaca.markets/"));
 builder.Services.AddHttpClient<AlpacaHistoricalMarketDataSource>(client =>
@@ -96,6 +99,7 @@ builder.Services.AddSingleton<ScannerState>();
 builder.Services.AddSingleton<PreTradeReadinessTracker>();
 builder.Services.AddSingleton<FeatureCalculator>();
 builder.Services.AddSingleton<PriorSessionContextBuilder>();
+builder.Services.AddSingleton<PriorSessionHistoricalReconstructor>();
 builder.Services.AddSingleton<MomentumContinuationDetector>();
 builder.Services.AddSingleton<MarketReactionEvaluator>();
 builder.Services.AddScoped<IMarketReactionStore, EfMarketReactionStore>();
@@ -108,12 +112,25 @@ if (string.Equals(marketDataProvider, "Fixture", StringComparison.OrdinalIgnoreC
     builder.Services.AddScoped<IHistoricalMarketDataSource>(_ =>
         new FixtureHistoricalMarketDataSource(fixturePath));
 }
+else if (string.Equals(marketDataProvider, "Alpaca", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton(_ =>
+        AlpacaHistoricalMarketDataOptions.FromConfiguration(builder.Configuration));
+    builder.Services.AddScoped<IMarketSessionCalendar>(serviceProvider =>
+        serviceProvider.GetRequiredService<AlpacaMarketSessionCalendar>());
+    builder.Services.AddScoped<IHistoricalMarketDataSource>(serviceProvider =>
+        serviceProvider.GetRequiredService<AlpacaHistoricalMarketDataSource>());
+}
 builder.Services.AddScoped<IPriorSessionContextProvider>(serviceProvider =>
     new PriorSessionContextProvider(
         serviceProvider.GetService<IMarketSessionCalendar>(),
         serviceProvider.GetService<IHistoricalMarketDataSource>(),
         serviceProvider.GetRequiredService<PriorSessionContextBuilder>(),
-        serviceProvider.GetRequiredService<ScannerConfiguration>()));
+        serviceProvider.GetRequiredService<ScannerConfiguration>(),
+        serviceProvider.GetRequiredService<PriorSessionHistoricalReconstructor>(),
+        serviceProvider.GetRequiredService<PriorSessionWarmupOptions>(),
+        serviceProvider.GetRequiredService<TimeProvider>(),
+        serviceProvider.GetRequiredService<ILogger<PriorSessionContextProvider>>()));
 builder.Services.AddScoped<ScannerPipeline>();
 builder.Services.AddScoped<IMarketDataSource>(serviceProvider =>
     MarketDataSourceFactory.Create(
@@ -175,7 +192,8 @@ app.MapGet("/api/v1/opportunities", (ScannerState scanner) =>
             result.TradePlan,
             PreTradeReadinessReadModel.From(result),
             result.MarketSituation,
-            result.MarketReactions))
+            result.MarketReactions,
+            result.PriorSessionWarmup))
         .OrderByDescending(result => result.Opportunity.AsOfUtc)
         .ThenBy(result => result.Opportunity.Symbol, StringComparer.Ordinal)
         .ThenBy(result => result.Opportunity.SessionId, StringComparer.Ordinal)
@@ -192,7 +210,8 @@ app.MapGet("/api/v1/opportunities/{id:guid}", (Guid id, ScannerState scanner) =>
             result.TradePlan,
             PreTradeReadinessReadModel.From(result),
             result.MarketSituation,
-            result.MarketReactions));
+            result.MarketReactions,
+            result.PriorSessionWarmup));
 });
 app.MapGet("/api/v1/reactions", (string? symbol, string? sessionId, ScannerState scanner) =>
     Results.Ok(scanner.Read().Results
@@ -217,15 +236,27 @@ app.MapGet("/api/v1/symbols/{symbol}/snapshot", (string symbol, string? sessionI
 });
 app.MapGet("/api/v1/symbols/{symbol}/prior-context", (string symbol, string? sessionId, ScannerState scanner) =>
 {
-    var results = scanner.Read().Results
+    var scannerState = scanner.Read();
+    var results = scannerState.Results
         .Where(result => result.Features.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
         .Where(result => sessionId is null
             || result.Features.SessionId.Equals(sessionId, StringComparison.Ordinal))
         .OrderByDescending(result => result.Features.AsOfUtc);
     var result = results.FirstOrDefault();
-    return result is null
+    if (result is not null && result.PriorSessionWarmup is { } resultWarmup)
+    {
+        return Results.Ok(PriorSessionContextReadModel.From(
+            result.PriorSessionContext, resultWarmup));
+    }
+
+    var warmup = (scannerState.PriorSessionWarmups ?? [])
+        .Where(item => item.Scope.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
+        .Where(item => sessionId is null
+            || item.Scope.CurrentSessionId.Equals(sessionId, StringComparison.Ordinal))
+        .LastOrDefault();
+    return warmup is null
         ? Results.NotFound()
-        : Results.Ok(result.PriorSessionContext);
+        : Results.Ok(PriorSessionContextReadModel.From(null, warmup));
 });
 app.MapGet("/api/v1/configuration/effective", (ScannerConfiguration configuration) =>
     Results.Ok(configuration));

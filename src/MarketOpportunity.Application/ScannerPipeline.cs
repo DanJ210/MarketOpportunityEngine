@@ -70,7 +70,8 @@ public sealed record ScannerAnalysisResult(
     PriorSessionContextView? PriorSessionContext = null,
     PreTradeReadinessProjection? Readiness = null,
     MarketSituationAssessment? MarketSituation = null,
-    IReadOnlyList<MarketReactionReadModel>? MarketReactions = null);
+    IReadOnlyList<MarketReactionReadModel>? MarketReactions = null,
+    PriorSessionWarmupOutcome? PriorSessionWarmup = null);
 
 public sealed record OpportunityPublicationReadModel(
     Opportunity Opportunity,
@@ -78,11 +79,51 @@ public sealed record OpportunityPublicationReadModel(
     TradePlan TradePlan,
     PreTradeReadinessReadModel? Readiness = null,
     MarketSituationAssessment? MarketSituation = null,
-    IReadOnlyList<MarketReactionReadModel>? MarketReactions = null);
+    IReadOnlyList<MarketReactionReadModel>? MarketReactions = null,
+    PriorSessionWarmupOutcome? PriorSessionWarmup = null);
+
+public sealed record PriorSessionContextReadModel(
+    PriorSessionContext? Context,
+    decimal? CurrentReferencePrice,
+    PriceDistance? DistanceToPriorHigh,
+    PriceDistance? DistanceToPriorLow,
+    PriceDistance? DistanceToObservedHigh,
+    PriceDistance? DistanceToObservedLow,
+    PriceDistance? DistanceToLatestSwingHigh,
+    PriceDistance? DistanceToLatestSwingLow,
+    StructuralLevelCandidate? NearestSupport,
+    PriceDistance? DistanceToNearestSupport,
+    StructuralLevelCandidate? NearestResistance,
+    PriceDistance? DistanceToNearestResistance,
+    PriorSessionWarmupOutcome Warmup)
+{
+    public static PriorSessionContextReadModel From(
+        PriorSessionContextView? view,
+        PriorSessionWarmupOutcome warmup) =>
+        new(
+            view?.Context,
+            view?.CurrentReferencePrice,
+            view?.DistanceToPriorHigh,
+            view?.DistanceToPriorLow,
+            view?.DistanceToObservedHigh,
+            view?.DistanceToObservedLow,
+            view?.DistanceToLatestSwingHigh,
+            view?.DistanceToLatestSwingLow,
+            view?.NearestSupport,
+            view?.DistanceToNearestSupport,
+            view?.NearestResistance,
+            view?.DistanceToNearestResistance,
+            warmup);
+}
 
 public sealed record ScannerReadModel(
     ScannerStatus Status,
-    IReadOnlyList<ScannerAnalysisResult> Results);
+    IReadOnlyList<ScannerAnalysisResult> Results,
+    IReadOnlyList<PriorSessionWarmupOutcome>? PriorSessionWarmups = null)
+{
+    public IReadOnlyList<PriorSessionWarmupOutcome> Warmups =>
+        PriorSessionWarmups ?? [];
+}
 
 public interface IOpportunityPublicationGate
 {
@@ -167,6 +208,8 @@ public sealed class ScannerState(
     private readonly ScannerConfiguration? _configuration = configuration;
     private readonly PreTradeReadinessEvaluator _readinessEvaluator = new();
     private IReadOnlyList<ScannerAnalysisResult> _results = [];
+    private readonly Dictionary<string, PriorSessionWarmupOutcome> _warmups = new(
+        StringComparer.OrdinalIgnoreCase);
     private ScannerStatus _status = new(
         MarketDataHealthStatus.Connecting,
         "Unknown",
@@ -181,7 +224,9 @@ public sealed class ScannerState(
     {
         lock (_sync)
         {
-            return new ScannerReadModel(_status, _results);
+            return new ScannerReadModel(_status, _results, _warmups.Values
+                .OrderBy(item => item.Scope.Symbol, StringComparer.Ordinal)
+                .ToArray());
         }
     }
 
@@ -212,6 +257,42 @@ public sealed class ScannerState(
                 status,
                 _results,
                 evaluationTimeUtc ?? _timeProvider.GetUtcNow());
+        }
+
+        Changed?.Invoke();
+    }
+
+    public void BeginPriorSessionWarmup(PriorSessionWarmupOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        if (outcome.Status != PriorSessionWarmupStatus.Pending)
+        {
+            throw new ArgumentException(
+                "Only a pending warm-up can activate a symbol/session scope.",
+                nameof(outcome));
+        }
+
+        lock (_sync)
+        {
+            _warmups[outcome.Scope.Symbol] = outcome;
+        }
+
+        Changed?.Invoke();
+    }
+
+    public void CompletePriorSessionWarmup(PriorSessionWarmupOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        lock (_sync)
+        {
+            if (_warmups.TryGetValue(outcome.Scope.Symbol, out var active)
+                && !active.Scope.CurrentSessionId.Equals(
+                    outcome.Scope.CurrentSessionId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _warmups[outcome.Scope.Symbol] = outcome;
         }
 
         Changed?.Invoke();
@@ -337,14 +418,28 @@ public sealed class ScannerPipeline(
                 source.Capabilities);
             var opportunity = detector.Evaluate(snapshot, configuration);
             var tradePlan = _tradePlanBuilder.Build(snapshot, opportunity);
-            var priorContext = priorSessionContextProvider is null
-                ? null
-                : await priorSessionContextProvider.GetContextAsync(
+            PriorSessionContextView? priorContext = null;
+            PriorSessionWarmupOutcome? warmupOutcome = null;
+            if (priorSessionContextProvider is not null)
+            {
+                var pending = PriorSessionWarmupScopeFactory.Pending(
+                    snapshot.Symbol,
+                    snapshot.SessionId,
+                    source.Capabilities,
+                    configuration);
+                state.BeginPriorSessionWarmup(pending);
+                var warmup = await priorSessionContextProvider.WarmupAsync(
                     snapshot.Symbol,
                     snapshot.SessionId,
                     snapshot.AsOfUtc,
-                    snapshot.ReferencePrice,
+                    source.Capabilities,
                     cancellationToken);
+                priorContext = PriorSessionContextBuilder.CreateView(
+                    warmup.Context,
+                    snapshot.ReferencePrice);
+                warmupOutcome = warmup.Outcome;
+                state.CompletePriorSessionWarmup(warmupOutcome);
+            }
             var marketSituation = _marketSituationEvaluator.Evaluate(
                 snapshot,
                 stateEvents,
@@ -403,7 +498,8 @@ public sealed class ScannerPipeline(
                 priorContext,
                 readinessEvaluation?.Projection,
                 marketSituation,
-                marketReactions));
+                marketReactions,
+                warmupOutcome));
         }
 
         state.SetResults(
@@ -471,6 +567,9 @@ public sealed class ScannerPipeline(
         var pendingEvents = new Dictionary<(string Symbol, string SessionId), List<MarketEvent>>();
         var lastAnalysisAt = new Dictionary<(string Symbol, string SessionId), DateTimeOffset>();
         var results = new Dictionary<(string Symbol, string SessionId), ScannerAnalysisResult>();
+        var warmups = new Dictionary<(string Symbol, string SessionId), Task<PriorSessionWarmupResult>>();
+        var warmupCancellations =
+            new Dictionary<(string Symbol, string SessionId), CancellationTokenSource>();
         await ReconcileReadinessAsync(timeProvider.GetUtcNow(), results, cancellationToken);
         var eventCount = 0;
         long producedEvents = 0;
@@ -641,6 +740,11 @@ public sealed class ScannerPipeline(
         {
             consumerCancellation.Cancel();
             channel.Writer.TryComplete();
+            foreach (var warmupCancellation in warmupCancellations.Values)
+            {
+                warmupCancellation.Cancel();
+                warmupCancellation.Dispose();
+            }
         }
 
         async Task ConsumeChannelAsync()
@@ -660,6 +764,7 @@ public sealed class ScannerPipeline(
 
                     await ReconcileReadinessAsync(
                         timeProvider.GetUtcNow(), results, persistenceCancellation.Token);
+                    await AnalyzePendingAsync(force: false);
                     SetLiveStatus(latestReceivedTime);
                     healthTickTask = healthTimer.WaitForNextTickAsync(consumerCancellation.Token).AsTask();
                     continue;
@@ -705,6 +810,38 @@ public sealed class ScannerPipeline(
                             configuration.MaximumStateEvents);
                         states.Add(key, symbolState);
                         pendingEvents.Add(key, []);
+                        if (priorSessionContextProvider is not null)
+                        {
+                            foreach (var obsolete in warmupCancellations
+                                         .Where(item => item.Key.Symbol.Equals(
+                                             key.Symbol, StringComparison.OrdinalIgnoreCase)
+                                             && !item.Key.SessionId.Equals(
+                                                 key.SessionId, StringComparison.Ordinal))
+                                         .ToArray())
+                            {
+                                obsolete.Value.Cancel();
+                                obsolete.Value.Dispose();
+                                warmupCancellations.Remove(obsolete.Key);
+                            }
+
+                            var scopeCancellation =
+                                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                            warmupCancellations.Add(key, scopeCancellation);
+                            var pending = PriorSessionWarmupScopeFactory.Pending(
+                                key.Symbol,
+                                key.SessionId,
+                                source.Capabilities,
+                                configuration);
+                            state.BeginPriorSessionWarmup(pending);
+                            warmups.Add(
+                                key,
+                                priorSessionContextProvider.WarmupAsync(
+                                    key.Symbol,
+                                    key.SessionId,
+                                    marketEvent.EventTimeUtc,
+                                    source.Capabilities,
+                                    scopeCancellation.Token));
+                        }
                     }
 
                     if (!symbolState.Add(marketEvent))
@@ -754,6 +891,22 @@ public sealed class ScannerPipeline(
                 }
 
                 var batch = pending.ToArray();
+                PriorSessionContextView? priorContext = null;
+                PriorSessionWarmupOutcome? warmupOutcome = null;
+                if (priorSessionContextProvider is not null
+                    && warmups.TryGetValue(key, out var warmupTask))
+                {
+                    if (!warmupTask.IsCompleted && !force)
+                    {
+                        continue;
+                    }
+
+                    var warmup = await warmupTask;
+                    warmupOutcome = warmup.Outcome;
+                    priorContext = PriorSessionContextBuilder.CreateView(warmup.Context, null);
+                    state.CompletePriorSessionWarmup(warmupOutcome);
+                }
+
                 Interlocked.Add(ref analyzedEvents, batch.Length);
                 var asOfUtc = symbolState.GetEventsAsOf(DateTimeOffset.MaxValue)
                     .Max(item => item.EventTimeUtc)
@@ -762,7 +915,6 @@ public sealed class ScannerPipeline(
                 FeatureSnapshot snapshot;
                 Opportunity opportunity;
                 TradePlan tradePlan;
-                PriorSessionContextView? priorContext;
                 PublicationDecision publication;
                 PreTradeReadinessEvaluation? readinessEvaluation;
                 MarketSituationAssessment marketSituation;
@@ -775,14 +927,12 @@ public sealed class ScannerPipeline(
                         source.Capabilities);
                     opportunity = detector.Evaluate(snapshot, configuration);
                     tradePlan = _tradePlanBuilder.Build(snapshot, opportunity);
-                    priorContext = priorSessionContextProvider is null
-                        ? null
-                        : await priorSessionContextProvider.GetContextAsync(
-                            snapshot.Symbol,
-                            snapshot.SessionId,
-                            snapshot.AsOfUtc,
-                            snapshot.ReferencePrice,
-                            cancellationToken);
+                    if (priorContext is not null)
+                    {
+                        priorContext = PriorSessionContextBuilder.CreateView(
+                            priorContext.Context,
+                            snapshot.ReferencePrice);
+                    }
                     marketSituation = _marketSituationEvaluator.Evaluate(
                         snapshot,
                         symbolState.GetEventsAsOf(snapshot.AsOfUtc),
@@ -876,7 +1026,8 @@ public sealed class ScannerPipeline(
                     priorContext,
                     readinessEvaluation?.Projection,
                     marketSituation,
-                    marketReactions);
+                    marketReactions,
+                    warmupOutcome);
             }
 
             lock (statusSync)

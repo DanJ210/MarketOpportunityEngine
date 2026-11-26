@@ -1715,3 +1715,66 @@ Batch 2 adds a provider-independent `PriorSessionHistoricalReconstructor` while 
 High/low use decimal eligible in-session extrema, and analytical close remains the last eligible canonical trade at or before the inclusive session close. `session-swing-fractal-v1` is reused unchanged over one deduplicated sequence entirely inside the prior session. Current-session records cannot confirm prior pivots. The existing latest/previous summaries and all-confirmed-pivot candidates remain unchanged and bounded by the upstream historical record limit; no micro-pivot significance filtering was added. Reconstructed identities exclude retrieval receive time.
 
 No historical SQL persistence/cache, production scanner registration, startup warm-up, provider selection, scanner configuration/version, MarketSituation rule, MarketReaction rule, or swing algorithm change was added. README, PROJECT_STATUS, master specification, `.github/copilot-instructions.md`, ADR-007, and ADR-011 are reconciled to **Batches 1-2 COMPLETE / Batch 3 NEXT / AUTHORIZED / Batch 4 NOT STARTED**. This record does not begin Batch 3.
+
+## A.2.5 Batch 3 validation (2026-11-25)
+
+**A.2.5 Live Prior-Session Historical Context - Batch 3: COMPLETE. A.2.5 overall remains IN PROGRESS.** Validation was sequential and offline; no Alpaca request, provider credential inspection, or SQL database was used.
+
+| Scope | Result |
+|---|---|
+| Warm-up coordinator, single-flight, concurrency, cancellation, timeout, and session scope | **12/12** |
+| Existing scanner pipeline plus terminal-before-analysis/live isolation coverage | **Pass within 451/451 full unit suite** |
+| Alpaca calendar/historical adapter regressions and completeness bridge | **Pass within 451/451 full unit suite** |
+| PriorSessionContext and A.2.4a MarketSituation regressions | **Pass within 451/451 full unit suite** |
+| A.2.4b MarketReaction evaluator/tracker/persistence-shape regressions | **Pass within 451/451 full unit suite** |
+| A.2.3b readiness, TradePlan, and Momentum regressions | **Pass within 451/451 full unit suite** |
+| Full offline unit suite | **451/451** |
+| Hosted success/failure/transition/API/Blazor and fixture structure suite | **19/19** |
+| Full hosted offline/configuration integration suite | **26/26** |
+| Solution build | **Succeeded, 0 warnings, 0 errors** |
+| SQL validation | **Not required/not run**; no SQL model, migration, persistence, or store behavior changed |
+| Live Alpaca validation | **NOT RUN**; deterministic hosted fakes were used |
+
+Batch 3 starts approved historical work on the first accepted live symbol/session identity and waits for only that scope's terminal result before its first eligible analysis. `PriorSessionContextProvider` supplies single-flight coordination, bounded infrastructure concurrency and timeout, structured terminal outcomes, completed/failure reuse, current-session activation, and obsolete-scope pruning. The `ScannerPipeline` launches unrelated warm-ups without awaiting one slow symbol globally, skips only pending analyses, cancels obsolete explicit sessions safely, and persists no context before the warm-up outcome is frozen.
+
+For Alpaca, exhausted bounded pagination of the exact inclusive regular-session request now explicitly declares full request coverage. The Batch 2 reconstructor remains authoritative for provider/feed/source/request matching, valid canonical trades, full boundaries, no known gaps, and the final `Available` decision. Incomplete, unavailable, invalid, authentication, entitlement, limit, provider, cancellation, timeout, and reconstruction outcomes all continue the live scanner in `CurrentSessionOnly`.
+
+Complete prior levels participate through unchanged `market-situation-v1` and may pin ordinary `market-reaction-v1` episodes using current-session observations only. Reaction episode JSON now carries level source/session and historical provider/feed/source/context provenance without a schema or version change. Setup, TradePlan, tracked opportunity, readiness, `prior-session-context-v1`, `market-situation-v1`, `market-reaction-v1`, and scanner versions are unchanged. Raw historical trades are not persisted or retained after reconstruction.
+
+The prior-context API now exposes the frozen `PriorSessionWarmupOutcome` while preserving its existing context-view fields. The dashboard shows warm-up/completeness status, calendar-resolved trading date, historical SIP source, mixed live feed provenance, honest fallback wording, and last-eligible-trade semantics. Fixture mode remains fully offline and partial, and Massive has no historical warm-up.
+
+README, PROJECT_STATUS, master specification, `.github/copilot-instructions.md`, ADR-007, and ADR-011 are reconciled to **Batches 1-3 COMPLETE / Batch 4 NEXT / AUTHORIZED**. This record does not begin Batch 4 or mark A.2.5 overall complete.
+
+## A.2.5 final closeout (2026-11-26)
+
+**A.2.5 Live Prior-Session Historical Context: COMPLETE. Batches 1-4 COMPLETE.** The final audit confirmed the provider-independent calendar/history contracts, compound historical Alpaca identity, bounded pagination, inclusive regular-session reconstruction, unchanged swing algorithm, transport-versus-usability completeness, terminal-before-analysis warm-up, single-flight coordination, explicit session isolation, `CurrentSessionOnly` fallback, mixed SIP-history/live-feed provenance, and no raw-history SQL cache or persistence.
+
+The audit found one production infrastructure correction: cancellation of one caller on a same-scope warm-up previously flowed into the shared task. Shared work now uses provider-owned scope cancellation, while a caller-specific cancellation returns only that waiter's terminal `Cancelled` result; a later explicit session still cancels obsolete scope work. A focused regression proves a cancelled same-scope waiter cannot prevent another waiter from completing and reusing the frozen result. This changes no analytical thresholds, setup, TradePlan, readiness, MarketSituation, MarketReaction, or swing behavior.
+
+| Scope | Result |
+|---|---|
+| Alpaca calendar/historical identity/pagination/normalization | **12/12** |
+| Prior-session reconstruction, completeness, provenance, duplicates, boundaries, early close, and end-session isolation | **22/22** |
+| Existing PriorSessionContext regression | **11/11** |
+| Warm-up/single-flight/caller cancellation/concurrency/session transition/fallback | **13/13** |
+| MarketSituation regression | **18/18** |
+| MarketReaction evaluator/tracker regression | **19/19** |
+| PreTradeReadiness regression | **71/71** |
+| ScannerPipeline and publication regression | **31/31** |
+| TradePlan / MomentumContinuation regression | **39/39** |
+| Fixture/scanner replay regression | **149/149** |
+| Full offline unit suite | **452/452** |
+| Hosted non-SQL structure/API/Blazor/instrumentation/configuration integration | **31/31** |
+| Offline live-launcher interception | **18/18** |
+| Solution build | **Succeeded, 0 warnings, 0 errors** |
+| SQL validation | **Not required/not run**; A.2.5 added no schema, migration, store, or SQL persistence behavior. The bounded hosted live run used the dedicated live-validation catalog but introduced no historical rows |
+
+The bounded provider validation ran at `2026-11-26T04:30:17.0646023Z` with symbol `AAPL` and a completed 2026-11-25 reference at `20:00:00Z`. The production `AlpacaMarketSessionCalendar` resolved prior trading date `2026-11-24`, session `alpaca-us-regular-2026-11-24`, inclusive regular-session bounds `14:30:00Z`-`21:00:00Z`. The production Alpaca historical adapter used provider `Alpaca`, feed `SIP`, and source `Historical REST`. It exhausted **73 pages / 722,167 normalized records**, ignored **0 duplicates**, and reported no `LimitExceeded`, known gap, or malformed/provenance failure.
+
+The Batch 2/3 completeness path reported exhausted transport, declared exact-request coverage, full inclusive boundaries, no known gaps, matching provenance, and final `CompleteUsable` / `Available`. Reconstructed prior-session high was **359.9797**, low **303.42**, and the last eligible regular-session trade was **354.238** at `2026-11-24T20:59:59.9936641Z`; the close semantics are explicitly `LastEligibleTradeAtOrBeforeSessionEnd`, not an official exchange close. The context retained 94,277 support candidates and 92,005 resistance candidates from the unchanged prior-session swing algorithm, bounded by the configured 1,000,000-record source limit, while raw historical trade arrays were released. The retained latest/previous swing high and low summaries were also available.
+
+A separate hosted validation ran for 120 seconds at `2026-11-26T04:32:13.1206007Z` with one AAPL/IEX subscription. It connected, authenticated, and subscribed successfully, but this was after the U.S. regular session, so it produced **0 market-data messages, 0 analyses, and 0 persisted analyses** and shut down normally on the duration bound. Consequently, first-event ScannerPipeline warm-up through the hosted application, a naturally produced `PriorSessionEnhanced` MarketSituation, and a prior-level MarketReaction were **not observed**; this timing limitation is not represented as live regular-session startup success. The production coordinator/historical path itself was established by the completed-session run, and existing deterministic hosted tests cover API, Blazor, frozen ordering, and MarketSituation/MarketReaction integration.
+
+Validation artifacts and scans confirmed the historical payload was not reported or persisted, no Alpaca API key/secret appeared in tracked files or validation artifacts, and the fixture remained fully offline. SQL was not changed, and no schema or migration validation was required solely for A.2.5. The launcher was kept bounded at 10 minutes by default and gained a single-symbol override for tightly scoped provider validation.
+
+README, PROJECT_STATUS, master specification, `.github/copilot-instructions.md`, ADR-007, and ADR-011 now agree that A.2.5 and all batches are COMPLETE. The next checkpoint is **REQUIRES DESIGN / APPROVAL**; no multi-session trend, significance/confluence, zone confidence, outcome, backtest, ML, broker, or execution scope began.

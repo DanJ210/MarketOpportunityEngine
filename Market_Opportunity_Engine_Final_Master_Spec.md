@@ -248,14 +248,14 @@ All four A.2.4b batches are complete. Completing this checkpoint does not author
 
 ### A.2.5 Live Prior-Session Historical Context
 
-**Status: IN PROGRESS. Batches 1-2 COMPLETE; Batch 3 NEXT / AUTHORIZED. Batch 4 NOT STARTED.** The approved checkpoint is divided into four batches. It adds source infrastructure needed for today's scanner to later obtain trustworthy immediately preceding regular-session context; it does not change the `session-swing-fractal-v1` definition or any reaction/setup behavior.
+**Status: COMPLETE. Batches 1-4 COMPLETE.** The approved checkpoint adds source infrastructure and production live warm-up needed for today's scanner to obtain trustworthy immediately preceding regular-session context; it does not change the `session-swing-fractal-v1` definition or any reaction/setup behavior.
 
 1. **Batch 1 - Historical Contracts + Alpaca Calendar/Historical SIP Adapter (COMPLETE):** provider-independent calendar and historical-source contracts; Alpaca market-calendar adapter; explicit paginated SIP trade adapter; separate historical DTO; deterministic provider/feed/symbol/exchange/trade-ID/event-time identity; honest retrieval-time receive semantics; provenance/status records; bounded requests and offline deterministic tests. Pagination exhaustion alone does not establish session completeness.
 2. **Batch 2 - Completeness + Bounded PriorSessionContext Reconstruction (COMPLETE):** provider-independent reconstruction, strict transport-versus-session completeness, explicit provenance and failure behavior, inclusive regular-session boundaries, extrema/last-eligible-trade semantics, unchanged in-session swing confirmation, deterministic replay, and offline complete/partial coverage.
-3. **Batch 3 - Live Startup Warm-up + Production MarketSituation Integration (NEXT / AUTHORIZED):** wire approved historical loading into live startup and completed prior-context consumers.
-4. **Batch 4 - Final Guarded Validation + Documentation/Checkpoint Closeout (NOT STARTED).**
+3. **Batch 3 - Live Startup Warm-up + Production MarketSituation Integration (COMPLETE):** terminal-before-first-analysis warm-up per live symbol/session, bounded single-flight coordination, explicit `CurrentSessionOnly` fallback, frozen prior context, and MarketSituation/MarketReaction/API/Blazor provenance integration.
+4. **Batch 4 - Final Guarded Validation + Documentation/Checkpoint Closeout (COMPLETE).**
 
-Alpaca is the approved initial A.2.5 historical provider. Calendar resolution uses provider sessions, and historical trades explicitly use SIP with no IEX fallback. Fixture remains the shared default, live provider selection remains separate, and Batch 1 is not production-wired. See [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md).
+Alpaca is the approved initial A.2.5 historical provider. Calendar resolution uses provider sessions, and historical trades explicitly use SIP with no IEX fallback. Exhausted bounded pagination for the exact inclusive Alpaca regular-session request may declare complete response coverage, but only the Batch 2 reconstructor can promote it to usable `prior-session-context-v1`. Live warm-up is independently scoped and bounded; a failure does not become a live-feed failure or block unrelated symbols. Fixture remains the shared offline default. See [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md).
 
 ## 4.8 Volatility and risk
 
@@ -652,7 +652,7 @@ The dashboard should prioritize:
 
 # 17. Replay and Research
 
-Fixture and optional live inputs use the same normalized `MarketEvent` pipeline. A.2.5 Batch 1 adds bounded Alpaca historical infrastructure, but production prior-session warm-up, general deterministic replay tooling, and backtesting remain separate scope; persisted events are not yet a general historical read path.
+Fixture and optional live inputs use the same normalized `MarketEvent` pipeline. A.2.5 Batch 3 production-wires bounded Alpaca prior-session warm-up, while general deterministic replay tooling and backtesting remain separate scope; persisted events are not a historical read path.
 
 Replay requirements:
 
@@ -774,13 +774,13 @@ Trace provider reception -> normalization -> state -> features -> setup detector
 - **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** COMPLETE, including PR #2 correction guarded SQL revalidation.
 - **A.2.4a Structural Level Interaction:** COMPLETE.
 - **A.2.4b Structural Level Reaction Classification:** COMPLETE; Batches 1-4 COMPLETE.
-- **A.2.5 Live Prior-Session Historical Context:** IN PROGRESS; Batches 1-2 COMPLETE, Batch 3 NEXT / AUTHORIZED, Batch 4 NOT STARTED.
+- **A.2.5 Live Prior-Session Historical Context:** COMPLETE; Batches 1-4 COMPLETE.
 
 A.2.3b defines the user-facing pre-trade readiness contract over current setup, pinned TradePlan, publication, and data-quality evidence. Readiness stays separate from setup, immutable TradePlan geometry, and current publication health, and does not require knowing the user's holdings. Position/account management is a separate future concern if approved and is not required for market-opportunity analysis.
 
 A.2.4a adds the versioned `market-situation-v1` descriptive assessment and immutable SQL history. Its default test-zone half-width is 0.10% of level price and its default approach/crossed relevance is 0.25% of zone-edge price; both are provisional and not market calibrated. See [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
 
-**Immediate next task:** A.2.5 Batch 3 - Live Startup Warm-up + Production MarketSituation Integration. The four-batch A.2.5 boundary is approved; production warm-up and Batch 4 are not started. A.2.4b's approved v1 vocabulary, confirmation principles, configuration boundary, architectural boundary, exclusions, and four-batch limits remain recorded in [A.2.4b Structural Level Reaction Classification](#a24b-structural-level-reaction-classification).
+**Immediate next task:** No implementation checkpoint is underway. The next checkpoint REQUIRES DESIGN / APPROVAL. A.2.4b's approved v1 vocabulary, confirmation principles, configuration boundary, architectural boundary, exclusions, and four-batch limits remain recorded in [A.2.4b Structural Level Reaction Classification](#a24b-structural-level-reaction-classification).
 
 ## Phase 0: Minimal foundations
 
@@ -797,7 +797,7 @@ A.2.4a adds the versioned `market-situation-v1` descriptive assessment and immut
 
 - Provider-independent normalized ingestion and basic feed-health presentation.
 
-**Current repository note:** Fixture remains the default. Optional Alpaca and Massive live adapters are present; Alpaca live evaluation has occurred. A.2.5 Batches 1-2 add un-wired Alpaca calendar/explicit SIP infrastructure and offline prior-context reconstruction with bounded, conservative completeness, but no production historical gap backfill or startup warm-up. Massive does not yet reconnect. Neither adapter provides brokerage or order execution. See [ADR-005](./docs/adr/ADR-005-market-data-provider-criteria.md) and [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md).
+**Current repository note:** Fixture remains the default. Optional Alpaca and Massive live adapters are present; Alpaca live evaluation has occurred. A.2.5 production-wires calendar-resolved explicit-SIP warm-up for live Alpaca symbol/session scopes with bounded fallback to current-session-only analysis; it does not add live-gap backfill. Massive has no historical warm-up and does not yet reconnect. Neither adapter provides brokerage or order execution. See [ADR-005](./docs/adr/ADR-005-market-data-provider-criteria.md) and [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md).
 
 **Exit:** full-session soak has no unexplained data loss and recovery tests pass.
 

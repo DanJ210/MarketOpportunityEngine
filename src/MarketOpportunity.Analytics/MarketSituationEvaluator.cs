@@ -258,7 +258,9 @@ public sealed class MarketSituationEvaluator
             null,
             context.LatestConfirmedSwingHigh?.FeatureSetVersion
                 ?? context.LatestConfirmedSwingLow?.FeatureSetVersion,
-            context.ContextDefinitionVersion));
+            context.ContextDefinitionVersion,
+            context.MarketData?.Provider,
+            context.MarketData?.Feed));
     }
 
     private static void AddCurrentSessionLevels(
@@ -364,7 +366,9 @@ public sealed class MarketSituationEvaluator
             context.CoverageEndUtc,
             candidate.AlgorithmVersion,
             candidate.FeatureSetVersion,
-            context.ContextDefinitionVersion);
+            context.ContextDefinitionVersion,
+            context.MarketData?.Provider,
+            context.MarketData?.Feed);
 
     private static ImportantPriceLevel? NearestLevel(
         IEnumerable<ImportantPriceLevel> levels,

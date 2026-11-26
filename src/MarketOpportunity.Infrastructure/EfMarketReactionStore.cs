@@ -300,7 +300,13 @@ public sealed class EfMarketReactionStore(MarketOpportunityDbContext dbContext) 
         && left.ConfirmationDistancePercent == right.ConfirmationDistancePercent
         && left.MaxEpisodeDurationSeconds == right.MaxEpisodeDurationSeconds
         && string.Equals(left.DefinitionVersion, right.DefinitionVersion, StringComparison.Ordinal)
-        && string.Equals(left.ConfigurationVersion, right.ConfigurationVersion, StringComparison.Ordinal);
+        && string.Equals(left.ConfigurationVersion, right.ConfigurationVersion, StringComparison.Ordinal)
+        && left.LevelSource == right.LevelSource
+        && string.Equals(left.LevelSourceSessionId, right.LevelSourceSessionId, StringComparison.Ordinal)
+        && string.Equals(left.HistoricalProvider, right.HistoricalProvider, StringComparison.Ordinal)
+        && string.Equals(left.HistoricalFeed, right.HistoricalFeed, StringComparison.Ordinal)
+        && string.Equals(left.HistoricalSource, right.HistoricalSource, StringComparison.Ordinal)
+        && left.PriorSessionContextId == right.PriorSessionContextId;
 
     private static bool IsTerminal(MarketReactionEpisodeStatus status) =>
         status is MarketReactionEpisodeStatus.Confirmed

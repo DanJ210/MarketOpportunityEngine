@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\MarketOpportunity.Domain\MarketOpportunity.Domain.csproj" />
     <ProjectReference Include="..\MarketOpportunity.Analytics\MarketOpportunity.Analytics.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
   </ItemGroup>
 
   <PropertyGroup>

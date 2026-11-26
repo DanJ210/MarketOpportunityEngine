@@ -24,7 +24,7 @@ function Get-ValidationConnectionString {
     $testState.DatabaseChecks++
     if ($testState.DatabaseFailure) { throw 'Intercepted dedicated database verification failure.' }
     if ($Database -ne 'MarketOpportunityEngine_LiveValidationTests') { throw 'Wrong database requested.' }
-    return 'Server=localhost,1433;Database=MarketOpportunityEngine_LiveValidationTests;Integrated Security=true'
+    return 'Server=127.0.0.1,14333;Database=MarketOpportunityEngine_LiveValidationTests;Integrated Security=true'
 }
 '@
 $text = [IO.File]::ReadAllText($source)
@@ -159,6 +159,11 @@ try {
         Assert-True ((Split-Path $path -Leaf).StartsWith('offline-iex.')) "Artifact $path is not session scoped."
     }
     Assert-True (-not $resultText.Contains('Integrated Security') -and -not $resultText.Contains('Database=')) 'Launcher result leaked connection details.'
+
+    $singleSymbol = $base.Clone()
+    $singleSymbol.ValidationSymbol = 'Aapl'
+    Invoke-LauncherCase 'Validation symbol bounds live launch to one symbol' $singleSymbol
+    Assert-True ((Get-AppArgument '--Scanner:Universe:Symbols') -eq 'AAPL') 'Validation symbol override was not applied.'
 
     $custom = $base.Clone()
     $custom.DurationSeconds = 123

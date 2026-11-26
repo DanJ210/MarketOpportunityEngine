@@ -347,6 +347,285 @@ public sealed class StructureWebApplicationTests
     }
 
     [Fact]
+    public async Task Hosted_live_warmup_completes_before_prior_level_analysis_and_reaction()
+    {
+        var calendar = new WarmupCalendar();
+        var historical = new WarmupHistoricalSource();
+        await using var factory = new StructureApplicationFactory(
+            reactionSource: new ReactionMarketDataSource(
+                "WARMUP",
+                "current-session",
+                initialPrice: 100.05m,
+                confirmationPrice: 100.3m,
+                alpaca: true),
+            warmupCalendar: calendar,
+            warmupHistorical: historical);
+        using var client = factory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+
+        ScannerAnalysisResult? result = null;
+        while (!timeout.IsCancellationRequested)
+        {
+            result = factory.Services.GetRequiredService<ScannerState>().Read().Results
+                .SingleOrDefault();
+            if (result?.MarketReactions?.Any(item =>
+                    item.Assessment.Status == MarketReactionStatus.Confirmed) == true)
+            {
+                break;
+            }
+
+            await Task.Delay(50, timeout.Token);
+        }
+
+        Assert.NotNull(result);
+        Assert.Equal(PriorSessionWarmupStatus.CompleteUsable, result.PriorSessionWarmup?.Status);
+        Assert.Equal(PriorSessionContextStatus.Available,
+            result.PriorSessionContext?.Context.Completeness);
+        Assert.Equal(MarketSituationContextMode.PriorSessionEnhanced,
+            result.MarketSituation?.ContextMode);
+        Assert.Equal(100m, result.PriorSessionContext?.Context.PriorSessionLow);
+        var reaction = Assert.Single(result.MarketReactions!);
+        Assert.Equal(ImportantPriceLevelSource.PriorSessionLow, reaction.Episode.LevelSource);
+        Assert.Equal("prior-session", reaction.Episode.LevelSourceSessionId);
+        Assert.Equal("Alpaca", reaction.Episode.HistoricalProvider);
+        Assert.Equal("sip", reaction.Episode.HistoricalFeed);
+        Assert.Equal(result.PriorSessionContext?.Context.ContextId,
+            reaction.Episode.PriorSessionContextId);
+
+        using (var priorResponse = await client.GetAsync(
+                   "/api/v1/symbols/WARMUP/prior-context?sessionId=current-session",
+                   timeout.Token))
+        using (var priorJson = JsonDocument.Parse(
+                   await priorResponse.Content.ReadAsStringAsync(timeout.Token)))
+        {
+            Assert.Equal(HttpStatusCode.OK, priorResponse.StatusCode);
+            Assert.Equal("CompleteUsable",
+                priorJson.RootElement.GetProperty("warmup").GetProperty("status").GetString());
+            Assert.Equal("Available",
+                priorJson.RootElement.GetProperty("context").GetProperty("completeness").GetString());
+            Assert.Equal("Alpaca",
+                priorJson.RootElement.GetProperty("warmup").GetProperty("scope")
+                    .GetProperty("historicalProvider").GetString());
+            Assert.Equal("sip",
+                priorJson.RootElement.GetProperty("warmup").GetProperty("scope")
+                    .GetProperty("historicalFeed").GetString());
+        }
+
+        var html = await client.GetStringAsync("/", timeout.Token);
+        Assert.Contains("PRIOR SESSION CONTEXT", html);
+        Assert.Contains("sip Historical", html);
+        Assert.Contains("live stream: Alpaca / iex", html);
+        Assert.Contains("last eligible regular-session trade", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(
+        MarketSessionCalendarStatus.ProviderFailure,
+        HistoricalRetrievalStatus.SuccessPaginationExhausted,
+        true,
+        false,
+        PriorSessionWarmupStatus.ProviderFailure,
+        PriorSessionContextStatus.Unavailable)]
+    [InlineData(
+        MarketSessionCalendarStatus.Success,
+        HistoricalRetrievalStatus.AuthenticationFailure,
+        false,
+        false,
+        PriorSessionWarmupStatus.AuthenticationFailure,
+        PriorSessionContextStatus.Unavailable)]
+    [InlineData(
+        MarketSessionCalendarStatus.Success,
+        HistoricalRetrievalStatus.EntitlementFailure,
+        false,
+        false,
+        PriorSessionWarmupStatus.EntitlementFailure,
+        PriorSessionContextStatus.Unavailable)]
+    [InlineData(
+        MarketSessionCalendarStatus.Success,
+        HistoricalRetrievalStatus.LimitExceeded,
+        false,
+        false,
+        PriorSessionWarmupStatus.LimitExceeded,
+        PriorSessionContextStatus.Partial)]
+    [InlineData(
+        MarketSessionCalendarStatus.Success,
+        HistoricalRetrievalStatus.SuccessPaginationExhausted,
+        false,
+        false,
+        PriorSessionWarmupStatus.Partial,
+        PriorSessionContextStatus.Partial)]
+    [InlineData(
+        MarketSessionCalendarStatus.Success,
+        HistoricalRetrievalStatus.MalformedResponse,
+        false,
+        false,
+        PriorSessionWarmupStatus.Invalid,
+        PriorSessionContextStatus.Invalid)]
+    [InlineData(
+        MarketSessionCalendarStatus.Success,
+        HistoricalRetrievalStatus.SuccessPaginationExhausted,
+        true,
+        true,
+        PriorSessionWarmupStatus.Invalid,
+        PriorSessionContextStatus.Invalid)]
+    [InlineData(
+        MarketSessionCalendarStatus.Success,
+        HistoricalRetrievalStatus.Cancelled,
+        false,
+        false,
+        PriorSessionWarmupStatus.Cancelled,
+        PriorSessionContextStatus.Unavailable)]
+    public async Task Hosted_warmup_failures_keep_current_session_analysis_operational(
+        MarketSessionCalendarStatus calendarStatus,
+        HistoricalRetrievalStatus retrievalStatus,
+        bool historicalUsable,
+        bool invalidProvenance,
+        PriorSessionWarmupStatus expectedWarmup,
+        PriorSessionContextStatus expectedCompleteness)
+    {
+        var calendar = new WarmupCalendar(calendarStatus);
+        var historical = new WarmupHistoricalSource(
+            retrievalStatus,
+            historicalUsable,
+            invalidProvenance);
+        await using var factory = new StructureApplicationFactory(
+            reactionSource: new ReactionMarketDataSource(
+                "FALLBACK",
+                "current-session",
+                initialPrice: 100.05m,
+                confirmationPrice: null,
+                alpaca: true),
+            warmupCalendar: calendar,
+            warmupHistorical: historical);
+        using var client = factory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+        ScannerAnalysisResult? result = null;
+        while (!timeout.IsCancellationRequested)
+        {
+            result = factory.Services.GetRequiredService<ScannerState>().Read().Results
+                .SingleOrDefault();
+            if (result is not null)
+            {
+                break;
+            }
+
+            await Task.Delay(50, timeout.Token);
+        }
+
+        Assert.NotNull(result);
+        Assert.Equal(expectedWarmup, result.PriorSessionWarmup?.Status);
+        Assert.Equal(expectedCompleteness, result.PriorSessionContext?.Context.Completeness);
+        Assert.Equal(MarketSituationContextMode.CurrentSessionOnly,
+            result.MarketSituation?.ContextMode);
+        Assert.Null(result.PriorSessionContext?.Context.PriorSessionHigh);
+        Assert.Null(result.PriorSessionContext?.Context.PriorSessionLow);
+        Assert.NotEqual(MarketDataHealthStatus.Error,
+            factory.Services.GetRequiredService<ScannerState>().Read().Status.FeedStatus);
+
+        using var response = await client.GetAsync(
+            "/api/v1/symbols/FALLBACK/prior-context?sessionId=current-session",
+            timeout.Token);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(expectedWarmup.ToString(),
+            json.RootElement.GetProperty("warmup").GetProperty("status").GetString());
+        Assert.Contains(
+            "Current-session analysis continues without prior-session enhancement",
+            await client.GetStringAsync("/", timeout.Token));
+    }
+
+    [Fact]
+    public async Task Hosted_one_symbol_failure_does_not_block_another_symbol_success()
+    {
+        await using var factory = new StructureApplicationFactory(
+            warmupCalendar: new WarmupCalendar(),
+            warmupHistorical: new WarmupHistoricalSource(symbol =>
+                symbol == "FAILED"
+                    ? HistoricalRetrievalStatus.AuthenticationFailure
+                    : HistoricalRetrievalStatus.SuccessPaginationExhausted),
+            warmupSource: new MultipleWarmupLiveSource(
+                ("FAILED", "current-session"),
+                ("HEALTHY", "current-session")));
+        using var client = factory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+        ScannerReadModel? readModel = null;
+        while (!timeout.IsCancellationRequested)
+        {
+            readModel = factory.Services.GetRequiredService<ScannerState>().Read();
+            if (readModel.Results.Count == 2)
+            {
+                break;
+            }
+
+            await Task.Delay(50, timeout.Token);
+        }
+
+        Assert.NotNull(readModel);
+        Assert.Equal(2, readModel.Results.Count);
+        var failed = Assert.Single(readModel.Results, item => item.Features.Symbol == "FAILED");
+        var healthy = Assert.Single(readModel.Results, item => item.Features.Symbol == "HEALTHY");
+        Assert.Equal(PriorSessionWarmupStatus.AuthenticationFailure, failed.PriorSessionWarmup?.Status);
+        Assert.Equal(PriorSessionContextStatus.Unavailable,
+            failed.PriorSessionContext?.Context.Completeness);
+        Assert.Equal(PriorSessionWarmupStatus.CompleteUsable, healthy.PriorSessionWarmup?.Status);
+        Assert.Equal(PriorSessionContextStatus.Available,
+            healthy.PriorSessionContext?.Context.Completeness);
+        Assert.NotEqual(MarketDataHealthStatus.Error, readModel.Status.FeedStatus);
+        using var response = await client.GetAsync("/api/v1/opportunities", timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Hosted_session_transition_rejects_late_old_warmup_contamination()
+    {
+        var historical = new BlockingSessionWarmupHistoricalSource();
+        await using var factory = new StructureApplicationFactory(
+            warmupCalendar: new WarmupCalendar(),
+            warmupHistorical: historical,
+            warmupSource: new SessionTransitionWarmupLiveSource());
+        using var client = factory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+        ScannerAnalysisResult? sessionB = null;
+        while (!timeout.IsCancellationRequested)
+        {
+            sessionB = factory.Services.GetRequiredService<ScannerState>().Read().Results
+                .SingleOrDefault(item => item.Features.SessionId == "session-b");
+            if (sessionB is not null)
+            {
+                break;
+            }
+
+            await Task.Delay(50, timeout.Token);
+        }
+
+        Assert.NotNull(sessionB);
+        Assert.Equal("prior-b", sessionB.PriorSessionContext?.Context.PriorSessionId);
+        var scannerState = factory.Services.GetRequiredService<ScannerState>();
+        Assert.Equal("session-b", Assert.Single(scannerState.Read().Warmups).Scope.CurrentSessionId);
+
+        historical.ReleaseOldSession();
+        await WaitUntilAsync(
+            () => scannerState.Read().Results.Count == 2,
+            timeout.Token);
+        var sessionA = Assert.Single(
+            scannerState.Read().Results,
+            item => item.Features.SessionId == "session-a");
+        Assert.Equal(PriorSessionWarmupStatus.Cancelled, sessionA.PriorSessionWarmup?.Status);
+        Assert.Null(sessionA.PriorSessionContext?.Context.PriorSessionId);
+        Assert.Equal("session-b", Assert.Single(scannerState.Read().Warmups).Scope.CurrentSessionId);
+
+        using var response = await client.GetAsync(
+            "/api/v1/symbols/AAPL/prior-context?sessionId=session-b",
+            timeout.Token);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+        Assert.Equal("prior-b",
+            json.RootElement.GetProperty("context").GetProperty("priorSessionId").GetString());
+    }
+
+    [Fact]
     public async Task Hosted_unresolved_reaction_is_exposed_as_unresolved_in_api_and_dashboard()
     {
         await using var factory = new StructureApplicationFactory(
@@ -658,6 +937,14 @@ public sealed class StructureWebApplicationTests
         return html[start..(end + "</section>".Length)];
     }
 
+    private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
+    {
+        while (!condition())
+        {
+            await Task.Delay(25, cancellationToken);
+        }
+    }
+
     private sealed class StructureApplicationFactory : WebApplicationFactory<Program>
     {
         private readonly bool _useFixtureSource;
@@ -666,6 +953,9 @@ public sealed class StructureWebApplicationTests
         private readonly bool _useMultipleSymbols;
         private readonly ReactionMarketDataSource? _reactionSource;
         private readonly InMemoryReactionStore _reactionStore;
+        private readonly IMarketSessionCalendar? _warmupCalendar;
+        private readonly IHistoricalMarketDataSource? _warmupHistorical;
+        private readonly IMarketDataSource? _warmupSource;
 
         public StructureApplicationFactory(
             bool useFixtureSource = false,
@@ -673,7 +963,10 @@ public sealed class StructureWebApplicationTests
             bool useRestartSource = false,
             bool useMultipleSymbols = false,
             ReactionMarketDataSource? reactionSource = null,
-            InMemoryReactionStore? reactionStore = null)
+            InMemoryReactionStore? reactionStore = null,
+            IMarketSessionCalendar? warmupCalendar = null,
+            IHistoricalMarketDataSource? warmupHistorical = null,
+            IMarketDataSource? warmupSource = null)
         {
             _useFixtureSource = useFixtureSource;
             _simultaneousSituationSource = simultaneousSituationSource;
@@ -681,6 +974,9 @@ public sealed class StructureWebApplicationTests
             _useMultipleSymbols = useMultipleSymbols;
             _reactionSource = reactionSource;
             _reactionStore = reactionStore ?? new InMemoryReactionStore();
+            _warmupCalendar = warmupCalendar;
+            _warmupHistorical = warmupHistorical;
+            _warmupSource = warmupSource;
         }
 
         private static string WebProjectPath
@@ -730,12 +1026,21 @@ public sealed class StructureWebApplicationTests
                 configuration.AddInMemoryCollection(Settings()));
             builder.ConfigureServices(services =>
             {
-                if (_reactionSource is not null)
+                if (_warmupSource is not null)
+                {
+                    services.RemoveAll<IMarketDataSource>();
+                    services.AddSingleton(_warmupSource);
+                }
+                else if (_reactionSource is not null)
                 {
                     services.RemoveAll<IMarketDataSource>();
                     services.AddSingleton<IMarketDataSource>(_reactionSource);
-                    services.RemoveAll<IPriorSessionContextProvider>();
-                    services.AddSingleton<IPriorSessionContextProvider>(new CompletePriorSessionContextProvider());
+                    if (_warmupCalendar is null && _warmupHistorical is null)
+                    {
+                        services.RemoveAll<IPriorSessionContextProvider>();
+                        services.AddSingleton<IPriorSessionContextProvider>(
+                            new CompletePriorSessionContextProvider());
+                    }
                 }
                 else if (_useRestartSource)
                 {
@@ -752,6 +1057,16 @@ public sealed class StructureWebApplicationTests
                     services.RemoveAll<IMarketDataSource>();
                     services.AddScoped<IMarketDataSource>(_ =>
                         new SyntheticStructureSource(_simultaneousSituationSource));
+                }
+                if (_warmupCalendar is not null)
+                {
+                    services.RemoveAll<IMarketSessionCalendar>();
+                    services.AddSingleton(_warmupCalendar);
+                }
+                if (_warmupHistorical is not null)
+                {
+                    services.RemoveAll<IHistoricalMarketDataSource>();
+                    services.AddSingleton(_warmupHistorical);
                 }
                 services.RemoveAll<IScannerStore>();
                 services.AddSingleton<IScannerStore>(Store);
@@ -977,21 +1292,254 @@ public sealed class StructureWebApplicationTests
         }
     }
 
+    private sealed class WarmupCalendar(
+        MarketSessionCalendarStatus status = MarketSessionCalendarStatus.Success)
+        : IMarketSessionCalendar
+    {
+        public Task<MarketSessionCalendarResolution> ResolvePreviousSessionAsync(
+            string symbol,
+            string currentSessionId,
+            DateTimeOffset currentEventTimeUtc,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (status != MarketSessionCalendarStatus.Success)
+            {
+                return Task.FromResult(new MarketSessionCalendarResolution(
+                    null,
+                    null,
+                    "alpaca-test-calendar",
+                    $"Calendar resolution ended with {status}.",
+                    status));
+            }
+
+            var (current, prior) = currentSessionId switch
+            {
+                "session-a" => (Session("session-a", 2026, 11, 6),
+                    Session("prior-a", 2026, 11, 5)),
+                "session-b" => (Session("session-b", 2026, 11, 7),
+                    Session("prior-b", 2026, 11, 6)),
+                _ => (Session(currentSessionId, 2026, 11, 6),
+                    Session("prior-session", 2026, 11, 5))
+            };
+            return Task.FromResult(new MarketSessionCalendarResolution(
+                current,
+                prior,
+                "alpaca-test-calendar",
+                null));
+        }
+
+        private static MarketSessionDefinition Session(
+            string sessionId,
+            int year,
+            int month,
+            int day) =>
+            new(
+                sessionId,
+                new DateOnly(year, month, day),
+                new DateTimeOffset(year, month, day, 13, 30, 0, TimeSpan.Zero),
+                new DateTimeOffset(year, month, day, 20, 0, 0, TimeSpan.Zero),
+                "Alpaca",
+                "market-calendar-rest",
+                "alpaca-calendar-test-v1",
+                MarketSessionType.Regular,
+                MarketSessionValidity.Valid);
+    }
+
+    private sealed class WarmupHistoricalSource : IHistoricalMarketDataSource
+    {
+        private readonly Func<string, HistoricalRetrievalStatus> _status;
+        private readonly bool _declaresComplete;
+        private readonly bool _invalidProvenance;
+
+        public WarmupHistoricalSource()
+            : this(HistoricalRetrievalStatus.SuccessPaginationExhausted, true, false)
+        {
+        }
+
+        public WarmupHistoricalSource(
+            HistoricalRetrievalStatus status,
+            bool declaresComplete,
+            bool invalidProvenance)
+            : this(_ => status, declaresComplete, invalidProvenance)
+        {
+        }
+
+        public WarmupHistoricalSource(
+            Func<string, HistoricalRetrievalStatus> status)
+            : this(status, true, false)
+        {
+        }
+
+        private WarmupHistoricalSource(
+            Func<string, HistoricalRetrievalStatus> status,
+            bool declaresComplete,
+            bool invalidProvenance)
+        {
+            _status = status;
+            _declaresComplete = declaresComplete;
+            _invalidProvenance = invalidProvenance;
+        }
+
+        public Task<HistoricalMarketSessionData?> ReadSessionAsync(
+            string symbol,
+            MarketSession session,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var status = _status(symbol);
+            var hasObservations = status is HistoricalRetrievalStatus.SuccessPaginationExhausted
+                or HistoricalRetrievalStatus.LimitExceeded;
+            var complete = _declaresComplete
+                && status == HistoricalRetrievalStatus.SuccessPaginationExhausted;
+            var events = hasObservations
+                ? CompleteHistory(symbol, session)
+                : [];
+            var provider = _invalidProvenance ? "WrongProvider" : "Alpaca";
+            var exhausted = status == HistoricalRetrievalStatus.SuccessPaginationExhausted;
+            return Task.FromResult<HistoricalMarketSessionData?>(new HistoricalMarketSessionData(
+                events,
+                new MarketDataCapabilities(
+                    "Alpaca", "sip", MarketDataCoverage.Consolidated, false, true, false),
+                "historical-rest",
+                session.StartUtc,
+                session.EndUtc,
+                complete,
+                HasKnownGaps: false,
+                new HistoricalDataRequest(
+                    symbol,
+                    session.SessionId,
+                    session.StartUtc,
+                    session.EndUtc),
+                status,
+                new HistoricalDataProvenance(
+                    provider,
+                    "sip",
+                    "historical-rest",
+                    session.EndUtc.AddHours(1),
+                    exhausted ? 1 : 0,
+                    0),
+                PaginationExhausted: exhausted,
+                StatusMessage: status.ToString()));
+        }
+
+        internal static TradeEvent[] CompleteHistory(string symbol, MarketSession session)
+        {
+            decimal[] prices = [102m, 100m, 101m, 100.5m, 101.5m, 100.2m];
+            return prices.Select((price, index) => new TradeEvent(
+                    symbol,
+                    session.SessionId,
+                    session.StartUtc.AddMinutes(index + 1),
+                    session.StartUtc.AddMinutes(index + 2),
+                    "Alpaca",
+                    $"history-{symbol}-{session.SessionId}-{index}",
+                    price,
+                    100))
+                .ToArray();
+        }
+    }
+
+    private sealed class MultipleWarmupLiveSource(
+        params (string Symbol, string SessionId)[] scopes) : ILiveMarketDataSource
+    {
+        public MarketDataCapabilities Capabilities { get; } =
+            new("Alpaca", "iex", MarketDataCoverage.Limited, true, true, true);
+
+        public async IAsyncEnumerable<MarketEvent> ReadEventsAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var eventTime = new DateTimeOffset(2026, 11, 6, 18, 30, 0, TimeSpan.Zero);
+            foreach (var (symbol, sessionId) in scopes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return new TradeEvent(
+                    symbol,
+                    sessionId,
+                    eventTime,
+                    eventTime,
+                    "Alpaca",
+                    $"{symbol}-start",
+                    100.05m,
+                    10);
+            }
+
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+    }
+
+    private sealed class SessionTransitionWarmupLiveSource : ILiveMarketDataSource
+    {
+        public MarketDataCapabilities Capabilities { get; } =
+            new("Alpaca", "iex", MarketDataCoverage.Limited, true, true, true);
+
+        public async IAsyncEnumerable<MarketEvent> ReadEventsAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var sessionA = new DateTimeOffset(2026, 11, 6, 18, 30, 0, TimeSpan.Zero);
+            yield return new TradeEvent(
+                "AAPL", "session-a", sessionA, sessionA, "Alpaca", "session-a-start", 100.05m, 10);
+            var sessionB = new DateTimeOffset(2026, 11, 7, 18, 30, 0, TimeSpan.Zero);
+            yield return new TradeEvent(
+                "AAPL", "session-b", sessionB, sessionB, "Alpaca", "session-b-start", 100.05m, 10);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+    }
+
+    private sealed class BlockingSessionWarmupHistoricalSource : IHistoricalMarketDataSource
+    {
+        private readonly TaskCompletionSource _releaseOld =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<HistoricalMarketSessionData?> ReadSessionAsync(
+            string symbol,
+            MarketSession session,
+            CancellationToken cancellationToken)
+        {
+            if (session.SessionId == "prior-a")
+            {
+                await _releaseOld.Task;
+            }
+
+            return new HistoricalMarketSessionData(
+                WarmupHistoricalSource.CompleteHistory(symbol, session),
+                new MarketDataCapabilities(
+                    "Alpaca", "sip", MarketDataCoverage.Consolidated, false, true, false),
+                "historical-rest",
+                session.StartUtc,
+                session.EndUtc,
+                DeclaresCompleteCoverage: true,
+                HasKnownGaps: false,
+                new HistoricalDataRequest(
+                    symbol, session.SessionId, session.StartUtc, session.EndUtc),
+                HistoricalRetrievalStatus.SuccessPaginationExhausted,
+                new HistoricalDataProvenance(
+                    "Alpaca", "sip", "historical-rest", session.EndUtc.AddHours(1), 1, 0),
+                PaginationExhausted: true,
+                StatusMessage: null);
+        }
+
+        public void ReleaseOldSession() => _releaseOld.TrySetResult();
+    }
+
     private sealed class ReactionMarketDataSource(
         string symbol = "REACTION",
         string sessionId = "reaction-session",
         decimal initialPrice = 100.05m,
-        decimal? confirmationPrice = 100.3m) : ILiveMarketDataSource
+        decimal? confirmationPrice = 100.3m,
+        bool alpaca = false) : ILiveMarketDataSource
     {
         public MarketDataCapabilities Capabilities { get; } =
-            new("RecordedFixture", "Synthetic", MarketDataCoverage.Synthetic, false, true, true);
+            alpaca
+                ? new("Alpaca", "iex", MarketDataCoverage.Limited, true, true, true)
+                : new("RecordedFixture", "Synthetic", MarketDataCoverage.Synthetic, false, true, true);
 
         public async IAsyncEnumerable<MarketEvent> ReadEventsAsync(
             [EnumeratorCancellation] CancellationToken cancellationToken)
         {
             var start = new DateTimeOffset(2026, 11, 6, 18, 30, 0, TimeSpan.Zero);
             yield return new TradeEvent(
-                symbol, sessionId, start, start, "RecordedFixture", "reaction-start", initialPrice, 10);
+                symbol, sessionId, start, start, alpaca ? "Alpaca" : "RecordedFixture",
+                "reaction-start", initialPrice, 10);
             if (confirmationPrice is null)
             {
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
@@ -1001,10 +1549,11 @@ public sealed class StructureWebApplicationTests
             await Task.Delay(TimeSpan.FromSeconds(6), cancellationToken);
             yield return new TradeEvent(
                 symbol, sessionId, start.AddSeconds(1), start.AddSeconds(1),
-                "RecordedFixture", "reaction-confirm", confirmationPrice.Value, 10);
+                alpaca ? "Alpaca" : "RecordedFixture", "reaction-confirm", confirmationPrice.Value, 10);
             yield return new QuoteEvent(
                 symbol, sessionId, start.AddSeconds(2), start.AddSeconds(2),
-                "RecordedFixture", "reaction-final-quote", initialPrice - 0.01m, initialPrice + 0.01m, 100, 100);
+                alpaca ? "Alpaca" : "RecordedFixture", "reaction-final-quote",
+                initialPrice - 0.01m, initialPrice + 0.01m, 100, 100);
             await Task.CompletedTask;
         }
     }

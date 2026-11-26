@@ -421,6 +421,8 @@ public sealed class AlpacaHistoricalMarketDataSource(
             .OrderBy(item => item.EventTimeUtc)
             .ThenBy(item => item.SequenceId, StringComparer.Ordinal)
             .ToArray();
+        var transportComplete = status == HistoricalRetrievalStatus.SuccessPaginationExhausted
+            && paginationExhausted;
         return new HistoricalMarketSessionData(
             events,
             new MarketDataCapabilities(
@@ -431,9 +433,9 @@ public sealed class AlpacaHistoricalMarketDataSource(
                 true,
                 false),
             SourceKind,
-            events.Length == 0 ? null : events[0].EventTimeUtc,
-            events.Length == 0 ? null : events[^1].EventTimeUtc,
-            DeclaresCompleteCoverage: false,
+            transportComplete ? request.StartUtc : events.Length == 0 ? null : events[0].EventTimeUtc,
+            transportComplete ? request.EndUtc : events.Length == 0 ? null : events[^1].EventTimeUtc,
+            DeclaresCompleteCoverage: transportComplete,
             HasKnownGaps: false,
             Request: request,
             RetrievalStatus: status,

@@ -401,19 +401,32 @@
                     </section>
 
                     <section class="invalidation-panel prior-session-panel" aria-label="Prior session context">
-                        <h3>PRIOR SESSION</h3>
+                        <h3>PRIOR SESSION CONTEXT</h3>
                         @if (result.PriorSessionContext is { } priorView)
                         {
                             var prior = priorView.Context;
+                            var warmup = result.PriorSessionWarmup;
+                            <p>
+                                <strong>
+                                    @(prior.Completeness == PriorSessionContextStatus.Available
+                                        ? "Available"
+                                        : prior.Completeness.ToString())
+                                </strong>
+                                @if (warmup is not null)
+                                {
+                                    <span> · warm-up: @warmup.Status</span>
+                                }
+                            </p>
                             <p>
                                 Prior session: @(prior.PriorSessionId ?? "Unavailable") ·
+                                previous trading date: @(warmup?.PriorSessionTradingDate?.ToString("yyyy-MM-dd") ?? "Unavailable") ·
                                 completeness: @prior.Completeness ·
                                 structure: @prior.StructureState
                             </p>
                             <p>
-                                Prior high: @FormatStructurePrice(prior.PriorSessionHigh) ·
-                                prior low: @FormatStructurePrice(prior.PriorSessionLow) ·
-                                close: @FormatStructurePrice(prior.PriorSessionClose)
+                                Previous session high: @FormatStructurePrice(prior.PriorSessionHigh) ·
+                                previous session low: @FormatStructurePrice(prior.PriorSessionLow) ·
+                                last eligible regular-session trade: @FormatStructurePrice(prior.PriorSessionClose)
                             </p>
                             @if (prior.Completeness != PriorSessionContextStatus.Available)
                             {
@@ -448,18 +461,23 @@
                                 swing low @FormatDistance(priorView.DistanceToLatestSwingLow)
                             </p>
                             <p>
-                                Source: @(prior.HistoricalSource ?? "Unavailable") ·
-                                feed: @(prior.MarketData is null
-                                    ? "Unavailable"
-                                    : $"{prior.MarketData.Provider} / {prior.MarketData.Feed} / {prior.MarketData.Coverage}") ·
+                                Source: @(prior.MarketData?.Provider ?? "Unavailable")
+                                @(prior.MarketData?.Feed ?? "Unavailable") Historical ·
+                                source kind: @(prior.HistoricalSource ?? "Unavailable") ·
+                                live stream: @_status.Source / @(_status.Capabilities?.Feed ?? "Unknown") ·
                                 definition: @prior.ContextDefinitionVersion
                             </p>
                             <p class="muted">
                                 @prior.CompletenessReason
+                                @if (warmup is not null
+                                    && warmup.Status != PriorSessionWarmupStatus.CompleteUsable)
+                                {
+                                    <span>Current-session analysis continues without prior-session enhancement.</span>
+                                }
                                 Support and resistance are historical reference areas, not guarantees.
                                 @if (prior.CloseSemantics == PriorSessionCloseSemantics.LastEligibleTradeAtOrBeforeSessionEnd)
                                 {
-                                    <span>Close means the final eligible trade by event time at or before session end; it is not an official exchange close.</span>
+                                    <span>The last eligible trade is not an official exchange close.</span>
                                 }
                             </p>
                         }

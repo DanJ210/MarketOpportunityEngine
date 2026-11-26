@@ -1,7 +1,7 @@
 # Current Project Status
 
-**Current checkpoint:** Milestone A.2.5 - Live Prior-Session Historical Context: IN PROGRESS
-**Updated:** 2026-11-24
+**Current checkpoint:** Milestone A.2.5 - Live Prior-Session Historical Context: COMPLETE
+**Updated:** 2026-11-26
 
 ## Milestones
 
@@ -12,7 +12,7 @@
 - **A.2.3b Tracked Opportunity + Pre-Trade Readiness:** COMPLETE, including PR #2 correction guarded SQL revalidation
 - **A.2.4a Structural Level Interaction:** COMPLETE
 - **A.2.4b Structural Level Reaction Classification:** COMPLETE
-- **A.2.5 Live Prior-Session Historical Context:** IN PROGRESS
+- **A.2.5 Live Prior-Session Historical Context:** COMPLETE
 
 **A.2.4b internal batch status:**
 
@@ -25,10 +25,10 @@
 
 - **Batch 1 - Historical Contracts + Alpaca Calendar/Historical SIP Adapter:** COMPLETE
 - **Batch 2 - Completeness + Bounded PriorSessionContext Reconstruction:** COMPLETE
-- **Batch 3 - Live Startup Warm-up + Production MarketSituation Integration:** NEXT / AUTHORIZED
-- **Batch 4 - Final Guarded Validation + Documentation/Checkpoint Closeout:** NOT STARTED
+- **Batch 3 - Live Startup Warm-up + Production MarketSituation Integration:** COMPLETE
+- **Batch 4 - Final Guarded Validation + Documentation/Checkpoint Closeout:** COMPLETE
 
-**Immediate next task:** A.2.5 Batch 3 - Live Startup Warm-up + Production MarketSituation Integration.
+**Immediate next task:** No implementation checkpoint is underway. The next checkpoint REQUIRES DESIGN / APPROVAL.
 
 ## Current state
 
@@ -42,13 +42,21 @@ A.2.4b Batch 1 adds `market-reaction-v1` domain contracts and a deterministic ev
 
 A.2.5 Batch 1 adds provider-independent calendar and historical retrieval contracts plus Alpaca market-calendar and historical SIP infrastructure. Historical identity includes provider/feed/symbol/exchange/trade ID/event time, receive time records HTTP retrieval rather than original live receipt, SIP is mandatory with no IEX fallback, pagination is bounded, and retrieval status is separate from session completeness. No production prior-session warm-up, `PriorSessionContextBuilder`, scanner-pipeline, MarketSituation, MarketReaction, or swing-algorithm behavior changed. See [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md).
 
-A.2.5 Batch 2 adds `PriorSessionHistoricalReconstructor` for approved offline historical results. It preserves `prior-session-context-v1`, requires explicit provider/feed/source and requested symbol/session/bounds, keeps transport completion separate from gap-free analytical completeness, reconstructs decimal high/low and last eligible in-session trade, and reuses the unchanged swing algorithm only inside the prior session. Incomplete/failed results are never promoted to complete. No SQL persistence, cache, startup warm-up, or production `ScannerPipeline` invocation was added.
+A.2.5 Batch 2 adds `PriorSessionHistoricalReconstructor` for approved offline historical results. It preserves `prior-session-context-v1`, requires explicit provider/feed/source and requested symbol/session/bounds, keeps transport completion separate from gap-free analytical completeness, reconstructs decimal high/low and last eligible in-session trade, and reuses the unchanged swing algorithm only inside the prior session. Incomplete/failed results are never promoted to complete.
+
+A.2.5 Batch 3 production-wires live Alpaca prior-session warm-up through the existing provider-independent calendar/history contracts and Batch 2 reconstructor. A first live event starts one bounded single-flight task for its exact provider/feed/symbol/session/version scope; the scanner waits for that scope's terminal outcome before its first eligible analysis while unrelated scopes continue. Exhausted explicit-SIP pagination for the exact inclusive regular-session request supplies declared coverage, and only the reconstructor can promote it to `Available`. Complete context is frozen and may participate in MarketSituation; every terminal partial/failure outcome falls back to `CurrentSessionOnly` without changing feed health. Obsolete sessions are cancelled when safe and late outcomes cannot replace the active session projection. Historical raw trades are neither persisted nor retained after reconstruction. The API and Blazor expose warm-up status, resolved session/provenance, and honest fallback; MarketReaction episodes retain the level source plus historical provider/feed provenance. Fixture mode remains offline and partial, Massive has no historical warm-up, and setup/TradePlan/readiness versions and behavior remain unchanged.
 
 Tracked associations/lifecycle and immutable readiness assessments persist to SQL Server via the hand-written idempotent migration `20261101120000_AddTrackedOpportunityReadiness` (`tracked_opportunity`, `pre_trade_readiness_assessment`); only documented lifecycle fields may change, terminal candidates are never replaced in place, and active candidates are restored on restart and reevaluated from current trustworthy market state. Feed/data-health problems suspend readiness in the in-memory `ScannerState` projection without terminating or mutating the tracked plan; recovery reevaluates the same `PlanId`. See [ADR-008](./docs/adr/ADR-008-tracked-opportunity-readiness.md). The dashboard adds a PRE-TRADE READINESS section with plain-language states ("Candidate entry conditions are aligned." for Entry Ready) and the opportunity API responses expose the tracked identity, readiness state/reason, context mode, entry zone, distances, invalidation, Target 1, and reward/risk. The recorded fixture yields no confirmed structure, so it produces no tracked candidates and readiness honestly reports no tracked candidate.
 
 The scanner does not know the user's actual holdings; readiness states describe market conditions, not positions, and Entry Ready is not an instruction to trade. Position-management states such as `MANAGE`, `TAKE PROFIT`, and `EXIT` require a `PositionContext`, which is not implemented. Reward/risk is descriptive; no minimum reward/risk veto has been approved or implemented.
 
 ## Latest validation
+
+**A.2.5 Batch 4 final closeout: COMPLETE (2026-11-26).** The final production infrastructure audit found and corrected same-scope waiter cancellation so one caller no longer cancels shared warm-up work; obsolete explicit scopes are still cancelled safely. Focused Alpaca historical/reconstruction coverage passed **12/12** and **22/22**, warm-up/single-flight **13/13**, MarketSituation **18/18**, MarketReaction evaluator/tracker **19/19**, readiness **71/71**, pipeline/publication **31/31**, TradePlan/Momentum **39/39**, and fixture/replay **149/149**. Full units passed **452/452**, hosted non-SQL integrations **31/31**, launcher interception **18/18**, and the solution build had **0 warnings/errors**. SQL was not required or rerun because A.2.5 changed no SQL model, migration, store, or persistence behavior.
+
+The bounded AAPL provider validation used a completed 2026-11-25 regular-session reference and the production Alpaca calendar/history/reconstructor/warm-up components. Alpaca resolved prior session `2026-11-24` (`14:30Z`-`21:00Z`) and exhausted **73 pages / 722,167 normalized SIP records**, with **0 duplicates**, full inclusive coverage, no known gaps, and `CompleteUsable`; reconstructed high was **359.9797**, low **303.42**, and last eligible trade **354.238** at `20:59:59.9936641Z` with last-eligible-trade semantics. The after-hours hosted IEX AAPL observation authenticated and remained healthy for the bounded 120-second window but received no market events, so production ScannerPipeline regular-session warm-up, live MarketSituation, and MarketReaction participation were not observed and are not misclassified. Raw history was neither persisted nor exposed, and no credential value was committed or logged. See [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#a25-final-closeout-2026-11-26).
+
+**A.2.5 Batch 3 validation: COMPLETE (offline).** Warm-up coordinator/single-flight/concurrency/scope/fallback coverage passed **12/12**. The full offline unit suite passed **451/451**, and hosted success, calendar/history failure, incomplete/invalid data, one-symbol isolation, cancellation/transition, API, Blazor, and fixture cases passed within **19/19** hosted structure coverage. The combined hosted offline/configuration suite passed **26/26**. The solution build succeeded with **0 warnings/errors**. No live Alpaca call or SQL database was used. See [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#a25-batch-3-validation-2026-11-25).
 
 **A.2.5 Batch 2 validation: COMPLETE (offline).** Focused reconstruction/compatibility coverage passed **3/3**; completeness/failure **15/15**; end-of-session pivot **1/1**; early-close **1/1**; deterministic replay **2/2**; and PriorSessionContext regression **11/11**. MarketSituation **18/18** and MarketReaction evaluator/tracker **19/19** remained passing, with dedicated offline tests proving reconstructed prior levels participate as `PriorSessionEnhanced` and can pin an existing reaction episode. Alpaca historical/live regressions passed **12/12** and **18/18**; readiness/pipeline/publication **95/95**; TradePlan/Momentum **39/39**. The full unit suite passed **432/432**, hosted offline tests **8/8**, and the solution build succeeded with **0 warnings/errors**. No live provider or SQL database was used. See [VALIDATION_HISTORY.md](./VALIDATION_HISTORY.md#a25-batch-2-validation-2026-11-24).
 
@@ -80,10 +88,10 @@ MarketReaction remains descriptive and separate from MarketSituation, setup dete
 
 The approved implementation is divided into four batches, all COMPLETE: **Batch 1 - Domain + Reaction Algorithm**; **Batch 2 - Restart/Continuity Safety + SQL Persistence/Migration**; **Batch 3 - Pipeline Integration + Research Context + API + Blazor**; **Batch 4 - Final Documentation and Complete Regression/SQL/Checkpoint Closeout**. Batch 1 established the domain contracts, `market-reaction-v1`, policy values, lifecycle/evaluator, six mechanical algorithms, and offline deterministic tests. Batch 2 established terminal `ContinuityUnknown` handling, immutable assessments, controlled episode persistence, and the reviewed SQL migration. Batch 3 integrated event-driven tracking, live restart handling, non-gating immutable research context, current reaction API projections, and the Blazor display. Batch 4 passed final guarded regression, SQL, documentation, and build gates. No live provider, outcome research, or ML work was added.
 
-**A.2.5 Batch 1: COMPLETE. A.2.5 Batch 2: COMPLETE.** Historical contracts and bounded Alpaca SIP infrastructure are implemented, and approved offline historical results can now be reconstructed into the existing prior-context contract without production wiring. Batch 2 does not start Batch 3.
+**A.2.5 Batches 1-4: COMPLETE.** Historical contracts and bounded Alpaca SIP infrastructure are implemented, approved results reconstruct into the existing prior-context contract, and production live Alpaca warm-up is integrated before first eligible symbol/session analysis. Final offline, hosted, and guarded provider evidence is recorded above.
 
-**Immediate next task:** A.2.5 Batch 3 - Live Startup Warm-up + Production MarketSituation Integration.
+**Immediate next task:** No implementation checkpoint is underway. The next checkpoint REQUIRES DESIGN / APPROVAL.
 
-**Current blockers:** None for A.2.5 Batch 2. Multi-session/week trend scoring, zone strength, outcome tracking, backtesting, ML, new setup detectors, historical SQL persistence, and Batches 3-4 behavior remain outside Batch 2.
+**Current blockers:** None. Multi-session/week trend scoring, zone strength, outcome tracking, backtesting, ML, new setup detectors, historical SQL persistence, and live-gap recovery remain outside scope and require approval before implementation.
 
 No live-provider validation, outcome tracking, backtesting, ML/ONNX inference, broker integration, or order execution is part of A.2.3. See the [master specification](./Market_Opportunity_Engine_Final_Master_Spec.md) for product and architecture contracts.

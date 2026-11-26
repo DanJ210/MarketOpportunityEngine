@@ -328,6 +328,20 @@ public sealed class ScannerPipelineTests
     }
 
     [Theory]
+    [InlineData(0, 1)]
+    [InlineData(301, 1)]
+    [InlineData(30, 0)]
+    [InlineData(30, 33)]
+    public void Rejects_out_of_range_prior_session_warmup_options(
+        int timeoutSeconds,
+        int maximumConcurrentWarmups)
+    {
+        var options = new PriorSessionWarmupOptions(timeoutSeconds, maximumConcurrentWarmups);
+
+        Assert.Throws<InvalidOperationException>(options.Validate);
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(301)]
     public void Rejects_out_of_range_graceful_shutdown_timeout(int seconds)
@@ -335,6 +349,160 @@ public sealed class ScannerPipelineTests
         var options = new LivePipelineOptions { GracefulShutdownTimeoutSeconds = seconds };
 
         Assert.Throws<InvalidOperationException>(options.Validate);
+    }
+
+    [Fact]
+    public async Task Live_analysis_waits_for_its_symbol_session_warmup_before_first_persist()
+    {
+        var events = CreateSession(
+            "MOE",
+            "warmup-session",
+            DateTimeOffset.UtcNow,
+            100m);
+        var release = new TaskCompletionSource<PriorSessionWarmupResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new ControlledWarmupProvider((_, sessionId, _, _) => release.Task);
+        var store = new RecordingStore();
+        var scannerState = new ScannerState();
+        using var cancellation = new CancellationTokenSource();
+        var pipeline = new ScannerPipeline(
+            new PausingLiveSource(events),
+            store,
+            scannerState,
+            new ScannerConfiguration(),
+            new FeatureCalculator(),
+            new MomentumContinuationDetector(),
+            TimeProvider.System,
+            priorSessionContextProvider: provider);
+        var run = pipeline.RunAsync(cancellation.Token);
+        try
+        {
+            await provider.WaitForCallsAsync(1);
+            await Task.Delay(100);
+            Assert.Empty(store.Runs);
+            Assert.Empty(scannerState.Read().Results);
+            Assert.Equal(
+                PriorSessionWarmupStatus.Pending,
+                Assert.Single(scannerState.Read().Warmups).Status);
+
+            release.SetResult(UnavailableWarmup("MOE", "warmup-session"));
+            await WaitUntilAsync(() => store.Runs.Count == 1);
+            var result = Assert.Single(scannerState.Read().Results);
+            Assert.Equal(
+                PriorSessionContextStatus.Unavailable,
+                result.PriorSessionContext?.Context.Completeness);
+            Assert.Equal(
+                PriorSessionWarmupStatus.Unavailable,
+                result.PriorSessionWarmup?.Status);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    public async Task Slow_warmup_does_not_block_an_unrelated_symbol()
+    {
+        var now = DateTimeOffset.UtcNow;
+        MarketEvent[] events =
+        [
+            new TradeEvent("SLOW", "shared-session", now, now, "Alpaca", "slow-1", 10m, 1),
+            new TradeEvent("FAST", "shared-session", now, now, "Alpaca", "fast-1", 20m, 1)
+        ];
+        var releaseSlow = new TaskCompletionSource<PriorSessionWarmupResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new ControlledWarmupProvider((symbol, sessionId, _, _) =>
+            symbol == "SLOW"
+                ? releaseSlow.Task
+                : Task.FromResult(UnavailableWarmup(symbol, sessionId)));
+        var store = new RecordingStore();
+        var scannerState = new ScannerState();
+        using var cancellation = new CancellationTokenSource();
+        var pipeline = new ScannerPipeline(
+            new PausingLiveSource(events),
+            store,
+            scannerState,
+            new ScannerConfiguration(),
+            new FeatureCalculator(),
+            new MomentumContinuationDetector(),
+            TimeProvider.System,
+            priorSessionContextProvider: provider);
+        var run = pipeline.RunAsync(cancellation.Token);
+        try
+        {
+            await provider.WaitForCallsAsync(2);
+            await WaitUntilAsync(() => scannerState.Read().Results
+                .Any(item => item.Features.Symbol == "FAST"));
+            Assert.DoesNotContain(
+                scannerState.Read().Results,
+                item => item.Features.Symbol == "SLOW");
+
+            releaseSlow.SetResult(UnavailableWarmup("SLOW", "shared-session"));
+            await WaitUntilAsync(() => scannerState.Read().Results.Count == 2);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    public async Task Late_obsolete_session_warmup_does_not_replace_current_session_scope()
+    {
+        var now = DateTimeOffset.UtcNow;
+        MarketEvent[] events =
+        [
+            new TradeEvent("AAPL", "session-a", now.AddDays(-1), now.AddDays(-1), "Alpaca", "a-1", 10m, 1),
+            new TradeEvent("AAPL", "session-b", now, now, "Alpaca", "b-1", 20m, 1)
+        ];
+        var releaseA = new TaskCompletionSource<PriorSessionWarmupResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new ControlledWarmupProvider((_, sessionId, _, cancellation) =>
+            sessionId == "session-a"
+                ? releaseA.Task
+                : Task.FromResult(UnavailableWarmup("AAPL", sessionId)));
+        var store = new RecordingStore();
+        var scannerState = new ScannerState();
+        using var cancellation = new CancellationTokenSource();
+        var pipeline = new ScannerPipeline(
+            new PausingLiveSource(events),
+            store,
+            scannerState,
+            new ScannerConfiguration(),
+            new FeatureCalculator(),
+            new MomentumContinuationDetector(),
+            TimeProvider.System,
+            priorSessionContextProvider: provider);
+        var run = pipeline.RunAsync(cancellation.Token);
+        try
+        {
+            await provider.WaitForCallsAsync(2);
+            await WaitUntilAsync(() => scannerState.Read().Results
+                .Any(item => item.Features.SessionId == "session-b"));
+            Assert.Equal(
+                "session-b",
+                Assert.Single(scannerState.Read().Warmups).Scope.CurrentSessionId);
+
+            releaseA.SetResult(UnavailableWarmup("AAPL", "session-a"));
+            await WaitUntilAsync(() => scannerState.Read().Results.Count == 2);
+            Assert.Equal(
+                "session-b",
+                Assert.Single(scannerState.Read().Warmups).Scope.CurrentSessionId);
+            Assert.Contains(
+                scannerState.Read().Results,
+                item => item.PriorSessionWarmup?.Scope.CurrentSessionId == "session-a");
+            Assert.Contains(
+                scannerState.Read().Results,
+                item => item.PriorSessionWarmup?.Scope.CurrentSessionId == "session-b");
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     private static ScannerPipeline CreatePipeline(
@@ -348,6 +516,32 @@ public sealed class ScannerPipelineTests
             new FeatureCalculator(),
             new MomentumContinuationDetector(),
             TimeProvider.System);
+
+    private static PriorSessionWarmupResult UnavailableWarmup(
+        string symbol,
+        string sessionId)
+    {
+        var context = new PriorSessionContextBuilder(new FeatureCalculator()).BuildUnavailable(
+            symbol,
+            sessionId,
+            "Synthetic unavailable history.");
+        var capabilities = new MarketDataCapabilities(
+            "Alpaca", "iex", MarketDataCoverage.Limited, true, true, true);
+        return new PriorSessionWarmupResult(
+            context,
+            new PriorSessionWarmupOutcome(
+                PriorSessionWarmupScopeFactory.Create(
+                    symbol,
+                    sessionId,
+                    capabilities,
+                    priorSessionId: null,
+                    PriorSessionContextBuilder.DefinitionVersion,
+                    "features-v16",
+                    "scanner-config-v19"),
+                PriorSessionWarmupStatus.Unavailable,
+                context.CompletenessReason,
+                ContextCompleteness: context.Completeness));
+    }
 
     private static void AssertAnalysis(
         ScannerAnalysisResult result,
@@ -414,6 +608,47 @@ public sealed class ScannerPipelineTests
 
             await Task.CompletedTask;
             throw new IOException("Test stream ended.");
+        }
+    }
+
+    private sealed class ControlledWarmupProvider(
+        Func<string, string, MarketDataCapabilities, CancellationToken, Task<PriorSessionWarmupResult>> warmup)
+        : IPriorSessionContextProvider
+    {
+        private int _calls;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public Task<PriorSessionContextView> GetContextAsync(
+            string symbol,
+            string currentSessionId,
+            DateTimeOffset currentEventTimeUtc,
+            decimal? currentReferencePrice,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<PriorSessionWarmupResult> WarmupAsync(
+            string symbol,
+            string currentSessionId,
+            DateTimeOffset currentEventTimeUtc,
+            MarketDataCapabilities currentMarketData,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _calls);
+            return warmup(
+                symbol,
+                currentSessionId,
+                currentMarketData,
+                cancellationToken);
+        }
+
+        public async Task WaitForCallsAsync(int expected)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (Calls < expected)
+            {
+                await Task.Delay(10, timeout.Token);
+            }
         }
     }
 

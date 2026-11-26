@@ -7,7 +7,7 @@ internal static class IntegrationTestConfiguration
 {
     private const string EnvironmentVariableName = "MARKETOPPORTUNITY_SQL_TEST_CONNECTION";
     private const string UserSecretKey = "MarketOpportunity:SQL:Test:Connection";
-    private const string RequiredServer = "localhost,1433";
+    private const string RequiredServer = "127.0.0.1,14333";
     private const string RequiredDatabase = "MarketOpportunityEngine_IntegrationTests";
 
     public static string GetSqlTestConnectionString()

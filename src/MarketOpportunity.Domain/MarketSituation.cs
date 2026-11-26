@@ -66,7 +66,9 @@ public sealed record ImportantPriceLevel(
     DateTimeOffset? SourceCoverageEndUtc,
     string? StructureAlgorithmVersion,
     string? FeatureSetVersion,
-    string? ContextDefinitionVersion);
+    string? ContextDefinitionVersion,
+    string? HistoricalProvider = null,
+    string? HistoricalFeed = null);
 
 public sealed record MarketSituationInteraction(
     MarketSituationType SituationType,

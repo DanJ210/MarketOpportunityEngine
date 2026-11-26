@@ -177,7 +177,7 @@ public sealed class AlpacaHistoricalMarketDataTests
     }
 
     [Fact]
-    public async Task Historical_single_page_normalizes_and_orders_without_complete_claim()
+    public async Task Historical_single_page_normalizes_and_declares_complete_only_after_pagination_exhaustion()
     {
         using var handler = new RecordingHandler(request =>
         {
@@ -201,7 +201,9 @@ public sealed class AlpacaHistoricalMarketDataTests
 
         Assert.Equal(HistoricalRetrievalStatus.SuccessPaginationExhausted, result.RetrievalStatus);
         Assert.True(result.PaginationExhausted);
-        Assert.False(result.DeclaresCompleteCoverage);
+        Assert.True(result.DeclaresCompleteCoverage);
+        Assert.Equal(Session.StartUtc, result.CoverageStartUtc);
+        Assert.Equal(Session.EndUtc, result.CoverageEndUtc);
         Assert.Equal("Alpaca", result.Provenance?.Provider);
         Assert.Equal("sip", result.Provenance?.Feed);
         Assert.Equal("historical-rest", result.Provenance?.SourceKind);

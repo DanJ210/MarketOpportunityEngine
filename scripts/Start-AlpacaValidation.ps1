@@ -5,6 +5,9 @@ param(
     [ValidateSet('iex', 'test')]
     [string] $Feed,
 
+    [ValidatePattern('^[A-Za-z][A-Za-z0-9._-]{0,15}$')]
+    [string] $ValidationSymbol,
+
     [ValidatePattern('^[A-Za-z0-9_-]{1,64}$')]
     [string] $SessionId = "alpaca-$Feed-$([DateTimeOffset]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'))",
 
@@ -14,7 +17,7 @@ param(
     [switch] $Instrument,
 
     [ValidateRange(5, 3600)]
-    [int] $DurationSeconds = 3600,
+    [int] $DurationSeconds = 600,
 
     [string] $DiagnosticsDirectory,
 
@@ -51,8 +54,8 @@ function Get-ValidationConnectionString {
         catch {
             throw 'MARKETOPPORTUNITY_SQL_TEST_CONNECTION is not a valid SQL Server connection string.'
         }
-        if ($connection['Initial Catalog'] -ne $Database -or $connection['Data Source'] -ne 'localhost,1433') {
-            throw "The supplied SQL test connection must target localhost,1433 and $Database; it was not replaced."
+        if ($connection['Initial Catalog'] -ne $Database -or $connection['Data Source'] -ne '127.0.0.1,14333') {
+            throw "The supplied SQL test connection must target 127.0.0.1,14333 and $Database; it was not replaced."
         }
     }
     else {
@@ -60,7 +63,7 @@ function Get-ValidationConnectionString {
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($password)) {
             throw 'Cannot read the running local SQL container credential; start the Compose SQL service first.'
         }
-        $connection['Data Source'] = 'localhost,1433'
+        $connection['Data Source'] = '127.0.0.1,14333'
         $connection['Initial Catalog'] = $Database
         $connection['User ID'] = 'sa'
         $connection['Password'] = [string] $password
@@ -88,7 +91,7 @@ function Get-ValidationConnectionString {
         while ($null -ne $cause.InnerException) {
             $cause = $cause.InnerException
         }
-        throw "Dedicated SQL database verification failed. Run the Compose validation initializer and verify local SQL access. No app was started. Error type: $($cause.GetType().Name)"
+        throw "Dedicated SQL database verification failed. Run the Compose validation initializer and verify local SQL access. No app was started. Error: $($cause.GetType().Name): $($cause.Message)"
     }
     finally {
         $sql.Dispose()
@@ -113,32 +116,37 @@ try {
     $configuredCount = 1
     $symbols = @('FAKEPACA')
     if ($Feed -eq 'iex') {
-        [xml] $projectXml = Get-Content -LiteralPath $project -Raw
-        $secretsId = [string] $projectXml.Project.PropertyGroup.UserSecretsId |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-        if ([string]::IsNullOrWhiteSpace($secretsId)) {
-            throw 'The Web project has no UserSecretsId.'
+        if ($PSBoundParameters.ContainsKey('ValidationSymbol')) {
+            $symbols = @($ValidationSymbol.ToUpperInvariant())
         }
-
-        $secretsPath = Join-Path $env:APPDATA "Microsoft\UserSecrets\$secretsId\secrets.json"
-        $secrets = Get-Content -LiteralPath $secretsPath -Raw | ConvertFrom-Json -AsHashtable
-        $configuredSymbols = $secrets['Scanner:Universe:Symbols']
-        if ($configuredSymbols -isnot [string] -or [string]::IsNullOrWhiteSpace($configuredSymbols)) {
-            throw 'Scanner:Universe:Symbols must contain the comma-separated development universe.'
-        }
-
-        $entries = @($configuredSymbols.Split(','))
-        $configuredCount = $entries.Count
-        $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-        $symbols = @(foreach ($entry in $entries) {
-            $symbol = $entry.Trim()
-            if ([string]::IsNullOrWhiteSpace($symbol)) {
-                throw 'Scanner:Universe:Symbols must not contain empty entries.'
+        else {
+            [xml] $projectXml = Get-Content -LiteralPath $project -Raw
+            $secretsId = [string] $projectXml.Project.PropertyGroup.UserSecretsId |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            if ([string]::IsNullOrWhiteSpace($secretsId)) {
+                throw 'The Web project has no UserSecretsId.'
             }
-            $symbol = $symbol.ToUpperInvariant()
-            if ($seen.Add($symbol)) { $symbol }
-        })
-        $secrets = $null
+
+            $secretsPath = Join-Path $env:APPDATA "Microsoft\UserSecrets\$secretsId\secrets.json"
+            $secrets = Get-Content -LiteralPath $secretsPath -Raw | ConvertFrom-Json -AsHashtable
+            $configuredSymbols = $secrets['Scanner:Universe:Symbols']
+            if ($configuredSymbols -isnot [string] -or [string]::IsNullOrWhiteSpace($configuredSymbols)) {
+                throw 'Scanner:Universe:Symbols must contain the comma-separated development universe.'
+            }
+
+            $entries = @($configuredSymbols.Split(','))
+            $configuredCount = $entries.Count
+            $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            $symbols = @(foreach ($entry in $entries) {
+                $symbol = $entry.Trim()
+                if ([string]::IsNullOrWhiteSpace($symbol)) {
+                    throw 'Scanner:Universe:Symbols must not contain empty entries.'
+                }
+                $symbol = $symbol.ToUpperInvariant()
+                if ($seen.Add($symbol)) { $symbol }
+            })
+            $secrets = $null
+        }
     }
 
     $buildArguments = @()

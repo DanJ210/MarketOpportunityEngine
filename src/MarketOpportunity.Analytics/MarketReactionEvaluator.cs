@@ -110,7 +110,13 @@ public sealed class MarketReactionEvaluator
             startIdentity,
             initiatingObservation.Provider,
             initiatingObservation.SequenceId,
-            initiatingObservation.Price);
+            initiatingObservation.Price,
+            level.Source,
+            level.SourceSessionId,
+            level.HistoricalProvider,
+            level.HistoricalFeed,
+            level.HistoricalSource,
+            level.SourceContextId);
     }
 
     public MarketReactionEvaluation Evaluate(

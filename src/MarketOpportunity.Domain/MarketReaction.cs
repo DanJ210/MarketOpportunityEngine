@@ -55,7 +55,13 @@ public sealed record LevelInteractionEpisode(
     string? LastObservationIdentity,
     string? LastObservationProvider,
     string? LastObservationSequenceId,
-    decimal? LastObservationPrice);
+    decimal? LastObservationPrice,
+    ImportantPriceLevelSource? LevelSource = null,
+    string? LevelSourceSessionId = null,
+    string? HistoricalProvider = null,
+    string? HistoricalFeed = null,
+    string? HistoricalSource = null,
+    Guid? PriorSessionContextId = null);
 
 public sealed record MarketReactionAssessment(
     Guid Id,

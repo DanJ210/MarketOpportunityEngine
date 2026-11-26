@@ -188,7 +188,7 @@ public sealed class LiveValidationInstrumentationTests
     public void Session_log_redacts_connection_strings_provider_keys_and_credential_assignments()
     {
         const string password = "SuperSecretPass123!";
-        const string connection = "Server=localhost,1433;Database=Validation;User ID=sa;Password=" + password;
+        const string connection = "Server=127.0.0.1,14333;Database=Validation;User ID=sa;Password=" + password;
         const string apiKey = "AKFAKEALPACAKEY0001";
         const string secretKey = "fakeAlpacaSecretValue9876";
         const string massiveKey = "fakeMassiveApiKey5555";
