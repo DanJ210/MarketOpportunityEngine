@@ -8,6 +8,12 @@
 
 Do not use this archive as routine coding-agent context. Use it when historical validation, a previous failure, an old live-provider run, SQL provenance, browser evidence, or a historical contradiction must be investigated.
 
+## A.2.6 Batch 2 acceptance review correction (2026-11-27)
+
+**Status: Batch 2 BLOCKED from closeout pending owner architectural direction.** This note supplements, and does not rewrite, the earlier Batch 2 validation record.
+
+Review against the full Batch 2 acceptance criteria found that the implementation enforces a `MaximumPivotsPerSession` cap but otherwise retains every confirmed pivot in each `StructuralSessionSummary`. Batch 1's evaluator uses all eligible pivot observations for recurrence, exact zone identity, total observation counts, and representative selection. Therefore the required compact per-session reduction with exact Batch 1 analytical and identity equivalence has not been demonstrated. A lossy reduction would alter the approved v1 contract; retaining all pivots does not satisfy the stated bounded-summary requirement. No architecture change is authorized by this review. Keep the exact-three-session rule, do not add degraded two-session zones, and do not begin Batch 3.
+
 ## A.2.6 Batch 2 - Bounded Multi-Session Historical Reconstruction (2026-11-26)
 
 **Status: Batch 2 COMPLETE; overall A.2.6 IN PROGRESS. Batch 3 NOT STARTED and requires separate authorization.**
