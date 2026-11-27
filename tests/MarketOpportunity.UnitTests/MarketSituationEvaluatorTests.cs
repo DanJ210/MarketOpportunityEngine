@@ -174,6 +174,20 @@ public sealed class MarketSituationEvaluatorTests
     }
 
     [Fact]
+    public void Resolves_remaining_equal_source_tie_by_deterministic_level_id()
+    {
+        var first = Candidate(StructuralLevelType.Support, 99.5m, 9);
+        var second = Candidate(StructuralLevelType.Support, 99.5m, 3);
+        var context = AvailableContext([first, second], [], null, null);
+        var detailed = EvaluateDetailed(100m, context);
+        var expected = detailed.CandidateSet.EligibleLevels.MinBy(item => item.Id);
+
+        Assert.Equal(expected, detailed.Assessment.NearestSupportLevel);
+        Assert.Equal(0, detailed.Assessment.SelectionEvidence.Single(item =>
+            item.Role == ImportantPriceLevelRole.Support).SourcePrecedence);
+    }
+
+    [Fact]
     public void Preserves_simultaneous_support_and_resistance_interactions_and_uses_support_on_primary_tie()
     {
         var context = AvailableContext(
@@ -404,6 +418,247 @@ public sealed class MarketSituationEvaluatorTests
         Assert.Equal(assessment.ResistanceInteraction, restored.ResistanceInteraction);
     }
 
+    [Fact]
+    public void Separates_complete_candidate_evidence_from_the_compact_selected_result()
+    {
+        var context = AvailableContext(
+            [
+                Candidate(StructuralLevelType.Support, 99.9m, 1),
+                Candidate(StructuralLevelType.Support, 98m, 2)
+            ],
+            [Candidate(StructuralLevelType.Resistance, 100.2m, 3)],
+            null,
+            null);
+        var events = CreateTrades([100m]);
+        var snapshot = Snapshot(events, _configuration);
+        var evaluation = _evaluator.EvaluateWithEvidence(
+            snapshot,
+            events,
+            ToView(context, snapshot.ReferencePrice),
+            _configuration,
+            snapshot.AsOfUtc);
+
+        var compactJson = JsonSerializer.Serialize(evaluation.Assessment);
+        var projected = evaluation.ProjectLegacy();
+
+        Assert.Equal(3, evaluation.CandidateSet.TotalCandidateCount);
+        Assert.Equal(2, evaluation.Assessment.SelectionEvidence.Count);
+        Assert.Equal(
+            CompactMarketSituationAssessment.CurrentPersistenceContractVersion,
+            evaluation.Assessment.PersistenceContractVersion);
+        Assert.Equal(evaluation.CandidateSet.CandidateSetId, evaluation.Assessment.CandidateSetId);
+        Assert.Equal(64, evaluation.CandidateSet.CandidateSetId.Length);
+        Assert.DoesNotContain("EligibleLevels", compactJson, StringComparison.Ordinal);
+        Assert.True(compactJson.Length < 16 * 1024);
+        Assert.Equal(evaluation.CandidateSet.EligibleLevels, projected.EligibleLevels);
+        Assert.Equal(evaluation.Assessment.NearestSupportLevel, projected.SupportInteraction!.Level);
+        Assert.Equal(evaluation.Assessment.SupportInteraction!.LevelId, projected.SupportInteraction.Level.Id);
+        Assert.Equal(evaluation.Assessment.NearestResistanceLevel, projected.ResistanceInteraction!.Level);
+    }
+
+    [Fact]
+    public void Candidate_set_identity_is_canonical_and_commits_to_complete_content()
+    {
+        var context = AvailableContext(
+            [
+                Candidate(StructuralLevelType.Support, 99m, 1),
+                Candidate(StructuralLevelType.Support, 98m, 2)
+            ],
+            [Candidate(StructuralLevelType.Resistance, 101m, 3)],
+            null,
+            null);
+        var events = CreateTrades([100m]);
+        var snapshot = Snapshot(events, _configuration);
+        var first = _evaluator.EvaluateWithEvidence(
+            snapshot, events, ToView(context, snapshot.ReferencePrice), _configuration, Start);
+        var replay = _evaluator.EvaluateWithEvidence(
+            snapshot, events, ToView(context, snapshot.ReferencePrice), _configuration, Start.AddDays(1));
+        var reordered = RecreateCandidateSet(
+            first.CandidateSet,
+            first.CandidateSet.EligibleLevels.Reverse().ToArray());
+        var duplicate = RecreateCandidateSet(
+            first.CandidateSet,
+            [.. first.CandidateSet.EligibleLevels, first.CandidateSet.EligibleLevels[0]]);
+        var changedPrice = RecreateCandidateSet(
+            first.CandidateSet,
+            ReplaceLevel(first.CandidateSet.EligibleLevels, level => level with { Price = level.Price + 1m }));
+        var changedRole = RecreateCandidateSet(
+            first.CandidateSet,
+            ReplaceLevel(first.CandidateSet.EligibleLevels, level => level with
+            {
+                Role = ImportantPriceLevelRole.Resistance
+            }));
+        var changedProvenance = RecreateCandidateSet(
+            first.CandidateSet,
+            ReplaceLevel(first.CandidateSet.EligibleLevels, level => level with
+            {
+                HistoricalSource = "different-history"
+            }));
+        var removed = RecreateCandidateSet(
+            first.CandidateSet,
+            first.CandidateSet.EligibleLevels.Skip(1).ToArray());
+        var changedUniverse = _evaluator.EvaluateWithEvidence(
+            snapshot,
+            events,
+            ToView(
+                AvailableContext(
+                    [
+                        Candidate(StructuralLevelType.Support, 99m, 1),
+                        Candidate(StructuralLevelType.Support, 98m, 2),
+                        Candidate(StructuralLevelType.Support, 90m, 4)
+                    ],
+                    [Candidate(StructuralLevelType.Resistance, 101m, 3)],
+                    null,
+                    null),
+                snapshot.ReferencePrice),
+            _configuration,
+            Start);
+
+        Assert.Equal(first.CandidateSet.CandidateSetId, replay.CandidateSet.CandidateSetId);
+        Assert.Equal(first.Assessment.Id, replay.Assessment.Id);
+        Assert.Equal(first.Assessment.NearestSupportLevel, changedUniverse.Assessment.NearestSupportLevel);
+        Assert.NotEqual(first.CandidateSet.CandidateSetId, changedUniverse.CandidateSet.CandidateSetId);
+        Assert.NotEqual(first.Assessment.Id, changedUniverse.Assessment.Id);
+        Assert.Equal(first.CandidateSet.CandidateSetId, reordered.CandidateSetId);
+        Assert.NotEqual(first.CandidateSet.CandidateSetId, duplicate.CandidateSetId);
+        Assert.NotEqual(first.CandidateSet.CandidateSetId, changedPrice.CandidateSetId);
+        Assert.NotEqual(first.CandidateSet.CandidateSetId, changedRole.CandidateSetId);
+        Assert.NotEqual(first.CandidateSet.CandidateSetId, changedProvenance.CandidateSetId);
+        Assert.NotEqual(first.CandidateSet.CandidateSetId, removed.CandidateSetId);
+    }
+
+    [Fact]
+    public void Rejects_conflicting_candidate_set_and_compact_assessment_content()
+    {
+        var events = CreateTrades([100m]);
+        var snapshot = Snapshot(events, _configuration);
+        var evaluation = _evaluator.EvaluateWithEvidence(
+            snapshot,
+            events,
+            ToView(
+                AvailableContext(
+                    [Candidate(StructuralLevelType.Support, 99.9m, 1)],
+                    [],
+                    null,
+                    null),
+                snapshot.ReferencePrice),
+            _configuration,
+            snapshot.AsOfUtc);
+        var changedCandidates = evaluation.CandidateSet with
+        {
+            EligibleLevels =
+            [
+                evaluation.CandidateSet.EligibleLevels[0] with
+                {
+                    HistoricalSource = "conflicting-history"
+                }
+            ]
+        };
+        var changedAssessment = evaluation.Assessment with
+        {
+            TotalCandidateCount = evaluation.Assessment.TotalCandidateCount + 1
+        };
+
+        Assert.Throws<InvalidOperationException>(() => changedCandidates.EnsureIdentityMatches());
+        Assert.Throws<InvalidOperationException>(() => changedAssessment.ProjectLegacy(evaluation.CandidateSet));
+        var envelopeChanged = evaluation.Assessment with
+        {
+            PersistenceContractVersion = "future-envelope"
+        };
+        Assert.Equal(evaluation.Assessment.Id, envelopeChanged.Id);
+        Assert.Throws<InvalidOperationException>(() => envelopeChanged.ProjectLegacy(evaluation.CandidateSet));
+    }
+
+    [Fact]
+    public void Compact_projection_preserves_selected_outputs_and_reaction_pin()
+    {
+        var context = AvailableContext(
+            [Candidate(StructuralLevelType.Support, 100m, 1)],
+            [Candidate(StructuralLevelType.Resistance, 100m, 2)],
+            null,
+            null);
+        var detailed = EvaluateDetailed(100m, context);
+        var projected = detailed.ProjectLegacy();
+        var reference = _evaluator.Evaluate(
+            Snapshot(CreateTrades([100m]), _configuration),
+            CreateTrades([100m]),
+            ToView(context, 100m),
+            _configuration,
+            Start);
+
+        Assert.Equal(reference.Status, projected.Status);
+        Assert.Equal(reference.UnavailableReason, projected.UnavailableReason);
+        Assert.Equal(reference.ContextMode, projected.ContextMode);
+        Assert.Equal(reference.NearestSupportLevel, projected.NearestSupportLevel);
+        Assert.Equal(reference.NearestResistanceLevel, projected.NearestResistanceLevel);
+        Assert.Equal(reference.SupportInteraction, projected.SupportInteraction);
+        Assert.Equal(reference.ResistanceInteraction, projected.ResistanceInteraction);
+        Assert.Equal(reference.PrimarySituation, projected.PrimarySituation);
+        Assert.Equal(reference.EligibleLevels, projected.EligibleLevels);
+        Assert.Equal(reference.AsOfUtc, projected.AsOfUtc);
+        Assert.Equal(reference.DefinitionVersion, projected.DefinitionVersion);
+        Assert.Equal(reference.ConfigurationVersion, projected.ConfigurationVersion);
+
+        Assert.NotNull(projected.SupportInteraction);
+        var supportInteraction = projected.SupportInteraction;
+        var supportEpisode = new MarketReactionEvaluator().StartEpisode(
+            supportInteraction!,
+            (TradeEvent)CreateTrades([100m])[0],
+            _configuration);
+        Assert.Equal(supportInteraction.Level.Id, supportEpisode.LevelId);
+        Assert.Equal(supportInteraction.Level.Role, supportEpisode.Role);
+        Assert.Equal(supportInteraction.Level.Price, supportEpisode.LevelPrice);
+        Assert.Equal(supportInteraction.Level.Source, supportEpisode.LevelSource);
+        Assert.Equal(supportInteraction.Level.SourceSessionId, supportEpisode.LevelSourceSessionId);
+        Assert.Equal(supportInteraction.Level.HistoricalProvider, supportEpisode.HistoricalProvider);
+        Assert.Equal(supportInteraction.Level.HistoricalFeed, supportEpisode.HistoricalFeed);
+        Assert.Equal(supportInteraction.Level.HistoricalSource, supportEpisode.HistoricalSource);
+        Assert.Equal(supportInteraction.Level.SourceContextId, supportEpisode.PriorSessionContextId);
+        Assert.Equal(supportInteraction.ZoneLow, supportEpisode.ZoneLow);
+        Assert.Equal(supportInteraction.ZoneHigh, supportEpisode.ZoneHigh);
+    }
+
+    [Fact]
+    public void Compact_assessment_remains_bounded_for_large_candidate_universe()
+    {
+        const int candidateCount = 100_005;
+        var losers = Enumerable.Range(2, candidateCount - 1)
+            .Select(index => Candidate(
+                StructuralLevelType.Support,
+                200m + index * 0.01m,
+                index))
+            .Prepend(Candidate(StructuralLevelType.Support, 99.95m, 1))
+            .ToArray();
+        var context = AvailableContext(losers, [], null, null);
+        var events = CreateTrades([100m]);
+        var snapshot = Snapshot(events, _configuration);
+
+        var evaluation = _evaluator.EvaluateWithEvidence(
+            snapshot,
+            events,
+            ToView(context, snapshot.ReferencePrice),
+            _configuration,
+            snapshot.AsOfUtc);
+        var firstId = evaluation.CandidateSet.CandidateSetId;
+        var firstAssessmentId = evaluation.Assessment.Id;
+        var compactJson = JsonSerializer.Serialize(evaluation.Assessment);
+        var replay = _evaluator.EvaluateWithEvidence(
+            snapshot,
+            events,
+            ToView(context, snapshot.ReferencePrice),
+            _configuration,
+            snapshot.AsOfUtc.AddHours(1));
+
+        Assert.Equal(candidateCount, evaluation.CandidateSet.TotalCandidateCount);
+        Assert.Equal(firstId, replay.CandidateSet.CandidateSetId);
+        Assert.Equal(firstAssessmentId, replay.Assessment.Id);
+        Assert.Equal(99.95m, evaluation.Assessment.NearestSupportLevel!.Price);
+        Assert.True(compactJson.Length < 16 * 1024);
+        Assert.DoesNotContain("EligibleLevels", compactJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(losers[^1].SourceSwingId.ToString(), compactJson, StringComparison.Ordinal);
+        Assert.Equal(evaluation.CandidateSet.EligibleLevels, evaluation.ProjectLegacy().EligibleLevels);
+    }
+
     private MarketSituationAssessment Evaluate(
         decimal price,
         PriorSessionContext? context) =>
@@ -414,6 +669,50 @@ public sealed class MarketSituationEvaluatorTests
         var events = CreateTrades([price]);
         var snapshot = Snapshot(events, _configuration);
         return _evaluator.Evaluate(snapshot, events, context, _configuration, snapshot.AsOfUtc);
+    }
+
+    private MarketSituationEvaluation EvaluateDetailed(
+        decimal price,
+        PriorSessionContext? context)
+    {
+        var events = CreateTrades([price]);
+        var snapshot = Snapshot(events, _configuration);
+        return _evaluator.EvaluateWithEvidence(
+            snapshot,
+            events,
+            context is null ? null : ToView(context, price),
+            _configuration,
+            snapshot.AsOfUtc);
+    }
+
+    private static MarketSituationCandidateSet RecreateCandidateSet(
+        MarketSituationCandidateSet source,
+        IReadOnlyList<ImportantPriceLevel> levels) =>
+        MarketSituationCandidateSet.Create(
+            source.FeatureSnapshotId,
+            source.PriorSessionContextId,
+            source.Symbol,
+            source.SessionId,
+            source.AsOfUtc,
+            source.ContextMode,
+            levels,
+            source.TestZonePercent,
+            source.ApproachDistancePercent,
+            source.DefinitionVersion,
+            source.FeatureSetVersion,
+            source.ConfigurationVersion,
+            source.MarketData,
+            source.DataQuality,
+            source.MarketStructureStatus,
+            source.HasCompleteCurrentSessionData);
+
+    private static IReadOnlyList<ImportantPriceLevel> ReplaceLevel(
+        IReadOnlyList<ImportantPriceLevel> levels,
+        Func<ImportantPriceLevel, ImportantPriceLevel> replace)
+    {
+        var changed = levels.ToArray();
+        changed[0] = replace(changed[0]);
+        return changed;
     }
 
     private static PriorSessionContextView ToView(PriorSessionContext context, decimal? price) =>

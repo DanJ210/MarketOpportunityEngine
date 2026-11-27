@@ -16,6 +16,19 @@ public sealed class MarketSituationEvaluator
         IReadOnlyList<MarketEvent> currentEvents,
         PriorSessionContextView? priorContext,
         ScannerConfiguration configuration,
+        DateTimeOffset evaluatedAtUtc) =>
+        EvaluateWithEvidence(
+            snapshot,
+            currentEvents,
+            priorContext,
+            configuration,
+            evaluatedAtUtc).ProjectLegacy();
+
+    public MarketSituationEvaluation EvaluateWithEvidence(
+        FeatureSnapshot snapshot,
+        IReadOnlyList<MarketEvent> currentEvents,
+        PriorSessionContextView? priorContext,
+        ScannerConfiguration configuration,
         DateTimeOffset evaluatedAtUtc)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -40,15 +53,27 @@ public sealed class MarketSituationEvaluator
         AddPriorSessionLevels(levels, snapshot, priorContext);
         AddCurrentSessionLevels(levels, snapshot, currentSessionEvents);
 
-        var orderedLevels = levels
-            .OrderBy(item => item.Role)
-            .ThenBy(item => item.Price)
-            .ThenBy(item => SourcePrecedence(item.Source))
-            .ThenBy(item => item.Id)
-            .ToArray();
-        var contextMode = orderedLevels.Any(IsPriorSessionLevel)
+        var contextMode = levels.Any(IsPriorSessionLevel)
             ? MarketSituationContextMode.PriorSessionEnhanced
             : MarketSituationContextMode.CurrentSessionOnly;
+        var candidateSet = MarketSituationCandidateSet.Create(
+            snapshot.Id,
+            priorContext?.Context.ContextId,
+            snapshot.Symbol,
+            snapshot.SessionId,
+            snapshot.AsOfUtc,
+            contextMode,
+            levels,
+            situationConfiguration.TestZonePercent,
+            situationConfiguration.ApproachDistancePercent,
+            DefinitionVersion,
+            snapshot.FeatureSetVersion,
+            configuration.Version,
+            snapshot.MarketData,
+            snapshot.DataQuality,
+            snapshot.MarketStructureStatus,
+            snapshot.HasCompleteSessionData);
+        var orderedLevels = candidateSet.EligibleLevels;
         var currentPrice = snapshot.IsPriceDataValid && snapshot.ReferencePrice is > 0
             ? snapshot.ReferencePrice
             : null;
@@ -69,7 +94,7 @@ public sealed class MarketSituationEvaluator
 
         var status = currentPrice is null
             ? MarketSituationStatus.NotComputable
-            : orderedLevels.Length == 0
+            : orderedLevels.Count == 0
                 ? MarketSituationStatus.NoEligibleLevels
                 : MarketSituationStatus.Available;
         var unavailableReason = status switch
@@ -81,10 +106,20 @@ public sealed class MarketSituationEvaluator
             _ => null
         };
         var primary = ChoosePrimary(activeSupport, activeResistance);
+        var selectionEvidence = new List<MarketSituationSelectionEvidence>(2);
+        AddSelectionEvidence(selectionEvidence, supportLevel, currentPrice);
+        AddSelectionEvidence(selectionEvidence, resistanceLevel, currentPrice);
+        var compactSupport = activeSupport is null
+            ? null
+            : CompactMarketSituationInteraction.From(activeSupport);
+        var compactResistance = activeResistance is null
+            ? null
+            : CompactMarketSituationInteraction.From(activeResistance);
         var material = new
         {
             FeatureSnapshotId = snapshot.Id,
             PriorSessionContextId = priorContext?.Context.ContextId,
+            candidateSet.CandidateSetId,
             snapshot.Symbol,
             snapshot.SessionId,
             snapshot.AsOfUtc,
@@ -94,10 +129,13 @@ public sealed class MarketSituationEvaluator
             ContextMode = contextMode,
             NearestSupportLevel = supportLevel,
             NearestResistanceLevel = resistanceLevel,
-            SupportInteraction = activeSupport,
-            ResistanceInteraction = activeResistance,
+            SupportInteraction = compactSupport,
+            ResistanceInteraction = compactResistance,
             PrimarySituation = primary,
-            EligibleLevels = orderedLevels,
+            SelectionEvidence = selectionEvidence,
+            candidateSet.SupportCandidateCount,
+            candidateSet.ResistanceCandidateCount,
+            candidateSet.TotalCandidateCount,
             situationConfiguration.TestZonePercent,
             situationConfiguration.ApproachDistancePercent,
             DefinitionVersion,
@@ -106,11 +144,12 @@ public sealed class MarketSituationEvaluator
             snapshot.MarketData,
             snapshot.DataQuality,
             snapshot.MarketStructureStatus,
-            snapshot.HasCompleteSessionData
+            HasCompleteCurrentSessionData = snapshot.HasCompleteSessionData
         };
 
-        return new MarketSituationAssessment(
+        var assessment = new CompactMarketSituationAssessment(
             DeterministicId(JsonSerializer.Serialize(material, JsonOptions)),
+            candidateSet.CandidateSetId,
             snapshot.Id,
             priorContext?.Context.ContextId,
             snapshot.Symbol,
@@ -123,10 +162,13 @@ public sealed class MarketSituationEvaluator
             contextMode,
             supportLevel,
             resistanceLevel,
-            activeSupport,
-            activeResistance,
+            compactSupport,
+            compactResistance,
             primary,
-            orderedLevels,
+            selectionEvidence,
+            candidateSet.SupportCandidateCount,
+            candidateSet.ResistanceCandidateCount,
+            candidateSet.TotalCandidateCount,
             situationConfiguration.TestZonePercent,
             situationConfiguration.ApproachDistancePercent,
             DefinitionVersion,
@@ -136,6 +178,7 @@ public sealed class MarketSituationEvaluator
             snapshot.DataQuality,
             snapshot.MarketStructureStatus,
             snapshot.HasCompleteSessionData);
+        return new MarketSituationEvaluation(candidateSet, assessment);
     }
 
     private static void AddPriorSessionLevels(
@@ -482,19 +525,32 @@ public sealed class MarketSituationEvaluator
         MarketSituationInteraction interaction) =>
         new(side, interaction.SituationType, interaction.Level.Id, interaction.DistanceToActiveZone);
 
+    private static void AddSelectionEvidence(
+        ICollection<MarketSituationSelectionEvidence> evidence,
+        ImportantPriceLevel? selectedLevel,
+        decimal? referencePrice)
+    {
+        if (selectedLevel is null || referencePrice is null)
+        {
+            return;
+        }
+
+        evidence.Add(new MarketSituationSelectionEvidence(
+            selectedLevel.Role,
+            selectedLevel.Id,
+            Math.Abs(referencePrice.Value - selectedLevel.Price),
+            ImportantPriceLevelIdentity.SourcePrecedence(selectedLevel.Source),
+            "nearest-exact-distance;source-precedence;level-id;canonical-level"));
+    }
+
     private static bool IsPriorSessionLevel(ImportantPriceLevel level) =>
         level.Source is ImportantPriceLevelSource.PriorSwingHigh
             or ImportantPriceLevelSource.PriorSwingLow
             or ImportantPriceLevelSource.PriorSessionHigh
             or ImportantPriceLevelSource.PriorSessionLow;
 
-    private static int SourcePrecedence(ImportantPriceLevelSource source) => source switch
-    {
-        ImportantPriceLevelSource.PriorSwingHigh or ImportantPriceLevelSource.PriorSwingLow => 0,
-        ImportantPriceLevelSource.CurrentSwingHigh or ImportantPriceLevelSource.CurrentSwingLow => 1,
-        ImportantPriceLevelSource.PriorSessionHigh or ImportantPriceLevelSource.PriorSessionLow => 2,
-        _ => throw new ArgumentOutOfRangeException(nameof(source), source, "Unknown important price level source.")
-    };
+    private static int SourcePrecedence(ImportantPriceLevelSource source) =>
+        ImportantPriceLevelIdentity.SourcePrecedence(source);
 
     private static Guid CreateLevelId(
         string symbol,

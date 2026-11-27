@@ -1,7 +1,8 @@
 # Current Project Status
 
-**Current checkpoint:** Milestone A.2.6 - Structural Significance + Multi-Session Trend Context: IN PROGRESS
-**Updated:** 2026-11-26
+**Current checkpoint:** MarketSituation provenance + persistence corrective checkpoint: IN PROGRESS
+**A.2.6 Structural Significance + Multi-Session Trend Context:** IN PROGRESS / PAUSED FOR CORRECTIVE PERSISTENCE WORK
+**Updated:** 2026-11-27
 
 ## Milestones
 
@@ -14,6 +15,7 @@
 - **A.2.4b Structural Level Reaction Classification:** COMPLETE
 - **A.2.5 Live Prior-Session Historical Context:** COMPLETE
 - **A.2.6 Structural Significance + Multi-Session Trend Context:** IN PROGRESS
+- **MarketSituation provenance + persistence correction:** IN PROGRESS
 
 **A.2.4b internal batch status:**
 
@@ -32,16 +34,25 @@
 **A.2.6 internal batch status:**
 
 - **Batch 1 - Domain Contracts + Deterministic Structural Rules:** COMPLETE
-- **Batch 2 - Bounded Multi-Session Historical Reconstruction:** BLOCKED pending owner architectural direction
+- **Batch 2 - Bounded Multi-Session Historical Reconstruction:** PAUSED pending corrective checkpoint closeout
 - **Batch 3 - Production Pipeline + Immutable Persistence:** NOT STARTED; requires separate authorization
 - **Batch 4 - API + Blazor + Compatibility:** NOT STARTED
 - **Batch 5 - Final Validation + Documentation/Checkpoint Closeout:** NOT STARTED
 
-**Immediate next task:** Resolve the Batch 2 bounded-reduction/equivalence contract gap with the owner. Do not change `multi-session-structure-v1` or begin Batch 3 automatically.
+**Corrective internal batch status:**
+
+- **Correction Batch 1 - Domain/Evidence Contract Separation + Analytical Equivalence:** COMPLETE
+- **Correction Batch 2 - Normalized SQL Persistence + Migration:** NEXT / AUTHORIZED
+- **Correction Batch 3 - API/Blazor Read Models + Paged Forensics:** NOT STARTED
+- **Correction Batch 4 - Operational Hardening + Complete Closeout:** NOT STARTED
+
+**Immediate next task:** Correction Batch 2 - normalized SQL persistence and migration for shared candidate evidence plus compact assessments. Keep `market-situation-v1`, `market-reaction-v1`, and `scanner-config-v20` unchanged. Do not resume A.2.6 Batch 2.
 
 ## Current state
 
 The app defaults to the recorded fixture and supports optional read-only Alpaca and Massive market-data adapters. A.2.1 added versioned confirmed swing/structure values, A.2.2 immutable candidate TradePlans, and A.2.3a the separate `prior-session-context-v1` contract.
+
+The corrective checkpoint uses approved Option E / Versioned Hybrid: a complete canonical `MarketSituationCandidateSet` remains available during analysis, while `CompactMarketSituationAssessment` references a full SHA-256 candidate-set commitment and retains only selected level provenance, interactions, bounded selection evidence, and counts. The legacy `MarketSituationAssessment` shape remains intact for existing v1 SQL rows/API/reaction callers. This batch changes no SQL, API/Blazor production wiring, host behavior, analytical definition, reaction definition, or scanner configuration.
 
 A.2.3b adds the tracked-candidate and readiness layer. `tracked-opportunity-selection-v1` pins one immutable `PlanDefined` TradePlan per symbol/session when the opportunity direction agrees, publication is Active, required current data is valid, and risk/reward to Target 1 are positive; newer plans never move a tracked candidate's geometry. The PR #2 corrections advance readiness to `pre-trade-readiness-v2`, retaining the same states but checking current quote freshness, preserving terminal assessments/history, and reporting `CurrentSessionOnly` honestly because the approved rules do not consume prior-session levels. Available prior context alone no longer claims enhancement. Live startup and health ticks persist lifecycle reconciliation without new analyses; expiry uses the pinned validity boundary, session transitions require strictly later event-time observations, and late-session inputs remain isolated. EntryReady still combines only existing approved outputs; no indicator was added. `Scanner:PreTrade:ApproachDistanceRiskMultiple` remains the provisional, uncalibrated 1.0 development default; A.2.4a introduced `MarketSituation` thresholds in `scanner-config-v18`. A.2.4b added provisional reaction confirmation distance (0.10%) and unresolved episode duration (300 seconds). A.2.6 advances the shared material configuration to `scanner-config-v20` with separate provisional multi-session zone-merge and equality settings, without changing feature, Momentum, TradePlan, selection, readiness, situation, or reaction definition versions.
 
@@ -57,7 +68,7 @@ A.2.5 Batch 3 production-wires live Alpaca prior-session warm-up through the exi
 
 A.2.6 Batch 1 adds the offline, provider-independent `multi-session-structure-v1` vocabulary and deterministic evaluator. Complete-session extrema are categorical observations; confirmed pivots qualify only when a complete-link structural area recurs across at least two distinct complete sessions. Support and resistance zones preserve exact bounds and bounded provenance, use no transitive chaining, and report omissions. Three contiguous complete sessions alone determine `Bullish`, `Bearish`, `Range`, `Conflicting`, `Transitioning`, or `Insufficient` historical structure; incomplete or incompatible provenance cannot be skipped. Separate 0.10% zone-merge and equality defaults are PROVISIONAL / UNCALIBRATED. No role reversal, significance score, production pipeline/ScannerState integration, historical reconstruction, persistence, API, or Blazor behavior was added. See [ADR-012](./docs/adr/ADR-012-structural-significance-and-multi-session-trend.md).
 
-A.2.6 Batch 2's offline reconstruction path uses the existing calendar/history contracts, resolves exactly D-1/D-2/D-3, and processes one raw session at a time. However, its current summary carries every confirmed pivot up to a resource cap. The unchanged Batch 1 evaluator uses all qualifying pivots in zone identity and observation counts, so the required compact, analytically equivalent reduction has not been established. Batch 2 is BLOCKED from closeout pending owner architectural direction; do not alter `multi-session-structure-v1`. The exact-three rule remains, with no degraded two-session zones/trend, no gap bridging, and no older-session substitution. Raw history is not retained. No SQL, ScannerPipeline/ScannerState, MarketSituation/MarketReaction, setup, TradePlan, readiness, API, or Blazor integration was added. Batch 3 remains NOT STARTED and requires separate authorization. See [ADR-012](./docs/adr/ADR-012-structural-significance-and-multi-session-trend.md).
+A.2.6 Batch 2's offline reconstruction path uses the existing calendar/history contracts, resolves exactly D-1/D-2/D-3, and processes one raw session at a time. However, its current summary carries every confirmed pivot up to a resource cap. The unchanged Batch 1 evaluator uses all qualifying pivots in zone identity and observation counts, so the required compact, analytically equivalent reduction has not been established. Batch 2 is PAUSED during the separately authorized MarketSituation corrective checkpoint; do not alter `multi-session-structure-v1`. The exact-three rule remains, with no degraded two-session zones/trend, no gap bridging, and no older-session substitution. Raw history is not retained. No SQL, ScannerPipeline/ScannerState, MarketSituation/MarketReaction, setup, TradePlan, readiness, API, or Blazor integration was added. Batch 3 remains NOT STARTED and requires separate authorization. See [ADR-012](./docs/adr/ADR-012-structural-significance-and-multi-session-trend.md).
 
 Tracked associations/lifecycle and immutable readiness assessments persist to SQL Server via the hand-written idempotent migration `20261101120000_AddTrackedOpportunityReadiness` (`tracked_opportunity`, `pre_trade_readiness_assessment`); only documented lifecycle fields may change, terminal candidates are never replaced in place, and active candidates are restored on restart and reevaluated from current trustworthy market state. Feed/data-health problems suspend readiness in the in-memory `ScannerState` projection without terminating or mutating the tracked plan; recovery reevaluates the same `PlanId`. See [ADR-008](./docs/adr/ADR-008-tracked-opportunity-readiness.md). The dashboard adds a PRE-TRADE READINESS section with plain-language states ("Candidate entry conditions are aligned." for Entry Ready) and the opportunity API responses expose the tracked identity, readiness state/reason, context mode, entry zone, distances, invalidation, Target 1, and reward/risk. The recorded fixture yields no confirmed structure, so it produces no tracked candidates and readiness honestly reports no tracked candidate.
 
@@ -65,7 +76,9 @@ The scanner does not know the user's actual holdings; readiness states describe 
 
 ## Latest validation
 
-**A.2.6 Batch 2 implementation validation: PARTIAL (offline).** Focused exact-three-session reconstruction tests passed **30/30**; full offline units passed **528/528**; hosted structure/API/Blazor regressions passed **19/19**; and the solution build succeeded with **0 warnings/errors**. These results validate the current implementation but do not satisfy the required compact, analytically equivalent pivot reduction: the current summary retains all confirmed pivots up to its resource cap, while Batch 1 zone identity/counts depend on every qualifying observation. No live provider, SQL test, schema, or migration was used. Batch 2 remains BLOCKED pending owner architectural direction; the exact-three Batch 1/ADR-012 contract is unchanged. Batch 3 is NOT STARTED and requires separate authorization.
+**MarketSituation provenance + persistence Correction Batch 1: COMPLETE (offline).** Focused candidate-set/compact/equivalence/identity/replay/reaction-pin coverage passed **24/24**, including a synthetic **100,005-candidate** universe with a **2,600-byte** compact assessment. A small simultaneous-interaction assessment serialized to **3,992 bytes**. Candidate IDs are full SHA-256 values, losing candidates are absent from compact JSON, legacy v1 round-trip remains passing, and MarketSituation/MarketReaction selected evidence is equivalent. Broader analytical and pipeline regressions passed **294/294**, the full offline unit suite passed **534/534**, hosted offline structure/API/Blazor regressions passed **19/19**, and the solution build succeeded with **0 warnings/errors**. No live provider, SQL test, schema, migration, production API/Blazor change, or host/launcher change was used. The overall corrective checkpoint remains IN PROGRESS; Correction Batch 2 is next and A.2.6 Batch 2 remains PAUSED.
+
+**A.2.6 Batch 2 implementation validation: PARTIAL (offline).** Focused exact-three-session reconstruction tests passed **30/30**; full offline units passed **528/528**; hosted structure/API/Blazor regressions passed **19/19**; and the solution build succeeded with **0 warnings/errors**. These results validate the current implementation but do not satisfy the required compact, analytically equivalent pivot reduction: the current summary retains all confirmed pivots up to its resource cap, while Batch 1 zone identity/counts depend on every qualifying observation. No live provider, SQL test, schema, or migration was used. Batch 2 is now PAUSED during the approved corrective MarketSituation checkpoint; the exact-three Batch 1/ADR-012 contract is unchanged. Batch 3 is NOT STARTED and requires separate authorization.
 
 **A.2.6 Batch 1 validation: COMPLETE (offline).** Focused observation/distance/clustering/recurrence/extrema/trend/event-time/completeness/identity/bounded-projection tests passed **46/46**. Full offline units passed **498/498**, hosted shared-configuration regressions passed **19/19**, and the solution build succeeded with **0 warnings/errors**. No live provider call, SQL test, schema, or migration was used because Batch 1 is provider independent, disconnected from ScannerPipeline, and persistence-free.
 
@@ -107,8 +120,8 @@ The approved implementation is divided into four batches, all COMPLETE: **Batch 
 
 **A.2.5 Batches 1-4: COMPLETE.** Historical contracts and bounded Alpaca SIP infrastructure are implemented, approved results reconstruct into the existing prior-context contract, and production live Alpaca warm-up is integrated before first eligible symbol/session analysis. Final offline, hosted, and guarded provider evidence is recorded above.
 
-**Immediate next task:** No implementation checkpoint is underway. The next checkpoint REQUIRES DESIGN / APPROVAL.
+**Immediate next task:** Correction Batch 2 - normalized SQL persistence + migration. No A.2.6 Batch 2 work resumes in this checkpoint.
 
-**Current blockers:** None. Multi-session/week trend scoring, zone strength, outcome tracking, backtesting, ML, new setup detectors, historical SQL persistence, and live-gap recovery remain outside scope and require approval before implementation.
+**Current blockers:** Correction Batch 2 requires its implementation before the overall corrective checkpoint can close. A.2.6 Batch 2 remains paused, and multi-session/week trend scoring, zone strength, outcome tracking, backtesting, ML, new setup detectors, raw historical SQL persistence, and live-gap recovery remain outside scope.
 
 Live-gap recovery, outcome tracking, backtesting, ML/ONNX inference, broker integration, and order execution remain outside approved scope. See the [product roadmap](./PRODUCT_ROADMAP.md) for durable direction and boundaries.

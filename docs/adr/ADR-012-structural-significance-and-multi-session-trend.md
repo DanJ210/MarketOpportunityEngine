@@ -1,7 +1,7 @@
 # ADR-012: Structural significance and multi-session trend context
 
 - **Status:** Accepted
-- **Decision:** Add bounded, provider-independent `multi-session-structure-v1` contracts and deterministic offline analysis. A.2.6 remains IN PROGRESS; Batch 1 is COMPLETE. The Batch 2 reconstruction path is implemented, but closeout is BLOCKED pending resolution of the bounded-reduction/equivalence contract gap. Production pipeline/persistence, API, and UI work has not started and requires separate authorization.
+- **Decision:** Add bounded, provider-independent `multi-session-structure-v1` contracts and deterministic offline analysis. A.2.6 remains IN PROGRESS / PAUSED; Batch 1 is COMPLETE. The Batch 2 reconstruction path is implemented, but it remains PAUSED while the separate MarketSituation persistence correction proceeds. Its bounded-reduction/equivalence gap is unresolved. Production pipeline/persistence, API, and UI work has not started and requires separate authorization.
 
 ## Context
 
@@ -25,7 +25,7 @@ Single-session swing observations and immediately preceding session context desc
 
 - Batch 1 remains offline and provider independent and can be tested without ScannerPipeline registration.
 - `scanner-config-v20` carries the material A.2.6 settings while existing feature, swing, setup, TradePlan, readiness, situation, and reaction definition versions remain unchanged.
-- The Batch 2 implementation resolves the exact three-session horizon through existing calendar/history contracts and processes each historical response sequentially; peak raw historical sessions retained is at most one, and raw history is not persisted. Its current summary retains every confirmed pivot up to a resource cap. Because the unchanged evaluator's zone identity and observation counts depend on all qualifying pivots, compact lossless reduction and analytical equivalence have not been established. Do not change v1 to resolve this; Batch 2 remains blocked pending owner architectural direction. Batch 2 does not wire the assessment into production scanning. Later batches must not invent continuity by skipping sessions or infer official closes from last eligible trades.
+- The Batch 2 implementation resolves the exact three-session horizon through existing calendar/history contracts and processes each historical response sequentially; peak raw historical sessions retained is at most one, and raw history is not persisted. Its current summary retains every confirmed pivot up to a resource cap. Because the unchanged evaluator's zone identity and observation counts depend on all qualifying pivots, compact lossless reduction and analytical equivalence have not been established. Do not change v1 to resolve this; Batch 2 remains paused while the separate corrective checkpoint proceeds. Batch 2 does not wire the assessment into production scanning. Later batches must not invent continuity by skipping sessions or infer official closes from last eligible trades.
 - Threshold outcome research may refine defaults only through new material configuration/version decisions.
 
 See [ADR-007](./ADR-007-prior-session-context.md), [ADR-009](./ADR-009-market-situation-level-interaction.md), [ADR-010](./ADR-010-market-reaction-confirmation.md), [ADR-011](./ADR-011-live-prior-session-historical-source.md), and the [product roadmap](../../PRODUCT_ROADMAP.md#a26-structural-significance-and-multi-session-trend-context).

@@ -2,6 +2,15 @@
 
 This document records concise final evidence for completed milestone-level capabilities. It is not a chronological log. Detailed attempts, failures, troubleshooting, SQL/browser provenance, and superseded checkpoints remain in [docs/archive/VALIDATION_HISTORY.md](./docs/archive/VALIDATION_HISTORY.md). Current status and blockers remain authoritative in [PROJECT_STATUS.md](./PROJECT_STATUS.md).
 
+## MarketSituation Provenance + Persistence Correction
+
+- **Status:** Correction Batch 1 COMPLETE; overall corrective checkpoint IN PROGRESS. Normalized SQL persistence is not implemented.
+- **Capability validated:** Complete canonical candidate evidence is separated from a compact `market-situation-persistence-v2` selected result. The full SHA-256 `CandidateSetId` is order independent and content sensitive; compact output retains bounded selected provenance and reaction-equivalent interaction geometry; legacy v1 serialization remains readable.
+- **Focused evidence:** Candidate/compact/identity/equivalence/collision/reaction compatibility tests passed **24/24**. The synthetic **100,005-candidate** case completed with a **2,600-byte** compact assessment; the simultaneous support/resistance case measured **3,992 bytes**. Broader analytical and pipeline regressions passed **294/294**; full offline units passed **534/534**; hosted offline API/Blazor regressions passed **19/19**; build passed with **0 warnings/errors**.
+- **Boundary:** No candidate truncation, raw historical persistence, SQL/schema/migration/store change, production API/Blazor change, host/launcher change, live-provider call, A.2.6 implementation change, or analytical/reaction/configuration version change was introduced. Persistence failure remains operationally separate from analytical completeness.
+- **Initial pending-owner operational recommendations:** 16 KiB compact persisted assessment, 32 KiB normal compact read model, and 64 KiB forensic candidate-evidence page; explicit reject/page behavior, never silent truncation.
+- Durable decision: [ADR-013](./docs/adr/ADR-013-versioned-hybrid-market-situation-evidence.md). Detailed chronology: [archived Batch 1 evidence](./docs/archive/VALIDATION_HISTORY.md#marketsituation-provenance--persistence-correction-batch-1-2026-11-27).
+
 ## A.1 Live Scanner Validation
 
 - **Status:** COMPLETE.

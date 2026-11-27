@@ -8,6 +8,18 @@
 
 Do not use this archive as routine coding-agent context. Use it when historical validation, a previous failure, an old live-provider run, SQL provenance, browser evidence, or a historical contradiction must be investigated.
 
+## MarketSituation provenance + persistence Correction Batch 1 (2026-11-27)
+
+**Status: Correction Batch 1 COMPLETE; overall corrective checkpoint IN PROGRESS. Correction Batch 2 NEXT / AUTHORIZED. A.2.6 Batch 2 remains PAUSED.**
+
+Approved Option E / Versioned Hybrid was implemented at the domain/application boundary. `MarketSituationCandidateSet` owns the complete canonical candidate universe; its full 64-character SHA-256 identity commits to canonical candidate order, every level, exact provenance, and material feature/context/configuration identities. `CompactMarketSituationAssessment` references that identity and retains candidate counts, bounded selection evidence, selected levels, compact interaction geometry, exact result/version/quality/completeness evidence, and a deterministic assessment identity. The legacy `MarketSituationAssessment` shape, existing v1 SQL serialization path, API/read projection, and MarketReaction callers remain intact.
+
+Focused tests passed **24/24**, covering small-set separation, compact serialization without `EligibleLevels`, deterministic order/identity, duplicate/add/remove/price/role/provenance changes, operational evaluation-time exclusion, conflicting candidate/assessment content rejection, selected-result identity, LevelId tie-break, current/prior behavior, simultaneous interactions, legacy projection, and MarketReaction pin equivalence. A synthetic **100,005-candidate** evaluation completed without truncation. Its compact assessment serialized to **2,600 bytes** and matched replay identity; a small simultaneous support/resistance assessment serialized to **3,992 bytes**. Broader MarketSituation/MarketReaction/PriorSessionContext/A.2.5/A.2.6/Momentum/TradePlan/readiness/pipeline/publication regressions passed **294/294**.
+
+The full offline unit suite passed **534/534**. Hosted offline API/Blazor structure regressions passed **19/19**. The solution build passed with **0 warnings/errors**. No SQL test, schema, migration, store behavior, database mutation, live provider, production API/Blazor wiring, host/launcher change, or A.2.6 implementation change was used. `market-situation-v1`, `market-reaction-v1`, and `scanner-config-v20` are unchanged; raw historical trades remain unpersisted.
+
+Initial owner-review operational budget recommendations are **16 KiB** for compact persisted assessments, **32 KiB** for normal compact read models, and **64 KiB** for each forensic candidate-evidence page. These are not analytical thresholds or immutable constants. Overflow must be explicit; there is no silent truncation. Durable decision evidence is in [ADR-013](../adr/ADR-013-versioned-hybrid-market-situation-evidence.md). The live persistence incident is not claimed fixed until Correction Batch 2 completes.
+
 ## A.2.6 Batch 2 acceptance review correction (2026-11-27)
 
 **Status: Batch 2 BLOCKED from closeout pending owner architectural direction.** This note supplements, and does not rewrite, the earlier Batch 2 validation record.
