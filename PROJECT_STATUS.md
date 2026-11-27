@@ -1,6 +1,6 @@
 # Current Project Status
 
-**Current checkpoint:** Milestone A.2.5 - Live Prior-Session Historical Context: COMPLETE
+**Current checkpoint:** Milestone A.2.6 - Structural Significance + Multi-Session Trend Context: IN PROGRESS
 **Updated:** 2026-11-26
 
 ## Milestones
@@ -13,6 +13,7 @@
 - **A.2.4a Structural Level Interaction:** COMPLETE
 - **A.2.4b Structural Level Reaction Classification:** COMPLETE
 - **A.2.5 Live Prior-Session Historical Context:** COMPLETE
+- **A.2.6 Structural Significance + Multi-Session Trend Context:** IN PROGRESS
 
 **A.2.4b internal batch status:**
 
@@ -28,13 +29,21 @@
 - **Batch 3 - Live Startup Warm-up + Production MarketSituation Integration:** COMPLETE
 - **Batch 4 - Final Guarded Validation + Documentation/Checkpoint Closeout:** COMPLETE
 
-**Immediate next task:** No implementation checkpoint is underway. The next checkpoint REQUIRES DESIGN / APPROVAL.
+**A.2.6 internal batch status:**
+
+- **Batch 1 - Domain Contracts + Deterministic Structural Rules:** COMPLETE
+- **Batch 2 - Bounded Multi-Session Historical Reconstruction:** NEXT / AUTHORIZED
+- **Batch 3 - Production Pipeline + Immutable Persistence:** NOT STARTED
+- **Batch 4 - API + Blazor + Compatibility:** NOT STARTED
+- **Batch 5 - Final Validation + Documentation/Checkpoint Closeout:** NOT STARTED
+
+**Immediate next task:** A.2.6 Batch 2 - Bounded Multi-Session Historical Reconstruction.
 
 ## Current state
 
 The app defaults to the recorded fixture and supports optional read-only Alpaca and Massive market-data adapters. A.2.1 added versioned confirmed swing/structure values, A.2.2 immutable candidate TradePlans, and A.2.3a the separate `prior-session-context-v1` contract.
 
-A.2.3b adds the tracked-candidate and readiness layer. `tracked-opportunity-selection-v1` pins one immutable `PlanDefined` TradePlan per symbol/session when the opportunity direction agrees, publication is Active, required current data is valid, and risk/reward to Target 1 are positive; newer plans never move a tracked candidate's geometry. The PR #2 corrections advance readiness to `pre-trade-readiness-v2`, retaining the same states but checking current quote freshness, preserving terminal assessments/history, and reporting `CurrentSessionOnly` honestly because the approved rules do not consume prior-session levels. Available prior context alone no longer claims enhancement. Live startup and health ticks persist lifecycle reconciliation without new analyses; expiry uses the pinned validity boundary, session transitions require strictly later event-time observations, and late-session inputs remain isolated. EntryReady still combines only existing approved outputs; no indicator was added. `Scanner:PreTrade:ApproachDistanceRiskMultiple` remains the provisional, uncalibrated 1.0 development default; A.2.4a introduced `MarketSituation` thresholds in `scanner-config-v18`. A.2.4b Batch 1 advances the current configuration to `scanner-config-v19` with provisional reaction confirmation distance (0.10%) and unresolved episode duration (300 seconds). Feature, Momentum, TradePlan, selection, and prior-context definition versions remain unchanged.
+A.2.3b adds the tracked-candidate and readiness layer. `tracked-opportunity-selection-v1` pins one immutable `PlanDefined` TradePlan per symbol/session when the opportunity direction agrees, publication is Active, required current data is valid, and risk/reward to Target 1 are positive; newer plans never move a tracked candidate's geometry. The PR #2 corrections advance readiness to `pre-trade-readiness-v2`, retaining the same states but checking current quote freshness, preserving terminal assessments/history, and reporting `CurrentSessionOnly` honestly because the approved rules do not consume prior-session levels. Available prior context alone no longer claims enhancement. Live startup and health ticks persist lifecycle reconciliation without new analyses; expiry uses the pinned validity boundary, session transitions require strictly later event-time observations, and late-session inputs remain isolated. EntryReady still combines only existing approved outputs; no indicator was added. `Scanner:PreTrade:ApproachDistanceRiskMultiple` remains the provisional, uncalibrated 1.0 development default; A.2.4a introduced `MarketSituation` thresholds in `scanner-config-v18`. A.2.4b added provisional reaction confirmation distance (0.10%) and unresolved episode duration (300 seconds). A.2.6 advances the shared material configuration to `scanner-config-v20` with separate provisional multi-session zone-merge and equality settings, without changing feature, Momentum, TradePlan, selection, readiness, situation, or reaction definition versions.
 
 A.2.4a adds `market-situation-v1`, a deterministic descriptive assessment of independently selected support and resistance interactions. Eligible current swings require complete current-session structure/data; prior swings and extrema require complete, usable, gap-free prior context and full coverage. Both interactions can be exposed at once, with deterministic primary selection and provenance. The provisional defaults are a 0.10% test-zone half-width and 0.25% approach/crossed relevance from the zone edge; they are not market calibrated. The API and dashboard expose the assessment, and immutable history persists through `20261105120000_AddMarketSituationHistory`. This layer does not classify reactions or alter opportunity, TradePlan, publication, tracking, or readiness. See [ADR-009](./docs/adr/ADR-009-market-situation-level-interaction.md).
 
@@ -46,11 +55,15 @@ A.2.5 Batch 2 adds `PriorSessionHistoricalReconstructor` for approved offline hi
 
 A.2.5 Batch 3 production-wires live Alpaca prior-session warm-up through the existing provider-independent calendar/history contracts and Batch 2 reconstructor. A first live event starts one bounded single-flight task for its exact provider/feed/symbol/session/version scope; the scanner waits for that scope's terminal outcome before its first eligible analysis while unrelated scopes continue. Exhausted explicit-SIP pagination for the exact inclusive regular-session request supplies declared coverage, and only the reconstructor can promote it to `Available`. Complete context is frozen and may participate in MarketSituation; every terminal partial/failure outcome falls back to `CurrentSessionOnly` without changing feed health. Obsolete sessions are cancelled when safe and late outcomes cannot replace the active session projection. Historical raw trades are neither persisted nor retained after reconstruction. The API and Blazor expose warm-up status, resolved session/provenance, and honest fallback; MarketReaction episodes retain the level source plus historical provider/feed provenance. Fixture mode remains offline and partial, Massive has no historical warm-up, and setup/TradePlan/readiness versions and behavior remain unchanged.
 
+A.2.6 Batch 1 adds the offline, provider-independent `multi-session-structure-v1` vocabulary and deterministic evaluator. Complete-session extrema are categorical observations; confirmed pivots qualify only when a complete-link structural area recurs across at least two distinct complete sessions. Support and resistance zones preserve exact bounds and bounded provenance, use no transitive chaining, and report omissions. Three contiguous complete sessions alone determine `Bullish`, `Bearish`, `Range`, `Conflicting`, `Transitioning`, or `Insufficient` historical structure; incomplete or incompatible provenance cannot be skipped. Separate 0.10% zone-merge and equality defaults are PROVISIONAL / UNCALIBRATED. No role reversal, significance score, production pipeline/ScannerState integration, historical reconstruction, persistence, API, or Blazor behavior was added. See [ADR-012](./docs/adr/ADR-012-structural-significance-and-multi-session-trend.md).
+
 Tracked associations/lifecycle and immutable readiness assessments persist to SQL Server via the hand-written idempotent migration `20261101120000_AddTrackedOpportunityReadiness` (`tracked_opportunity`, `pre_trade_readiness_assessment`); only documented lifecycle fields may change, terminal candidates are never replaced in place, and active candidates are restored on restart and reevaluated from current trustworthy market state. Feed/data-health problems suspend readiness in the in-memory `ScannerState` projection without terminating or mutating the tracked plan; recovery reevaluates the same `PlanId`. See [ADR-008](./docs/adr/ADR-008-tracked-opportunity-readiness.md). The dashboard adds a PRE-TRADE READINESS section with plain-language states ("Candidate entry conditions are aligned." for Entry Ready) and the opportunity API responses expose the tracked identity, readiness state/reason, context mode, entry zone, distances, invalidation, Target 1, and reward/risk. The recorded fixture yields no confirmed structure, so it produces no tracked candidates and readiness honestly reports no tracked candidate.
 
 The scanner does not know the user's actual holdings; readiness states describe market conditions, not positions, and Entry Ready is not an instruction to trade. Position-management states such as `MANAGE`, `TAKE PROFIT`, and `EXIT` require a `PositionContext`, which is not implemented. Reward/risk is descriptive; no minimum reward/risk veto has been approved or implemented.
 
 ## Latest validation
+
+**A.2.6 Batch 1 validation: COMPLETE (offline).** Focused observation/distance/clustering/recurrence/extrema/trend/event-time/completeness/identity/bounded-projection tests passed **46/46**. Full offline units passed **498/498**, hosted shared-configuration regressions passed **19/19**, and the solution build succeeded with **0 warnings/errors**. No live provider call, SQL test, schema, or migration was used because Batch 1 is provider independent, disconnected from ScannerPipeline, and persistence-free. Overall A.2.6 remains IN PROGRESS; Batch 2 is next/authorized.
 
 **A.2.5 Batch 4 final closeout: COMPLETE (2026-11-26).** The final production infrastructure audit found and corrected same-scope waiter cancellation so one caller no longer cancels shared warm-up work; obsolete explicit scopes are still cancelled safely. Focused Alpaca historical/reconstruction coverage passed **12/12** and **22/22**, warm-up/single-flight **13/13**, MarketSituation **18/18**, MarketReaction evaluator/tracker **19/19**, readiness **71/71**, pipeline/publication **31/31**, TradePlan/Momentum **39/39**, and fixture/replay **149/149**. Full units passed **452/452**, hosted non-SQL integrations **31/31**, launcher interception **18/18**, and the solution build had **0 warnings/errors**. SQL was not required or rerun because A.2.5 changed no SQL model, migration, store, or persistence behavior.
 

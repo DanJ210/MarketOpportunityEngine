@@ -115,7 +115,7 @@ public sealed class StructureWebApplicationTests
         using (var json = JsonDocument.Parse(await configurationResponse.Content.ReadAsStringAsync(timeout.Token)))
         {
             Assert.Equal(HttpStatusCode.OK, configurationResponse.StatusCode);
-            Assert.Equal("scanner-config-v19", json.RootElement.GetProperty("version").GetString());
+            Assert.Equal("scanner-config-v20", json.RootElement.GetProperty("version").GetString());
             var marketSituation = json.RootElement.GetProperty("marketSituation");
             Assert.Equal(0.1m, marketSituation.GetProperty("testZonePercent").GetDecimal());
             Assert.Equal(0.25m, marketSituation.GetProperty("approachDistancePercent").GetDecimal());

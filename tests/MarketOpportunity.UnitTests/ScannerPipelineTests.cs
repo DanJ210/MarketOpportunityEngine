@@ -537,7 +537,7 @@ public sealed class ScannerPipelineTests
                     priorSessionId: null,
                     PriorSessionContextBuilder.DefinitionVersion,
                     "features-v16",
-                    "scanner-config-v19"),
+                    "scanner-config-v20"),
                 PriorSessionWarmupStatus.Unavailable,
                 context.CompletenessReason,
                 ContextCompleteness: context.Completeness));

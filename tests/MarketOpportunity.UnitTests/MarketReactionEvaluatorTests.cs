@@ -16,7 +16,7 @@ public sealed class MarketReactionEvaluatorTests
     {
         _configuration.Validate();
 
-        Assert.Equal("scanner-config-v19", _configuration.Version);
+        Assert.Equal("scanner-config-v20", _configuration.Version);
         Assert.Equal(0.10m, _configuration.MarketReaction.ConfirmationDistancePercent);
         Assert.Equal(300, _configuration.MarketReaction.MaxEpisodeDurationSeconds);
         Assert.Equal(

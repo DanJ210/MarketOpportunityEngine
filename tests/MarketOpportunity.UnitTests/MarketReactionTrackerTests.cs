@@ -201,7 +201,7 @@ public sealed class MarketReactionTrackerTests
             0.25m,
             "market-situation-v1",
             "features-v16",
-            "scanner-config-v19",
+            "scanner-config-v20",
             new MarketDataCapabilities("UnitTest", "Recorded", MarketDataCoverage.Synthetic, false, true, true),
             DataQualityStatus.Good,
             MarketStructureStatus.Available,

@@ -316,7 +316,7 @@ public sealed record Opportunity(
 
 public sealed record ScannerConfiguration
 {
-    public string Version { get; init; } = "scanner-config-v19";
+    public string Version { get; init; } = "scanner-config-v20";
     public string FeatureSetVersion { get; init; } = "features-v16";
     public string SetupDefinitionVersion { get; init; } = "momentum-continuation-v1";
     public int MaximumStateEvents { get; init; } = 10_000;
@@ -341,6 +341,7 @@ public sealed record ScannerConfiguration
     public PreTradeReadinessConfiguration PreTrade { get; init; } = new();
     public MarketSituationConfiguration MarketSituation { get; init; } = new();
     public MarketReactionConfiguration MarketReaction { get; init; } = new();
+    public MultiSessionStructureConfiguration MultiSessionStructure { get; init; } = new();
 
     public void Validate()
     {
@@ -369,6 +370,23 @@ public sealed record ScannerConfiguration
         {
             throw new InvalidOperationException(
                 $"Scanner configuration '{Version}' requires MarketReaction:ConfirmationDistancePercent to be between 0 and 100 and MarketReaction:MaxEpisodeDurationSeconds to be positive.");
+        }
+
+        if (MultiSessionStructure is null
+            || MultiSessionStructure.HistoricalSessionCount != 3
+            || MultiSessionStructure.MinimumDistinctSessionsForRecurringZone < 2
+            || MultiSessionStructure.MinimumDistinctSessionsForRecurringZone
+                > MultiSessionStructure.HistoricalSessionCount
+            || MultiSessionStructure.ZoneMergeDistancePercent <= 0
+            || MultiSessionStructure.ZoneMergeDistancePercent >= 100
+            || MultiSessionStructure.StructuralEqualityTolerancePercent < 0
+            || MultiSessionStructure.StructuralEqualityTolerancePercent >= 100
+            || MultiSessionStructure.MaximumProjectedSupportZones < 1
+            || MultiSessionStructure.MaximumProjectedResistanceZones < 1
+            || MultiSessionStructure.MaximumRepresentativesPerSessionPerZone < 1)
+        {
+            throw new InvalidOperationException(
+                $"Scanner configuration '{Version}' has invalid MultiSessionStructure bounds or thresholds.");
         }
 
         if (MaximumStateEvents < 1

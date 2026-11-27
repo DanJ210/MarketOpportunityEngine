@@ -8,6 +8,16 @@
 
 Do not use this archive as routine coding-agent context. Use it when historical validation, a previous failure, an old live-provider run, SQL provenance, browser evidence, or a historical contradiction must be investigated.
 
+## A.2.6 Batch 1 - Domain Contracts + Deterministic Structural Rules (2026-11-26)
+
+**Status: Batch 1 COMPLETE; overall A.2.6 IN PROGRESS.**
+
+The provider-independent `multi-session-structure-v1` evaluator was validated offline with **46/46** focused tests covering decimal percentage distance, inclusive thresholds, invalid prices, deterministic ordering, complete-link bounded span, no transitive chaining, support/resistance isolation, complete-session extrema, distinct-session recurrence, completeness/provenance, all trend states, equality boundaries, future-data exclusion, event-time evidence, bounded representatives/projection, omission accounting, presentation-neutral identity, and deterministic replay/identity.
+
+The full offline unit suite passed **498/498**. Hosted offline shared-configuration regressions for `StructureWebApplicationTests` passed **19/19**. The solution build passed with **0 warnings/errors**. No live provider call, SQL test, SQL schema, migration, ScannerPipeline integration, persistence, API, or Blazor change was included.
+
+The accepted boundary is recorded in [ADR-012](../adr/ADR-012-structural-significance-and-multi-session-trend.md). Batch 2, bounded multi-session historical reconstruction, is next/authorized; Batches 3-5 remain not started.
+
 ## Final same-page browser observation (2026-10-30)
 
 **Browser criterion: PASS. Milestone A.1 - Live Scanner Validation: COMPLETE.** This closes only the outstanding browser-observability criterion; the prior ingestion/SQL/shutdown closeout below remains separate evidence.

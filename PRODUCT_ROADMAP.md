@@ -247,6 +247,14 @@ Bounded pagination must exhaust normally before transport completion, but pagina
 
 Live warm-up is terminal-before-first-eligible-analysis for each exact provider/feed/symbol/session scope, uses bounded single-flight coordination, freezes its result, and falls back explicitly to `CurrentSessionOnly` on terminal failure. A historical failure is not a live-feed failure and does not block unrelated symbols. Downloaded historical trades are not persisted or retained after reconstruction. Fixture remains the offline default, and Massive has no equivalent warm-up. See [ADR-011](./docs/adr/ADR-011-live-prior-session-historical-source.md) and [VALIDATION_SUMMARY.md](./VALIDATION_SUMMARY.md#a25-live-prior-session-historical-context).
 
+### A.2.6 Structural Significance and Multi-Session Trend Context
+
+Approved Option B adds bounded, deterministic, explainable structural zones and multi-session high/low trend context from complete historical sessions. The v1 horizon is exactly three immediately preceding complete, calendar-resolved regular sessions. Complete-session extrema are categorical structural evidence; mechanically confirmed pivots must recur across at least two distinct complete sessions. Support and resistance use exact-price complete-link percentage clustering with bounded span, no transitive chaining, stable identities, bounded representatives, and explicit omissions. Roles do not reverse.
+
+Batch 1 is offline and complete: `multi-session-structure-v1` domain contracts and pure rules define significance, completeness, deterministic zones, and `Bullish`, `Bearish`, `Range`, `Conflicting`, `Transitioning`, and `Insufficient` structural trend states. Separate zone-merge and high/low equality settings currently use PROVISIONAL / UNCALIBRATED 0.10% development defaults. There is no significance score, outcome claim, trading instruction, production pipeline integration, persistence, API, or UI.
+
+Batch 2 is next and must reconstruct the bounded multi-session history. Batches 3-5 are not started and will separately authorize production immutable persistence, API/UI compatibility, and final closeout. See [ADR-012](./docs/adr/ADR-012-structural-significance-and-multi-session-trend.md).
+
 ## 4.8 Volatility and risk
 
 Inputs:
