@@ -1,3 +1,5 @@
+using System.Text.Json;
+using MarketOpportunity.Domain;
 using MarketOpportunity.Infrastructure;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -13,6 +15,8 @@ public sealed class ExplicitSessionMigrationTests
     private const string MarketSituationMigrationId = "20261105120000_AddMarketSituationHistory";
     private const string MarketReactionMigrationId = "20261106120000_AddLevelInteractionReactionPersistence";
     private const string MarketReactionResearchContextMigrationId = "20261106150000_AddMarketReactionResearchContext";
+    private const string NormalizedMarketSituationMigrationId =
+        "20261127170000_AddNormalizedMarketSituationPersistence";
 
     [Fact]
     public async Task Clean_schema_accepts_explicit_session_migration()
@@ -32,16 +36,25 @@ public sealed class ExplicitSessionMigrationTests
                 Assert.Contains(MarketSituationMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(MarketReactionMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(MarketReactionResearchContextMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(
+                    NormalizedMarketSituationMigrationId,
+                    await context.Database.GetAppliedMigrationsAsync());
                 await context.Database.MigrateAsync();
             }
 
             await RemoveMigrationHistoryEntryAsync(database.ConnectionString, MarketReactionResearchContextMigrationId);
             await RemoveMigrationHistoryEntryAsync(database.ConnectionString, MarketReactionMigrationId);
+            await RemoveMigrationHistoryEntryAsync(
+                database.ConnectionString,
+                NormalizedMarketSituationMigrationId);
             await using (var context = CreateContext(database.ConnectionString))
             {
                 await context.Database.MigrateAsync();
                 Assert.Contains(MarketReactionMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(MarketReactionResearchContextMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(
+                    NormalizedMarketSituationMigrationId,
+                    await context.Database.GetAppliedMigrationsAsync());
             }
 
             await AssertSessionColumnsAndIndexesAsync(database.ConnectionString);
@@ -70,6 +83,36 @@ public sealed class ExplicitSessionMigrationTests
         var validUntil = featureTime.AddMinutes(5);
         const string symbol = "LEGACY";
         const string snapshotJson = """{"featureSetVersion":"features-v1","value":42}""";
+        var legacyAssessment = new MarketSituationAssessment(
+            Guid.NewGuid(),
+            featureId,
+            null,
+            symbol,
+            "legacy-unknown",
+            featureTime,
+            featureTime.AddSeconds(1),
+            123.45m,
+            MarketSituationStatus.NoEligibleLevels,
+            "No eligible levels in the legacy fixture.",
+            MarketSituationContextMode.CurrentSessionOnly,
+            null,
+            null,
+            null,
+            null,
+            null,
+            [],
+            0.10m,
+            0.25m,
+            "market-situation-v1",
+            "features-v1",
+            "config-v1",
+            MarketDataCapabilities.Unknown,
+            DataQualityStatus.Good,
+            MarketStructureStatus.Insufficient,
+            false);
+        var legacyAssessmentJson = JsonSerializer.Serialize(
+            legacyAssessment,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
         try
         {
@@ -83,7 +126,9 @@ public sealed class ExplicitSessionMigrationTests
                 featureTime,
                 validUntil,
                 symbol,
-                snapshotJson);
+                snapshotJson,
+                legacyAssessment,
+                legacyAssessmentJson);
 
             await using (var context = CreateContext(database.ConnectionString))
             {
@@ -96,6 +141,9 @@ public sealed class ExplicitSessionMigrationTests
                 Assert.Contains(MarketSituationMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(MarketReactionMigrationId, await context.Database.GetAppliedMigrationsAsync());
                 Assert.Contains(MarketReactionResearchContextMigrationId, await context.Database.GetAppliedMigrationsAsync());
+                Assert.Contains(
+                    NormalizedMarketSituationMigrationId,
+                    await context.Database.GetAppliedMigrationsAsync());
 
                 var marketEvent = await context.MarketEvents.AsNoTracking().SingleAsync(item => item.Id == eventId);
                 Assert.Equal("legacy-unknown", marketEvent.SessionId);
@@ -135,6 +183,20 @@ public sealed class ExplicitSessionMigrationTests
                 Assert.Equal("features-v1", opportunity.FeatureSetVersion);
                 Assert.Equal("setup-v1", opportunity.SetupDefinitionVersion);
                 Assert.Equal("config-v1", opportunity.ConfigurationVersion);
+
+                var legacyRow = await context.MarketSituationAssessments.AsNoTracking()
+                    .SingleAsync(item => item.Id == legacyAssessment.Id);
+                Assert.Equal(legacyAssessmentJson, legacyRow.AssessmentJson);
+                var legacyRead = await new EfMarketSituationStore(context).ReadAsync(
+                    legacyAssessment.Id,
+                    CancellationToken.None);
+                Assert.NotNull(legacyRead);
+                Assert.Equal("market-situation-persistence-v1", legacyRead.PersistenceVersion);
+                Assert.Equal(
+                    legacyAssessmentJson,
+                    JsonSerializer.Serialize(
+                        legacyRead.LegacyAssessment,
+                        new JsonSerializerOptions(JsonSerializerDefaults.Web)));
             }
 
             await AssertSessionColumnsAndIndexesAsync(database.ConnectionString);
@@ -213,7 +275,9 @@ public sealed class ExplicitSessionMigrationTests
         DateTimeOffset featureTime,
         DateTimeOffset validUntil,
         string symbol,
-        string snapshotJson)
+        string snapshotJson,
+        MarketSituationAssessment legacyAssessment,
+        string legacyAssessmentJson)
     {
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync();
@@ -257,6 +321,25 @@ public sealed class ExplicitSessionMigrationTests
                 SetupDefinitionVersion nvarchar(64) NOT NULL,
                 ConfigurationVersion nvarchar(64) NOT NULL
             );
+            CREATE TABLE dbo.market_situation_assessment (
+                Id uniqueidentifier NOT NULL PRIMARY KEY,
+                FeatureSnapshotId uniqueidentifier NOT NULL,
+                PriorSessionContextId uniqueidentifier NULL,
+                Symbol nvarchar(32) NOT NULL,
+                SessionId nvarchar(64) NOT NULL,
+                AsOfUtc datetimeoffset NOT NULL,
+                EvaluatedAtUtc datetimeoffset NOT NULL,
+                Status nvarchar(32) NOT NULL,
+                ContextMode nvarchar(32) NOT NULL,
+                PrimarySituationType nvarchar(32) NULL,
+                SupportSituationType nvarchar(32) NULL,
+                ResistanceSituationType nvarchar(32) NULL,
+                SupportLevelSource nvarchar(32) NULL,
+                ResistanceLevelSource nvarchar(32) NULL,
+                DefinitionVersion nvarchar(64) NOT NULL,
+                ConfigurationVersion nvarchar(64) NOT NULL,
+                AssessmentJson nvarchar(max) NOT NULL
+            );
             INSERT INTO dbo.market_event
                 (Id, Symbol, EventType, EventTimeUtc, ReceivedTimeUtc, Provider, SequenceId,
                  EventIdentity, TradePrice, TradeSize, BidPrice, AskPrice, BidSize, AskSize)
@@ -273,6 +356,15 @@ public sealed class ExplicitSessionMigrationTests
             VALUES
                 (@opportunityId, @symbol, @featureTime, @validUntil, N'MomentumContinuation',
                  N'Long', N'Watch', 73, 123.45, N'features-v1', N'setup-v1', N'config-v1');
+            INSERT INTO dbo.market_situation_assessment
+                (Id, FeatureSnapshotId, PriorSessionContextId, Symbol, SessionId, AsOfUtc,
+                 EvaluatedAtUtc, Status, ContextMode, PrimarySituationType, SupportSituationType,
+                 ResistanceSituationType, SupportLevelSource, ResistanceLevelSource,
+                 DefinitionVersion, ConfigurationVersion, AssessmentJson)
+            VALUES
+                (@legacyAssessmentId, @featureId, NULL, @symbol, N'legacy-unknown', @featureTime,
+                 @legacyEvaluatedAt, N'NoEligibleLevels', N'CurrentSessionOnly', NULL, NULL,
+                 NULL, NULL, NULL, N'market-situation-v1', N'config-v1', @legacyAssessmentJson);
             """;
         command.Parameters.AddWithValue("@eventId", eventId);
         command.Parameters.AddWithValue("@featureId", featureId);
@@ -283,6 +375,9 @@ public sealed class ExplicitSessionMigrationTests
         command.Parameters.AddWithValue("@featureTime", featureTime);
         command.Parameters.AddWithValue("@validUntil", validUntil);
         command.Parameters.AddWithValue("@snapshotJson", snapshotJson);
+        command.Parameters.AddWithValue("@legacyAssessmentId", legacyAssessment.Id);
+        command.Parameters.AddWithValue("@legacyEvaluatedAt", legacyAssessment.EvaluatedAtUtc);
+        command.Parameters.AddWithValue("@legacyAssessmentJson", legacyAssessmentJson);
         await command.ExecuteNonQueryAsync();
     }
 
@@ -468,6 +563,109 @@ public sealed class ExplicitSessionMigrationTests
             Assert.Equal(17, Convert.ToInt32(await columnsCommand.ExecuteScalarAsync()));
         }
 
+        await using (var normalizedColumnsCommand = connection.CreateCommand())
+        {
+            normalizedColumnsCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.columns AS c
+                INNER JOIN sys.tables AS t ON c.object_id = t.object_id
+                WHERE t.schema_id = SCHEMA_ID(N'dbo')
+                  AND ((t.name = N'market_situation_assessment'
+                        AND c.name IN (
+                            N'PersistenceVersion', N'CandidateSetId', N'AssessmentMaterialDigest',
+                            N'SupportLevelId', N'ResistanceLevelId'))
+                    OR (t.name = N'market_situation_candidate_set' AND c.name IN (
+                            N'Id', N'CanonicalizationVersion', N'CandidateMaterialDigest',
+                            N'MaterialDigest', N'IsComplete', N'TotalCandidateCount'))
+                    OR (t.name = N'market_situation_candidate_source' AND c.name IN (
+                            N'Id', N'MaterialDigest', N'SourceKind', N'SourceCompleteness'))
+                    OR (t.name = N'market_situation_candidate_member' AND c.name IN (
+                            N'CandidateSetId', N'Ordinal', N'LevelId', N'CandidateSourceId',
+                            N'Role', N'Price', N'PriceCanonical')));
+                """;
+            Assert.Equal(22, Convert.ToInt32(await normalizedColumnsCommand.ExecuteScalarAsync()));
+        }
+
+        await using (var keyCommand = connection.CreateCommand())
+        {
+            keyCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.foreign_keys AS fk
+                INNER JOIN sys.tables AS parent ON fk.parent_object_id = parent.object_id
+                INNER JOIN sys.tables AS referenced ON fk.referenced_object_id = referenced.object_id
+                WHERE (parent.name = N'market_situation_assessment'
+                       AND referenced.name = N'market_situation_candidate_set')
+                   OR (parent.name = N'market_situation_candidate_member'
+                       AND referenced.name IN (
+                           N'market_situation_candidate_set',
+                           N'market_situation_candidate_source'));
+                """;
+            Assert.Equal(3, Convert.ToInt32(await keyCommand.ExecuteScalarAsync()));
+        }
+
+        await using (var primaryKeyCommand = connection.CreateCommand())
+        {
+            primaryKeyCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.key_constraints AS constraint_row
+                INNER JOIN sys.tables AS table_row
+                    ON constraint_row.parent_object_id = table_row.object_id
+                WHERE constraint_row.type = N'PK'
+                  AND table_row.name IN (
+                    N'market_situation_candidate_set',
+                    N'market_situation_candidate_source',
+                    N'market_situation_candidate_member');
+                """;
+            Assert.Equal(3, Convert.ToInt32(await primaryKeyCommand.ExecuteScalarAsync()));
+        }
+
+        await using (var checkConstraintCommand = connection.CreateCommand())
+        {
+            checkConstraintCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.check_constraints
+                WHERE name IN (
+                    N'CK_market_situation_assessment_PersistenceEnvelope',
+                    N'CK_market_situation_candidate_set_Counts',
+                    N'CK_market_situation_candidate_set_Completion');
+                """;
+            Assert.Equal(3, Convert.ToInt32(await checkConstraintCommand.ExecuteScalarAsync()));
+        }
+
+        await using (var precisionCommand = connection.CreateCommand())
+        {
+            precisionCommand.CommandText =
+                """
+                SELECT COUNT(*)
+                FROM sys.columns AS column_row
+                INNER JOIN sys.tables AS table_row
+                    ON column_row.object_id = table_row.object_id
+                INNER JOIN sys.types AS type_row
+                    ON column_row.user_type_id = type_row.user_type_id
+                WHERE (table_row.name = N'market_situation_candidate_member'
+                       AND column_row.name = N'Price'
+                       AND type_row.name = N'decimal'
+                       AND column_row.precision = 38
+                       AND column_row.scale = 18)
+                   OR (table_row.name IN (
+                            N'market_situation_candidate_set',
+                            N'market_situation_candidate_source',
+                            N'market_situation_candidate_member',
+                            N'market_situation_assessment')
+                       AND column_row.name IN (
+                            N'AsOfUtc', N'SourceEventTimeUtc', N'ConfirmedAtEventTimeUtc',
+                            N'SourceCoverageStartUtc', N'SourceCoverageEndUtc',
+                            N'CreatedAtUtc', N'CompletedAtUtc')
+                       AND type_row.name = N'datetimeoffset'
+                       AND column_row.scale = 7);
+                """;
+            Assert.True(Convert.ToInt32(await precisionCommand.ExecuteScalarAsync()) >= 8);
+        }
+
         await using var indexesCommand = connection.CreateCommand();
         indexesCommand.CommandText =
             """
@@ -477,9 +675,15 @@ public sealed class ExplicitSessionMigrationTests
                 N'IX_market_situation_assessment_Symbol_SessionId_AsOfUtc',
                 N'IX_market_situation_assessment_SupportSituationType_SupportLevelSource_AsOfUtc',
                 N'IX_market_situation_assessment_ResistanceSituationType_ResistanceLevelSource_AsOfUtc',
-                N'IX_market_situation_assessment_PrimarySituationType_AsOfUtc');
+                N'IX_market_situation_assessment_PrimarySituationType_AsOfUtc',
+                N'IX_market_situation_assessment_CandidateSetId',
+                N'IX_market_situation_candidate_set_Symbol_SessionId_AsOfUtc',
+                N'IX_market_situation_candidate_set_MaterialDigest',
+                N'IX_market_situation_candidate_source_MaterialDigest',
+                N'UX_market_situation_candidate_member_Set_LevelId',
+                N'IX_market_situation_candidate_member_CandidateSourceId');
             """;
-        Assert.Equal(4, Convert.ToInt32(await indexesCommand.ExecuteScalarAsync()));
+        Assert.Equal(10, Convert.ToInt32(await indexesCommand.ExecuteScalarAsync()));
     }
 
     private static async Task AssertMarketReactionSchemaAsync(string connectionString)

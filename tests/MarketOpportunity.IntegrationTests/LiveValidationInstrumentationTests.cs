@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using MarketOpportunity.Analytics;
 using MarketOpportunity.Application;
 using MarketOpportunity.Domain;
 using MarketOpportunity.Infrastructure;
@@ -285,7 +286,30 @@ public sealed class LiveValidationInstrumentationTests
                 services.RemoveAll<IMarketDataSource>();
                 services.AddScoped<IMarketDataSource>(provider =>
                     new OfflineSource(events, provider.GetRequiredService<LiveValidationDiagnostics>()));
+                services.RemoveAll<IPriorSessionContextProvider>();
+                services.AddSingleton<IPriorSessionContextProvider>(
+                    new OfflinePriorSessionContextProvider());
             });
+        }
+    }
+
+    private sealed class OfflinePriorSessionContextProvider : IPriorSessionContextProvider
+    {
+        public Task<PriorSessionContextView> GetContextAsync(
+            string symbol,
+            string currentSessionId,
+            DateTimeOffset currentEventTimeUtc,
+            decimal? currentReferencePrice,
+            CancellationToken cancellationToken)
+        {
+            var context = new PriorSessionContextBuilder(new FeatureCalculator())
+                .BuildUnavailable(
+                    symbol,
+                    currentSessionId,
+                    "Offline hosted validation has no approved prior-session history.");
+            return Task.FromResult(PriorSessionContextBuilder.CreateView(
+                context,
+                currentReferencePrice));
         }
     }
 

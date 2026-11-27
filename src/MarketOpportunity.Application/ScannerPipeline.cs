@@ -49,6 +49,11 @@ public interface IMarketSituationStore
     Task PersistAsync(
         MarketSituationAssessment assessment,
         CancellationToken cancellationToken);
+
+    Task PersistAsync(
+        MarketSituationEvaluation evaluation,
+        CancellationToken cancellationToken) =>
+        PersistAsync(evaluation.ProjectLegacy(), cancellationToken);
 }
 
 public sealed record ScannerStatus(
@@ -440,12 +445,13 @@ public sealed class ScannerPipeline(
                 warmupOutcome = warmup.Outcome;
                 state.CompletePriorSessionWarmup(warmupOutcome);
             }
-            var marketSituation = _marketSituationEvaluator.Evaluate(
+            var marketSituationEvaluation = _marketSituationEvaluator.EvaluateWithEvidence(
                 snapshot,
                 stateEvents,
                 priorContext,
                 configuration,
                 asOfUtc);
+            var marketSituation = marketSituationEvaluation.ProjectLegacy();
             // Recorded analysis evaluates publication and readiness at the analysis event time so
             // that selection and the persisted assessment replay deterministically.
             var publication = _publicationGate.Evaluate(
@@ -476,7 +482,7 @@ public sealed class ScannerPipeline(
             }
             if (marketSituationStore is not null)
             {
-                await marketSituationStore.PersistAsync(marketSituation, cancellationToken);
+                await marketSituationStore.PersistAsync(marketSituationEvaluation, cancellationToken);
             }
 
             var marketReactions = marketReactionTracker is null
@@ -917,6 +923,7 @@ public sealed class ScannerPipeline(
                 TradePlan tradePlan;
                 PublicationDecision publication;
                 PreTradeReadinessEvaluation? readinessEvaluation;
+                MarketSituationEvaluation marketSituationEvaluation;
                 MarketSituationAssessment marketSituation;
                 try
                 {
@@ -933,12 +940,13 @@ public sealed class ScannerPipeline(
                             priorContext.Context,
                             snapshot.ReferencePrice);
                     }
-                    marketSituation = _marketSituationEvaluator.Evaluate(
+                    marketSituationEvaluation = _marketSituationEvaluator.EvaluateWithEvidence(
                         snapshot,
                         symbolState.GetEventsAsOf(snapshot.AsOfUtc),
                         priorContext,
                         configuration,
                         now);
+                    marketSituation = marketSituationEvaluation.ProjectLegacy();
                     var currentStatus = CreateLiveStatus(null, now, latestReceivedTime, null);
                     publication = _publicationGate.Evaluate(
                         opportunity,
@@ -982,7 +990,7 @@ public sealed class ScannerPipeline(
                     if (marketSituationStore is not null)
                     {
                         await marketSituationStore.PersistAsync(
-                            marketSituation,
+                            marketSituationEvaluation,
                             persistenceCancellation.Token);
                     }
                     if (marketReactionTracker is not null)
@@ -1209,12 +1217,12 @@ public sealed class ScannerPipeline(
             configuration,
             source.Capabilities);
         var opportunity = detector.Evaluate(features, configuration);
-        var marketSituation = _marketSituationEvaluator.Evaluate(
+        var marketSituation = _marketSituationEvaluator.EvaluateWithEvidence(
             features,
             symbolState.GetEventsAsOf(assessment.AsOfUtc),
             priorContext,
             configuration,
-            assessment.AsOfUtc);
+            assessment.AsOfUtc).ProjectLegacy();
         return new MarketReactionResearchContext(
             assessment.AsOfUtc,
             features.Id,

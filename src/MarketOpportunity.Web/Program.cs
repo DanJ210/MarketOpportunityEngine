@@ -44,6 +44,9 @@ var priorSessionWarmupOptions = builder.Configuration
     .Get<PriorSessionWarmupOptions>() ?? new PriorSessionWarmupOptions();
 priorSessionWarmupOptions.Validate();
 builder.Services.AddSingleton(priorSessionWarmupOptions);
+var marketSituationPersistenceOptions =
+    MarketSituationPersistenceOptions.FromConfiguration(builder.Configuration);
+builder.Services.AddSingleton(marketSituationPersistenceOptions);
 builder.Services.Configure<HostOptions>(options =>
     options.ShutdownTimeout = livePipelineOptions.GracefulShutdownTimeout + TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<Action<string, string>>(serviceProvider =>

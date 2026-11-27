@@ -8,6 +8,22 @@
 
 Do not use this archive as routine coding-agent context. Use it when historical validation, a previous failure, an old live-provider run, SQL provenance, browser evidence, or a historical contradiction must be investigated.
 
+## MarketSituation provenance + persistence Correction Batch 2 (2026-11-27)
+
+**Status: Correction Batch 2 COMPLETE; overall corrective checkpoint IN PROGRESS. Correction Batch 3 NEXT / AUTHORIZED. A.2.6 Batch 2 remains PAUSED.**
+
+Hand-written migration `20261127170000_AddNormalizedMarketSituationPersistence` adds immutable `market_situation_candidate_set`, `market_situation_candidate_source`, and ordered `market_situation_candidate_member` tables plus nullable v2 discriminator, candidate-set reference, material digest, and selected LevelId columns on the existing assessment table. SHA-256 identifiers are binary-collated 64-character keys. Candidate members use `decimal(38,18)` for queryable price plus exact canonical decimal text; event timestamps use `datetimeoffset(7)`. Restrictive foreign keys, primary keys, unique set/LevelId and set/ordinal constraints, and query-justified indexes preserve immutability.
+
+The v2 store evaluates first, validates the deterministic candidate/assessment material, then opens one serializable SQL transaction. It inserts the incomplete header, deduplicates/verifies bounded source rows, bulk-copies bounded ordered member batches, verifies the exact member count, marks the set complete, and inserts the compact assessment before committing. Cancellation/failure rolls back the transaction. Existing sets are replay-verified by header digest/count, every source, and every canonical member; existing compact assessments compare version, `CandidateSetId`, full material digest, and normalized JSON with evaluation time excluded. No legacy row is rewritten and no automatic backfill occurs.
+
+The production scanner now writes `MarketSituationEvaluation` through the v2 store and continues projecting the legacy `MarketSituationAssessment` for current API/Blazor and MarketReaction callers. Candidate-member batch size defaults to **1,000** through `MarketData:Persistence:MarketSituationCandidateMemberBatchSize`; this infrastructure setting is not analytical identity. Compact AssessmentJson is enforced at **16 KiB** and contains no `EligibleLevels`. The largest SQL candidate payload is the compact parameter; normalized members travel through `SqlBulkCopy`, not one giant JSON parameter or one round trip per candidate.
+
+Offline persistence mapping/size/model/option tests passed **6/6**. Guarded migration tests independently verified the dedicated catalog and passed **2/2**, covering clean schema, representative existing legacy schema/row, byte-for-byte legacy JSON/read preservation, normalized schema/constraints/indexes, and idempotent migration rerun after removing migration-history entries. V2 SQL tests passed **4/4**, covering normalized round-trip/read, idempotent set/assessment replay, compact reaction pin, source/header/member/assessment conflicts, and injected failure after a middle member batch followed by clean retry. Rolled-back failures left no header, member, or assessment rows.
+
+The large SQL case persisted **100,005** members in **101** `SqlBulkCopy` batches. Normalized persistence plus member-count verification took **26.363 seconds** in the dedicated local SQL Server. The compact assessment was **4,065 bytes**, also the largest compact SQL string parameter observed. Final normalized member count matched exactly. Legacy MarketSituation plus MarketReaction SQL regressions passed **18/18**.
+
+The full guarded integration suite passed **58/58** after a test-only offline-host correction replaced an unintended Alpaca historical-provider dependency with an explicit unavailable prior-context provider. The full offline unit suite passed **540/540**, and the solution build passed with **0 warnings/errors**. No live provider, live-validation database, automatic backfill, production API/Blazor read-model change, host/launcher change, raw historical trade persistence, A.2.6 Batch 2 change, or analytical/reaction/configuration version change occurred. Durable decisions are in [ADR-013](../adr/ADR-013-versioned-hybrid-market-situation-evidence.md).
+
 ## MarketSituation provenance + persistence Correction Batch 1 (2026-11-27)
 
 **Status: Correction Batch 1 COMPLETE; overall corrective checkpoint IN PROGRESS. Correction Batch 2 NEXT / AUTHORIZED. A.2.6 Batch 2 remains PAUSED.**
