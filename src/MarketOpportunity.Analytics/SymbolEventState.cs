@@ -110,7 +110,7 @@ public sealed class SymbolEventState
 public sealed class FeatureCalculator
 {
     private const int SwingPivotStrength = 2;
-    private const string SwingAlgorithmVersion = "session-swing-fractal-v1";
+    public const string SwingAlgorithmVersion = "session-swing-fractal-v1";
     private const string StructureAlgorithmVersion = "session-market-structure-v1";
 
     public FeatureSnapshot Calculate(

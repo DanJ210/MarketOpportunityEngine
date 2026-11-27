@@ -8,6 +8,14 @@
 
 Do not use this archive as routine coding-agent context. Use it when historical validation, a previous failure, an old live-provider run, SQL provenance, browser evidence, or a historical contradiction must be investigated.
 
+## A.2.6 Batch 2 - Bounded Multi-Session Historical Reconstruction (2026-11-26)
+
+**Status: Batch 2 COMPLETE; overall A.2.6 IN PROGRESS. Batch 3 NOT STARTED and requires separate authorization.**
+
+Batch 2 adds offline, provider-independent reconstruction using the existing calendar and historical-source contracts. It resolves exactly D-1/D-2/D-3 and sequentially reduces each raw historical response into a bounded session summary. The unchanged Batch 1 evaluator receives an available assessment only when all three sessions are contiguous, approved complete, match the requested symbol/bounds, and have compatible provenance. Any required session that is missing, partial, unavailable, invalid, cancelled, provider-failed, pagination-incomplete, limit-exceeded, or otherwise unapproved prevents A.2.6 zones and trend; no gap is bridged, older session substituted, or two-session degraded assessment exposed. `PeakRawSessionsRetained` is at most **1**; raw history is not retained.
+
+Focused reconstruction tests passed **30/30**, including exact-three success, each required session missing/partial, no bridging/substitution, noncontiguous calendar resolution, incompatible historical provenance, invalid resource accounting, bounded reduction/accounting, deterministic replay, cancellation, timeout, and preservation of existing A.2.5 behavior. Full offline unit tests passed **528/528**; hosted offline structure/API/Blazor regressions passed **19/19**; solution build passed with **0 warnings/errors**. No live provider, SQL test, schema, or migration was used. No production pipeline/ScannerState, persistence, MarketSituation/MarketReaction, setup, TradePlan, readiness, API, or Blazor integration was added. The exact-three-session Batch 1/ADR-012 contract remains unchanged; two-session degraded zones are deferred.
+
 ## A.2.6 Batch 1 - Domain Contracts + Deterministic Structural Rules (2026-11-26)
 
 **Status: Batch 1 COMPLETE; overall A.2.6 IN PROGRESS.**
