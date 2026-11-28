@@ -57,6 +57,32 @@ public sealed record TimingSummary(
     long CountAbove10000Ms = 0,
     long CountAbove15000Ms = 0);
 
+public sealed record MarketSituationPersistenceDiagnosticSummary(
+    long WriteCount,
+    long SuccessfulWriteCount,
+    long FailedWriteCount,
+    double TotalElapsedMs,
+    double MaximumElapsedMs,
+    int MaximumCandidateCount,
+    int MaximumCompactAssessmentBytes,
+    int MaximumMemberBatchCount,
+    long CandidateSetsCreated,
+    long CandidateSetsReused,
+    long CandidateSourcesCreated,
+    long CandidateMembersInserted,
+    long CompactAssessmentsPersisted);
+
+public sealed record PriorSessionWarmupDiagnosticSummary(
+    long CompletedCount,
+    long CompleteUsableCount,
+    long FallbackCount,
+    long AuthenticationFailureCount,
+    long EntitlementFailureCount,
+    long TimedOutCount,
+    long ProviderFailureCount,
+    int MaximumPagesRetrieved,
+    int MaximumDuplicateRecordsIgnored);
+
 public enum ShutdownTrigger
 {
     Unknown,
@@ -113,7 +139,18 @@ public sealed record LiveValidationSnapshot(
     string ShutdownTrigger,
     DateTimeOffset? ShutdownRequestedUtc,
     IReadOnlyList<ShutdownTriggerEvent> ShutdownTriggerEvents,
-    string? ApplicationLogPath);
+    string? ApplicationLogPath,
+    ApplicationTerminalOutcome? TerminalOutcome,
+    bool DurationRequirementMet,
+    bool ValidationSuccessful,
+    int ChannelCapacity,
+    bool ChannelCapacityReached,
+    double TotalChannelWaitMs,
+    double MaximumOldestQueuedEventAgeMs,
+    double CurrentOldestQueuedEventAgeMs,
+    string ProviderConnectionState,
+    MarketSituationPersistenceDiagnosticSummary MarketSituationPersistence,
+    PriorSessionWarmupDiagnosticSummary PriorSessionWarmup);
 
 // Sidecar state deliberately never participates in MarketEvent equality, serialization, or identity.
 public sealed class LiveValidationDiagnostics : IDisposable
@@ -124,6 +161,7 @@ public sealed class LiveValidationDiagnostics : IDisposable
     private readonly object _sync = new();
     private readonly TimeProvider _clock;
     private readonly Action<string>? _log;
+    private readonly ApplicationTerminalOutcomeTracker? _terminalOutcome;
     private readonly ConditionalWeakTable<MarketEvent, EventDiagnosticTiming> _events = new();
     private readonly Meter _meter = new(MeterName);
     private readonly Dictionary<string, Counter<long>> _counters = [];
@@ -142,6 +180,34 @@ public sealed class LiveValidationDiagnostics : IDisposable
     private int _depth;
     private int _maxDepth;
     private double _longestWait;
+    private int _channelCapacity;
+    private bool _channelCapacityReached;
+    private double _totalChannelWaitMs;
+    private double _maximumOldestQueuedEventAgeMs;
+    private readonly Dictionary<MarketEvent, DateTimeOffset> _queueItems =
+        new(ReferenceEqualityComparer.Instance);
+    private long _marketSituationWrites;
+    private long _marketSituationSuccessfulWrites;
+    private long _marketSituationFailedWrites;
+    private double _marketSituationElapsedMs;
+    private double _marketSituationMaximumElapsedMs;
+    private int _maximumCandidateCount;
+    private int _maximumCompactAssessmentBytes;
+    private int _maximumMemberBatchCount;
+    private long _candidateSetsCreated;
+    private long _candidateSetsReused;
+    private long _candidateSourcesCreated;
+    private long _candidateMembersInserted;
+    private long _compactAssessmentsPersisted;
+    private long _warmupsCompleted;
+    private long _warmupsCompleteUsable;
+    private long _warmupsFallback;
+    private long _warmupsAuthenticationFailure;
+    private long _warmupsEntitlementFailure;
+    private long _warmupsTimedOut;
+    private long _warmupsProviderFailure;
+    private int _maximumWarmupPages;
+    private int _maximumWarmupDuplicates;
     private string _shutdownDrainStatus = "NotStarted";
     private const int MaximumShutdownEvents = 16;
     private readonly List<ShutdownTriggerEvent> _shutdownEvents = [];
@@ -152,10 +218,14 @@ public sealed class LiveValidationDiagnostics : IDisposable
     private string? _shutdownDrainFailure;
     private readonly ObservableGauge<int> _depthGauge;
 
-    public LiveValidationDiagnostics(TimeProvider clock, Action<string>? log = null)
+    public LiveValidationDiagnostics(
+        TimeProvider clock,
+        Action<string>? log = null,
+        ApplicationTerminalOutcomeTracker? terminalOutcome = null)
     {
         _clock = clock;
         _log = log;
+        _terminalOutcome = terminalOutcome;
         _startedUtc = clock.GetUtcNow();
         _started = clock.GetTimestamp();
         foreach (var name in new[]
@@ -314,22 +384,65 @@ public sealed class LiveValidationDiagnostics : IDisposable
     public bool TryGetTiming(MarketEvent marketEvent, out EventDiagnosticTiming? timing) =>
         _events.TryGetValue(marketEvent, out timing);
 
-    public void Accepted(int depth)
+    public void ConfigureChannelCapacity(int capacity)
     {
-        lock (_sync) { Count("accepted_events"); Depth(depth); }
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
+        lock (_sync)
+        {
+            _channelCapacity = capacity;
+            Depth(_depth);
+        }
     }
 
-    public void Dequeued(int depth, bool duplicate)
+    public void EnqueueStarted(MarketEvent marketEvent)
+    {
+        ArgumentNullException.ThrowIfNull(marketEvent);
+        lock (_sync)
+        {
+            _queueItems[marketEvent] = _clock.GetUtcNow();
+        }
+    }
+
+    public void Accepted(int depth) =>
+        Accepted(null, depth);
+
+    public void Accepted(MarketEvent? marketEvent, int depth)
+    {
+        lock (_sync)
+        {
+            Count("accepted_events");
+            Depth(depth);
+            if (marketEvent is not null
+                && _queueItems.TryGetValue(marketEvent, out var enqueuedAt))
+            {
+                ObserveOldestQueuedAge(enqueuedAt);
+            }
+        }
+    }
+
+    public void Dequeued(int depth, bool duplicate) =>
+        Dequeued(null, depth, duplicate);
+
+    public void Dequeued(MarketEvent? marketEvent, int depth, bool duplicate)
     {
         lock (_sync)
         {
             Count("dequeued_events");
             if (duplicate) { Count("duplicate_events"); }
             Depth(depth);
+            if (marketEvent is not null
+                && _queueItems.Remove(marketEvent, out var enqueuedAt))
+            {
+                ObserveOldestQueuedAge(enqueuedAt);
+            }
         }
     }
 
-    public void WriteCompleted(long start, bool waited, bool cancelled)
+    public void WriteCompleted(
+        long start,
+        bool waited,
+        bool cancelled,
+        MarketEvent? marketEvent = null)
     {
         var elapsed = _clock.GetElapsedTime(start).TotalMilliseconds;
         lock (_sync)
@@ -338,10 +451,18 @@ public sealed class LiveValidationDiagnostics : IDisposable
             {
                 Count("channel_backpressure_waits");
                 Observe("channel_write_wait", elapsed);
+                _totalChannelWaitMs += elapsed;
                 _longestWait = Math.Max(_longestWait, elapsed);
                 if (elapsed > 1000) { Anomaly("Backpressure", () => new { WaitMs = elapsed, Depth = _depth }); }
             }
-            if (cancelled) { Count("cancelled_writes"); }
+            if (cancelled)
+            {
+                Count("cancelled_writes");
+                if (marketEvent is not null)
+                {
+                    _queueItems.Remove(marketEvent);
+                }
+            }
         }
     }
 
@@ -382,6 +503,113 @@ public sealed class LiveValidationDiagnostics : IDisposable
         {
             Count("persistence_failures");
             Count("persistence_failed_events", events);
+        }
+    }
+
+    public void MarketSituationPersistenceCompleted(
+        MarketSituationPersistenceMetrics metrics,
+        double elapsedMs)
+    {
+        ArgumentNullException.ThrowIfNull(metrics);
+        lock (_sync)
+        {
+            _marketSituationWrites++;
+            _marketSituationSuccessfulWrites++;
+            _marketSituationElapsedMs += elapsedMs;
+            _marketSituationMaximumElapsedMs =
+                Math.Max(_marketSituationMaximumElapsedMs, elapsedMs);
+            _maximumCandidateCount =
+                Math.Max(_maximumCandidateCount, metrics.CandidateCount);
+            _maximumCompactAssessmentBytes =
+                Math.Max(_maximumCompactAssessmentBytes, metrics.CompactAssessmentBytes);
+            _maximumMemberBatchCount =
+                Math.Max(_maximumMemberBatchCount, metrics.MemberBatchCount);
+            _candidateSetsCreated += metrics.CandidateSetCreated ? 1 : 0;
+            _candidateSetsReused += metrics.CandidateSetCreated ? 0 : 1;
+            _candidateSourcesCreated += metrics.CandidateSourcesCreated ? 1 : 0;
+            _candidateMembersInserted += metrics.MembersInserted;
+            _compactAssessmentsPersisted += metrics.AssessmentCreated ? 1 : 0;
+        }
+
+        if (metrics.CandidateCount >= 100_000)
+        {
+            Anomaly("LargeMarketSituationCandidateSet", () => new
+            {
+                metrics.CandidateCount,
+                metrics.MemberBatchCount,
+                metrics.CompactAssessmentBytes
+            });
+        }
+    }
+
+    public void MarketSituationPersistenceFailed(
+        string candidateSetId,
+        int candidateCount,
+        int compactAssessmentBytes,
+        double elapsedMs,
+        string failureCategory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(candidateSetId);
+        lock (_sync)
+        {
+            _marketSituationWrites++;
+            _marketSituationFailedWrites++;
+            _marketSituationElapsedMs += elapsedMs;
+            _marketSituationMaximumElapsedMs =
+                Math.Max(_marketSituationMaximumElapsedMs, elapsedMs);
+            _maximumCandidateCount = Math.Max(_maximumCandidateCount, candidateCount);
+            _maximumCompactAssessmentBytes =
+                Math.Max(_maximumCompactAssessmentBytes, compactAssessmentBytes);
+        }
+
+        var boundedCategory = SafeText(failureCategory);
+        var candidateSetShort = SafeText(
+            candidateSetId[..Math.Min(12, candidateSetId.Length)]);
+        Anomaly("MarketSituationPersistenceFailure", () => new
+        {
+            Category = boundedCategory,
+            CandidateSetId = candidateSetShort,
+            CandidateCount = candidateCount,
+            CompactAssessmentBytes = compactAssessmentBytes,
+            ElapsedMs = elapsedMs
+        });
+    }
+
+    public void PriorSessionWarmupCompleted(PriorSessionWarmupOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        lock (_sync)
+        {
+            _warmupsCompleted++;
+            if (outcome.Status == PriorSessionWarmupStatus.CompleteUsable)
+            {
+                _warmupsCompleteUsable++;
+            }
+            else
+            {
+                _warmupsFallback++;
+            }
+
+            if (outcome.Status == PriorSessionWarmupStatus.AuthenticationFailure)
+            {
+                _warmupsAuthenticationFailure++;
+            }
+            if (outcome.Status == PriorSessionWarmupStatus.EntitlementFailure)
+            {
+                _warmupsEntitlementFailure++;
+            }
+            if (outcome.Status == PriorSessionWarmupStatus.TimedOut)
+            {
+                _warmupsTimedOut++;
+            }
+            if (outcome.Status == PriorSessionWarmupStatus.ProviderFailure)
+            {
+                _warmupsProviderFailure++;
+            }
+            _maximumWarmupPages =
+                Math.Max(_maximumWarmupPages, outcome.PagesRetrieved ?? 0);
+            _maximumWarmupDuplicates =
+                Math.Max(_maximumWarmupDuplicates, outcome.DuplicateRecordsIgnored ?? 0);
         }
     }
 
@@ -494,8 +722,21 @@ public sealed class LiveValidationDiagnostics : IDisposable
     {
         lock (_sync)
         {
+            var runtimeSeconds = _clock.GetElapsedTime(_started).TotalSeconds;
+            var terminalOutcome = _terminalOutcome?.Read();
+            var durationRequirementMet = _configuredDurationSeconds is null
+                or <= 0
+                || runtimeSeconds >= _configuredDurationSeconds.Value;
+            var currentOldestQueuedEventAgeMs = _queueItems.Count == 0
+                ? 0
+                : Math.Max(
+                    0,
+                    _queueItems.Values.Max(enqueuedAt =>
+                        (_clock.GetUtcNow() - enqueuedAt).TotalMilliseconds));
+            _maximumOldestQueuedEventAgeMs =
+                Math.Max(_maximumOldestQueuedEventAgeMs, currentOldestQueuedEventAgeMs);
             return new LiveValidationSnapshot(
-                _startedUtc, _clock.GetUtcNow(), _clock.GetElapsedTime(_started).TotalSeconds,
+                _startedUtc, _clock.GetUtcNow(), runtimeSeconds,
                 _session, _feed, _requestedSymbols.ToArray(), _tradeSymbols.ToArray(), _quoteSymbols.ToArray(),
                 Value("connection_attempts"), Value("connections_opened"), Value("reconnect_attempts"), Value("messages_received"),
                 Value("market_data_messages"), Value("canonical_events_produced"),
@@ -513,7 +754,41 @@ public sealed class LiveValidationDiagnostics : IDisposable
                 _timings.ToDictionary(pair => pair.Key, pair => pair.Value.Distribution.Summary()),
                 _transitions.ToArray(), _metadata.Values.ToArray(),
                 _configuredDurationSeconds, (_shutdownTrigger ?? ShutdownTrigger.Unknown).ToString(),
-                _shutdownRequestedUtc, _shutdownEvents.ToArray(), _applicationLogPath);
+                _shutdownRequestedUtc, _shutdownEvents.ToArray(), _applicationLogPath,
+                terminalOutcome,
+                durationRequirementMet,
+                terminalOutcome is { ValidationSuccessful: true, Expected: true }
+                    && durationRequirementMet,
+                _channelCapacity,
+                _channelCapacityReached,
+                _totalChannelWaitMs,
+                _maximumOldestQueuedEventAgeMs,
+                currentOldestQueuedEventAgeMs,
+                _transitions.Count == 0 ? "Unknown" : _transitions[^1].State,
+                new MarketSituationPersistenceDiagnosticSummary(
+                    _marketSituationWrites,
+                    _marketSituationSuccessfulWrites,
+                    _marketSituationFailedWrites,
+                    _marketSituationElapsedMs,
+                    _marketSituationMaximumElapsedMs,
+                    _maximumCandidateCount,
+                    _maximumCompactAssessmentBytes,
+                    _maximumMemberBatchCount,
+                    _candidateSetsCreated,
+                    _candidateSetsReused,
+                    _candidateSourcesCreated,
+                    _candidateMembersInserted,
+                    _compactAssessmentsPersisted),
+                new PriorSessionWarmupDiagnosticSummary(
+                    _warmupsCompleted,
+                    _warmupsCompleteUsable,
+                    _warmupsFallback,
+                    _warmupsAuthenticationFailure,
+                    _warmupsEntitlementFailure,
+                    _warmupsTimedOut,
+                    _warmupsProviderFailure,
+                    _maximumWarmupPages,
+                    _maximumWarmupDuplicates));
         }
     }
 
@@ -521,6 +796,26 @@ public sealed class LiveValidationDiagnostics : IDisposable
     {
         _depth = depth;
         _maxDepth = Math.Max(_maxDepth, depth);
+        if (_channelCapacity > 0 && depth >= _channelCapacity)
+        {
+            var newlyReached = !_channelCapacityReached;
+            _channelCapacityReached = true;
+            if (newlyReached)
+            {
+                Anomaly("ChannelCapacityReached", () => new
+                {
+                    Capacity = _channelCapacity,
+                    Depth = depth
+                });
+            }
+        }
+    }
+
+    private void ObserveOldestQueuedAge(DateTimeOffset enqueuedAt)
+    {
+        var age = Math.Max(0, (_clock.GetUtcNow() - enqueuedAt).TotalMilliseconds);
+        _maximumOldestQueuedEventAgeMs =
+            Math.Max(_maximumOldestQueuedEventAgeMs, age);
     }
 
     private long Value(string name) => _counts.GetValueOrDefault(name);

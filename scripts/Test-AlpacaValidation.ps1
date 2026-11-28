@@ -43,6 +43,7 @@ $testState = @{
     Passed = 0
     BuildExitCode = 0
     RunExitCode = 0
+    DiagnosticsMode = 'Success'
     DatabaseFailure = $false
     DatabaseChecks = 0
     Output = @()
@@ -81,6 +82,58 @@ function dotnet {
             Assert-True (Test-Path -LiteralPath $clock -PathType Leaf) 'App launched before clock diagnostic creation.'
             $clockData = Get-Content -LiteralPath $clock -Raw | ConvertFrom-Json
             Assert-True (-not [string]::IsNullOrWhiteSpace($clockData.CapturedUtc)) 'Invalid clock diagnostic.'
+            $diagnostics = Join-Path $directory "$session.diagnostics.json"
+            $applicationLog = Join-Path $directory "$session.app.log"
+            Remove-Item -LiteralPath $diagnostics -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $applicationLog -ErrorAction SilentlyContinue
+            if ($testState.DiagnosticsMode -ne 'ArtifactWriteFailure') {
+                [IO.File]::WriteAllText($applicationLog, 'offline sanitized application log')
+            }
+            $terminalCategory = 'ValidationDurationReached'
+            $terminalExpected = $true
+            $terminalSuccess = $true
+            $shutdownTrigger = 'DurationElapsed'
+            $durationMet = $true
+            $runtimeSeconds = [double] (Get-AppArgument '--MarketData:Diagnostics:DurationSeconds')
+            switch ($testState.DiagnosticsMode) {
+                'ApplicationFailure' {
+                    $terminalCategory = 'PersistenceTerminalFailure'
+                    $terminalExpected = $false
+                    $terminalSuccess = $false
+                    $shutdownTrigger = 'ApplicationFailure'
+                }
+                'DurationShortfall' {
+                    $durationMet = $false
+                    $runtimeSeconds = 1
+                    $terminalSuccess = $false
+                }
+                'MalformedDiagnostics' {
+                    [IO.File]::WriteAllText($diagnostics, '{not-json')
+                }
+                'MissingDiagnostics' { }
+                'ArtifactWriteFailure' { }
+            }
+            if ($testState.DiagnosticsMode -notin @('MissingDiagnostics', 'MalformedDiagnostics')) {
+                [ordered] @{
+                    runtimeSeconds = $runtimeSeconds
+                    configuredDurationSeconds =
+                        [int] (Get-AppArgument '--MarketData:Diagnostics:DurationSeconds')
+                    durationRequirementMet = $durationMet
+                    validationSuccessful = $terminalSuccess
+                    shutdownTrigger = $shutdownTrigger
+                    persistenceFailures = 0
+                    terminalOutcome = [ordered] @{
+                        category = $terminalCategory
+                        reasonCode = $shutdownTrigger
+                        component = 'SyntheticLauncherTest'
+                        expected = $terminalExpected
+                        validationSuccessful = $terminalSuccess
+                        processExitCode = 0
+                        hostShutdownRequested = $true
+                    }
+                } | ConvertTo-Json -Depth 4 |
+                    Set-Content -LiteralPath $diagnostics -Encoding utf8
+            }
             $global:LASTEXITCODE = $testState.RunExitCode
         }
         default { throw 'Unexpected dotnet operation; no native execution is allowed.' }
@@ -104,10 +157,14 @@ function Invoke-LauncherCase {
     }
     Assert-True ((Get-Location).Path -eq $originalLocation) "$Name did not restore location."
     if ($FailurePattern) {
-        Assert-True ($null -ne $failure -and $failure.ToString() -match $FailurePattern) "$Name expected failure '$FailurePattern', got '$failure'."
-        if ($testState.RunExitCode -eq 0) {
-            Assert-True (@($testState.Calls | Where-Object { $_[0] -eq 'run' }).Count -eq 0) "$Name launched app after failed preflight."
+        $failureText = ($failure | Format-List -Property * -Force | Out-String)
+        if ([string]::IsNullOrWhiteSpace($failureText)) {
+            $failureText = [string] $failure
         }
+        if ([string]::IsNullOrWhiteSpace($failureText) -and $null -ne $failure) {
+            $failureText = "$($failure.GetType().FullName):$($failure.FullyQualifiedErrorId):$($failure.CategoryInfo):$($failure.ScriptStackTrace)"
+        }
+        Assert-True ($null -ne $failure -and $failureText -match $FailurePattern) "$Name expected failure '$FailurePattern', got '$failureText'."
     }
     elseif ($null -ne $failure) { throw "$Name failed: $failure`n$($failure.ScriptStackTrace)`n$($failure.InvocationInfo.PositionMessage)" }
     $testState.Passed++
@@ -154,6 +211,8 @@ try {
     Assert-True ($result.SessionId -eq 'offline-iex' -and $clockData.SessionId -eq 'offline-iex') 'Session artifacts disagree on SessionId.'
     Assert-True ($result.ProcessExitCode -eq 0 -and $result.ProcessExitCodeCaptured) 'Launcher result did not capture exit code 0.'
     Assert-True ($result.ConfiguredDurationSeconds -eq 600) 'Launcher result omitted configured duration.'
+    Assert-True ($result.LauncherSucceeded -and $result.DiagnosticsIndicatedSuccess) 'Launcher did not classify complete success evidence.'
+    Assert-True ($result.DurationRequirementMet -and $result.ArtifactValidationSucceeded) 'Launcher omitted success-gate evidence.'
     Assert-True ([DateTimeOffset]::Parse($result.ProcessExitedUtc) -ge [DateTimeOffset]::Parse($result.ProcessStartedUtc)) 'Launcher exit time precedes start.'
     foreach ($path in @($result.DiagnosticsPath, $result.ClockPath, $result.ApplicationLogPath)) {
         Assert-True ((Split-Path $path -Leaf).StartsWith('offline-iex.')) "Artifact $path is not session scoped."
@@ -164,6 +223,8 @@ try {
     $singleSymbol.ValidationSymbol = 'Aapl'
     Invoke-LauncherCase 'Validation symbol bounds live launch to one symbol' $singleSymbol
     Assert-True ((Get-AppArgument '--Scanner:Universe:Symbols') -eq 'AAPL') 'Validation symbol override was not applied.'
+    $symbolResult = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+    Assert-True ($symbolResult.ValidationSymbol -eq 'Aapl') 'Launcher result omitted validation symbol override.'
 
     $custom = $base.Clone()
     $custom.DurationSeconds = 123
@@ -256,6 +317,22 @@ try {
     $testState.DatabaseFailure = $true
     Invoke-LauncherCase 'Dedicated database failure prevents launch' $base 'database verification failure'
     $testState.DatabaseFailure = $false
+    foreach ($mode in @('MissingDiagnostics', 'MalformedDiagnostics', 'ApplicationFailure', 'DurationShortfall', 'ArtifactWriteFailure')) {
+        $testState.DiagnosticsMode = $mode
+        $pattern = switch ($mode) {
+            'MissingDiagnostics' { 'Diagnostics artifact is missing' }
+            'MalformedDiagnostics' { 'DiagnosticsEvidenceFailure' }
+            'ApplicationFailure' { 'ApplicationTerminalFailure' }
+            'DurationShortfall' { 'ValidationEvidenceFailure' }
+            'ArtifactWriteFailure' { 'Required clock or sanitized application-log artifact is missing' }
+        }
+        Invoke-LauncherCase "Launcher fails closed for $mode" $base $pattern
+        $failedResult = Get-Content -LiteralPath (
+            Join-Path $expectedDirectory 'offline-iex.launcher-result.json') -Raw |
+            ConvertFrom-Json
+        Assert-True (-not $failedResult.LauncherSucceeded) "$mode was incorrectly successful."
+    }
+    $testState.DiagnosticsMode = 'Success'
     $testState.RunExitCode = 1
     Invoke-LauncherCase 'App failure restores environment' $base 'exited with code 1'
     $failedResult = Get-Content -LiteralPath (Join-Path $expectedDirectory 'offline-iex.launcher-result.json') -Raw | ConvertFrom-Json
@@ -264,6 +341,9 @@ try {
     Invoke-LauncherCase 'Nonzero child exit code is recorded before failing' $base 'exited with code 3'
     $failedResult = Get-Content -LiteralPath (Join-Path $expectedDirectory 'offline-iex.launcher-result.json') -Raw | ConvertFrom-Json
     Assert-True ($failedResult.ProcessExitCode -eq 3 -and $failedResult.ProcessExitCodeCaptured) 'Launcher result did not record child exit code 3.'
+    $testState.RunExitCode = 0
+    Assert-True (-not $resultText.Contains('Integrated Security') -and
+        -not $resultText.Contains('Database=')) 'Launcher result leaked connection details.'
     Write-Host "$($testState.Passed) offline launcher interception tests passed. No app, SQL, Docker, or provider connection was started."
 }
 finally {

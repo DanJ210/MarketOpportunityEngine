@@ -1,7 +1,7 @@
 # ADR-013: Versioned hybrid MarketSituation evidence
 
 - **Status:** Accepted
-- **Decision:** Separate the complete `market-situation-v1` analytical candidate universe from its compact immutable selected-result assessment, persist the two contracts through normalized immutable SQL evidence, and keep the complete universe out of normal runtime/read-model/UI paths. Correction Batches 1-3 establish domain, persistence, compact current-state/API/Blazor, and bounded forensic boundaries; host operational hardening remains a later batch.
+- **Decision:** Separate the complete `market-situation-v1` analytical candidate universe from its compact immutable selected-result assessment, persist the two contracts through normalized immutable SQL evidence, keep the complete universe out of normal runtime/read-model/UI paths, and expose persistence/host/launcher failure separately from analytical completeness. Correction Batches 1-4 establish domain, persistence, compact current-state/API/Blazor, bounded forensic, terminal-outcome, process-exit, diagnostics, and launcher-validation boundaries; sustained live validation remains later.
 
 ## Context
 
@@ -28,14 +28,19 @@ The analytical result was valid before persistence failed. A persistence failure
 - The initial forensic policy is 64 default/maximum members and 64 KiB serialized maximum. The 100,005-member measurement produced a 30,980-byte 64-member page. A page that exceeds the operational byte ceiling fails explicitly rather than truncating. Normal read models measured 3,463 bytes (small) and 3,473 bytes (100,005 candidates).
 - Legacy rows may produce only an explicit bounded legacy current projection. A forensic legacy request returns `LegacyCandidateEvidenceUnavailable`; no normalized candidate rows are fabricated or backfilled.
 - Persistence health is separate from analytical completeness. Successful analysis may produce a valid compact result before a persistence adapter fails, and that later failure cannot rewrite selected levels or `ContextMode`.
+- A bounded application-terminal outcome is first-failure-wins. Abnormal application, background-service, provider, startup/configuration, or persistence-terminal outcomes retain the first safe reason/component/timestamp and set process exit code 1; expected requested shutdown and approved duration completion remain exit 0. Later cancellation cannot erase an established failure.
+- The default `StopHost` background-service exception policy remains. `ScannerRunnerService` records terminal state before rethrowing; other validation/report service failures do the same. Artifact finalization remains graceful where possible; `FailFast` is not used.
+- Development validation diagnostics remain a bounded sidecar. They summarize normalized MarketSituation writes, successes/failures, latency, compact bytes, maximum candidate/member-batch counts, candidate-set/source create/reuse, final channel capacity/depth, writer waits, operational enqueue-attempt age, prior-session warm-up outcomes, terminal outcome, duration gate, and validation result. No raw candidate/member arrays are included.
+- Queue capacity remains 5,000, full mode remains `Wait`, and no events are dropped or analytically rebated. Oldest-age instrumentation is an operational enqueue-attempt age, so it includes a single blocked writer when capacity is reached; it is not market event time.
+- Validation-launcher success requires matching child exit code, terminal outcome, shutdown trigger, configured/observed duration gate, diagnostics validity, artifact integrity, and validation-success markers. Missing, malformed, incomplete, terminal-failure, or contradictory evidence fails conservatively, including exit 0 plus ApplicationFailure. Process exit alone is insufficient.
 - The analytical definition remains `market-situation-v1`; `market-reaction-v1` remains unchanged and can project domain-equivalent pinned level/zone evidence. No scanner configuration version bump is required.
-- Raw historical trades remain unpersisted. A.2.6 remains paused while corrective Batches 3-5 proceed; `multi-session-structure-v1` and its pending Batch 2 direction are not changed.
+- Raw historical trades remain unpersisted. A.2.6 remains paused through the completed corrective Batches 3-4 and pending Batch 5; `multi-session-structure-v1` and its pending Batch 2 direction are not changed.
 
 ## Consequences
 
 - Batch 1 proves deterministic identity, analytical equivalence, reaction compatibility, legacy readability, bounded compact output, and collision rejection. Batch 2 proves clean/existing migration, idempotent replay, normalized large-set persistence, rollback/ retry safety, and immutable conflict detection.
 - Compact assessment identity changes from the legacy v1 identity because the full candidate array is replaced by its full SHA-256 commitment. Legacy rows retain their existing shape and identity; future v2 writes must be distinguishable by the versioned envelope and must never reuse a legacy row as if it were v2.
-- Production persistence and current production paths now use compact v2 evidence. Normal payload size is independent of candidate count, selected provenance remains explainable, and losing candidates require explicit forensic paging. This does not change launcher/host behavior.
-- Correction Batch 3 is complete. Host/launcher consequences belong to Batch 4, next/authorized; sustained/bounded validation closeout belongs to Batch 5.
+- Production persistence and current production paths now use compact v2 evidence. Normal payload size is independent of candidate count, selected provenance remains explainable, and losing candidates require explicit forensic paging.
+- Correction Batches 1-4 are complete. The corrected system exposes terminal failure and bounded backpressure without tuning or live validation. Sustained/bounded live validation belongs to Batch 5, next/authorized.
 
 See [ADR-009](./ADR-009-market-situation-level-interaction.md), [ADR-010](./ADR-010-market-reaction-confirmation.md), [ADR-012](./ADR-012-structural-significance-and-multi-session-trend.md), [PROJECT_STATUS.md](../../PROJECT_STATUS.md), and [PRODUCT_ROADMAP.md](../../PRODUCT_ROADMAP.md#a24a-marketsituation).

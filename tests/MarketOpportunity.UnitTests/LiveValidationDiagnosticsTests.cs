@@ -16,6 +16,181 @@ public sealed class LiveValidationDiagnosticsTests
         """{"T":"q","S":"AAPL","bp":100,"bs":2,"ap":0,"as":0,"bx":"V","ax":"V","c":["R","Y"],"z":"C","t":"2026-10-28T14:29:59.123456789Z"}""";
 
     [Fact]
+    public void Terminal_outcome_first_failure_wins_and_sets_nonzero_exit()
+    {
+        var clock = new ManualClock();
+        var exitCodes = new List<int>();
+        var terminal = new ApplicationTerminalOutcomeTracker(clock, exitCodes.Add);
+        var first = terminal.RecordFailure(
+            ApplicationTerminalOutcomeCategory.ApplicationFailure,
+            nameof(InvalidOperationException),
+            "ScannerRunnerService");
+        clock.Advance(TimeSpan.FromSeconds(5));
+        terminal.RecordExpected(
+            ApplicationTerminalOutcomeCategory.CancelledByRequestedShutdown,
+            "CancellationAfterFailure",
+            "Host",
+            validationSuccessful: false);
+        var laterFailure = terminal.RecordFailure(
+            ApplicationTerminalOutcomeCategory.PersistenceTerminalFailure,
+            nameof(IOException),
+            "MarketSituationStore");
+
+        Assert.Same(first, laterFailure);
+        Assert.Equal(first.FirstObservedUtc, terminal.Read()!.FirstObservedUtc);
+        Assert.Equal(
+            ApplicationTerminalOutcomeCategory.ApplicationFailure,
+            terminal.Read()!.Category);
+        Assert.False(terminal.Read()!.ValidationSuccessful);
+        Assert.Equal([1], exitCodes);
+    }
+
+    [Fact]
+    public void Expected_terminal_outcomes_keep_zero_exit_and_can_be_replaced_by_failure()
+    {
+        var exitCodes = new List<int>();
+        var terminal = new ApplicationTerminalOutcomeTracker(
+            new ManualClock(),
+            exitCodes.Add);
+        terminal.RecordExpected(
+            ApplicationTerminalOutcomeCategory.ValidationDurationReached,
+            "DurationElapsed",
+            "LiveValidationReportService",
+            validationSuccessful: true);
+        var failure = terminal.RecordFailure(
+            ApplicationTerminalOutcomeCategory.PersistenceTerminalFailure,
+            "SqlException",
+            "ScannerRunnerService");
+
+        Assert.Equal(ApplicationTerminalOutcomeCategory.PersistenceTerminalFailure, failure.Category);
+        Assert.Equal(1, failure.ProcessExitCode);
+        Assert.Equal([0, 1], exitCodes);
+    }
+
+    [Fact]
+    public void Default_exit_policy_sets_environment_process_code_without_failfast()
+    {
+        var previous = Environment.ExitCode;
+        try
+        {
+            var terminal = new ApplicationTerminalOutcomeTracker(new ManualClock());
+            terminal.RecordFailure(
+                ApplicationTerminalOutcomeCategory.BackgroundServiceFailure,
+                "InvalidOperationException",
+                "HostedService");
+            Assert.Equal(1, Environment.ExitCode);
+            terminal.RecordExpected(
+                ApplicationTerminalOutcomeCategory.CancelledByRequestedShutdown,
+                "CancellationAfterFailure",
+                "Host",
+                validationSuccessful: false);
+            Assert.Equal(1, Environment.ExitCode);
+        }
+        finally
+        {
+            Environment.ExitCode = previous;
+        }
+    }
+
+    [Fact]
+    public void Queue_and_market_situation_operational_metrics_are_bounded_and_separate()
+    {
+        var clock = new ManualClock();
+        var terminal = new ApplicationTerminalOutcomeTracker(clock, _ => { });
+        terminal.RecordExpected(
+            ApplicationTerminalOutcomeCategory.ValidationDurationReached,
+            "DurationElapsed",
+            "Validation",
+            validationSuccessful: true);
+        using var diagnostics = new LiveValidationDiagnostics(clock, terminalOutcome: terminal);
+        diagnostics.ConfigureRun(1, "safe.log");
+        diagnostics.ConfigureChannelCapacity(2);
+        var first = CreateTrade("queue-one");
+        var second = CreateTrade("queue-two");
+        diagnostics.EnqueueStarted(first);
+        diagnostics.Accepted(first, 1);
+        clock.Advance(TimeSpan.FromMilliseconds(5));
+        diagnostics.EnqueueStarted(second);
+        diagnostics.Accepted(second, 2);
+        var waitStarted = clock.GetTimestamp();
+        clock.Advance(TimeSpan.FromMilliseconds(10));
+        diagnostics.WriteCompleted(waitStarted, waited: true, cancelled: false, second);
+        diagnostics.Dequeued(first, 1, duplicate: false);
+        diagnostics.Dequeued(second, 0, duplicate: false);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        diagnostics.MarketSituationPersistenceCompleted(
+            new MarketSituationPersistenceMetrics(
+                CandidateSetCreated: true,
+                CandidateSourcesCreated: true,
+                AssessmentCreated: true,
+                CandidateCount: 100_005,
+                MemberBatchCount: 101,
+                CompactAssessmentBytes: 4_065,
+                MembersInserted: 100_005),
+            2_500);
+        diagnostics.MarketSituationPersistenceCompleted(
+            new MarketSituationPersistenceMetrics(
+                CandidateSetCreated: false,
+                CandidateSourcesCreated: false,
+                AssessmentCreated: false,
+                CandidateCount: 100_005,
+                MemberBatchCount: 0,
+                CompactAssessmentBytes: 4_065,
+                MembersInserted: 0),
+            25);
+        diagnostics.MarketSituationPersistenceFailed(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            1_500,
+            3_000,
+            75,
+            "TimeoutException");
+        diagnostics.PriorSessionWarmupCompleted(new PriorSessionWarmupOutcome(
+            new PriorSessionWarmupScope(
+                "AAPL",
+                "current",
+                "Alpaca",
+                "iex",
+                "prior",
+                "Alpaca",
+                "sip",
+                "Historical REST",
+                "prior-session-context-v1",
+                "features-v16",
+                "scanner-config-v20"),
+            PriorSessionWarmupStatus.CompleteUsable,
+            "Complete",
+            PagesRetrieved: 7,
+            DuplicateRecordsIgnored: 2));
+
+        var snapshot = diagnostics.Snapshot();
+        Assert.Equal(2, snapshot.ChannelCapacity);
+        Assert.True(snapshot.ChannelCapacityReached);
+        Assert.Equal(2, snapshot.MaximumSampledChannelDepth);
+        Assert.Equal(10, snapshot.TotalChannelWaitMs);
+        Assert.True(snapshot.MaximumOldestQueuedEventAgeMs >= 15);
+        Assert.Equal(0, snapshot.CurrentOldestQueuedEventAgeMs);
+        Assert.Equal(3, snapshot.MarketSituationPersistence.WriteCount);
+        Assert.Equal(2, snapshot.MarketSituationPersistence.SuccessfulWriteCount);
+        Assert.Equal(1, snapshot.MarketSituationPersistence.FailedWriteCount);
+        Assert.Equal(100_005, snapshot.MarketSituationPersistence.MaximumCandidateCount);
+        Assert.Equal(4_065, snapshot.MarketSituationPersistence.MaximumCompactAssessmentBytes);
+        Assert.Equal(101, snapshot.MarketSituationPersistence.MaximumMemberBatchCount);
+        Assert.Equal(1, snapshot.MarketSituationPersistence.CandidateSetsCreated);
+        Assert.Equal(1, snapshot.MarketSituationPersistence.CandidateSetsReused);
+        Assert.Equal(100_005, snapshot.MarketSituationPersistence.CandidateMembersInserted);
+        Assert.Equal(1, snapshot.PriorSessionWarmup.CompletedCount);
+        Assert.Equal(1, snapshot.PriorSessionWarmup.CompleteUsableCount);
+        Assert.Equal(7, snapshot.PriorSessionWarmup.MaximumPagesRetrieved);
+        Assert.Equal(2, snapshot.PriorSessionWarmup.MaximumDuplicateRecordsIgnored);
+        Assert.True(snapshot.DurationRequirementMet);
+        Assert.True(snapshot.ValidationSuccessful);
+        var json = JsonSerializer.Serialize(snapshot);
+        Assert.DoesNotContain("eligibleLevels", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"members\":", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"eligibleLevels\":", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Complete_message_stamp_precedes_json_parsing_and_per_item_backpressure()
     {
         var clock = new ManualClock();
@@ -299,6 +474,9 @@ public sealed class LiveValidationDiagnosticsTests
         Assert.Equal(2, snapshot.EventsAnalyzed);
         Assert.Equal(2, snapshot.PersistenceAcknowledgedEvents);
         Assert.Equal(0, snapshot.ChannelDepth);
+        Assert.Equal(5000, snapshot.ChannelCapacity);
+        Assert.False(snapshot.ChannelCapacityReached);
+        Assert.Equal(0, snapshot.ChannelBackpressureWaits);
         Assert.Equal(2, snapshot.Timings["creation_to_analysis"].Count);
     }
 
@@ -382,7 +560,9 @@ public sealed class LiveValidationDiagnosticsTests
         store.Release.TrySetResult();
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => run);
-        Assert.IsType<IOException>(exception.InnerException);
+        var persistenceException =
+            Assert.IsType<ScannerPersistenceException>(exception.InnerException);
+        Assert.IsType<IOException>(persistenceException.InnerException);
         Assert.Contains("Remaining=1", exception.Message);
         var snapshot = diagnostics.Snapshot();
         Assert.Equal(1, snapshot.PersistenceFailures);
@@ -431,6 +611,8 @@ public sealed class LiveValidationDiagnosticsTests
         await run.WaitAsync(TimeSpan.FromSeconds(10));
 
         var snapshot = diagnostics.Snapshot();
+        Assert.Equal(5000, snapshot.ChannelCapacity);
+        Assert.True(snapshot.ChannelCapacityReached);
         Assert.Equal(5000, snapshot.MaximumSampledChannelDepth);
         Assert.Equal(0, snapshot.ChannelDepth);
         Assert.Equal(1, snapshot.ChannelBackpressureWaits);
@@ -439,6 +621,8 @@ public sealed class LiveValidationDiagnosticsTests
         Assert.Equal(0, snapshot.RemainingEvents);
         Assert.Equal("Completed", snapshot.ShutdownDrainStatus);
         Assert.True(snapshot.LongestChannelWaitMs >= 0);
+        Assert.True(snapshot.MaximumOldestQueuedEventAgeMs >= 0);
+        Assert.True(snapshot.TotalChannelWaitMs >= snapshot.LongestChannelWaitMs);
     }
 
     [Fact]

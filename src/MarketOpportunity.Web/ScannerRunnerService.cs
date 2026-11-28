@@ -5,6 +5,7 @@ namespace MarketOpportunity.Web;
 
 public sealed class ScannerRunnerService(
     IServiceScopeFactory scopeFactory,
+    ApplicationTerminalOutcomeTracker terminalOutcome,
     ILogger<ScannerRunnerService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -27,12 +28,27 @@ public sealed class ScannerRunnerService(
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
+            terminalOutcome.RecordExpected(
+                ApplicationTerminalOutcomeCategory.CancelledByRequestedShutdown,
+                "RequestedShutdown",
+                nameof(ScannerRunnerService),
+                validationSuccessful: false);
             throw;
         }
         catch (Exception exception)
         {
-            scope.ServiceProvider.GetService<LiveValidationDiagnostics>()
-                ?.RecordShutdownTrigger(ShutdownTrigger.ApplicationFailure);
+            var diagnostics = scope.ServiceProvider.GetService<LiveValidationDiagnostics>();
+            diagnostics?.RecordShutdownTrigger(ShutdownTrigger.ApplicationFailure);
+            var category = diagnostics?.Snapshot().PersistenceFailures > 0
+                || IsPersistenceFailure(exception)
+                ? ApplicationTerminalOutcomeCategory.PersistenceTerminalFailure
+                : IsProviderFailure(exception)
+                    ? ApplicationTerminalOutcomeCategory.ProviderTerminalFailure
+                    : ApplicationTerminalOutcomeCategory.ApplicationFailure;
+            terminalOutcome.RecordFailure(
+                category,
+                exception.GetType().Name,
+                nameof(ScannerRunnerService));
             var scannerState = scope.ServiceProvider.GetRequiredService<ScannerState>();
             var currentStatus = scannerState.Read().Status;
             scannerState.SetStatus(currentStatus with
@@ -51,5 +67,31 @@ public sealed class ScannerRunnerService(
             result.Status.Source,
             result.Results.Count,
             result.Status.LatestEventTimeUtc);
+    }
+
+    private static bool IsPersistenceFailure(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is ScannerPersistenceException)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsProviderFailure(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is IOException)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

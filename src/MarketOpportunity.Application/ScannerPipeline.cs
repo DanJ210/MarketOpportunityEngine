@@ -1,4 +1,6 @@
 using System.Threading.Channels;
+using System.Text;
+using System.Text.Json;
 using MarketOpportunity.Analytics;
 using MarketOpportunity.Domain;
 
@@ -54,7 +56,29 @@ public interface IMarketSituationStore
         MarketSituationEvaluation evaluation,
         CancellationToken cancellationToken) =>
         PersistAsync(evaluation.ProjectLegacy(), cancellationToken);
+
+    async Task<MarketSituationPersistenceMetrics?> PersistWithMetricsAsync(
+        MarketSituationEvaluation evaluation,
+        CancellationToken cancellationToken)
+    {
+        await PersistAsync(evaluation, cancellationToken);
+        return null;
+    }
 }
+
+public sealed record MarketSituationPersistenceMetrics(
+    bool CandidateSetCreated,
+    bool CandidateSourcesCreated,
+    bool AssessmentCreated,
+    int CandidateCount,
+    int MemberBatchCount,
+    int CompactAssessmentBytes,
+    int MembersInserted);
+
+public sealed class ScannerPersistenceException(
+    string message,
+    Exception innerException)
+    : Exception(message, innerException);
 
 public sealed record ScannerStatus(
     MarketDataHealthStatus FeedStatus,
@@ -358,6 +382,7 @@ public sealed class ScannerPipeline(
     MarketReactionTracker? marketReactionTracker = null)
 {
     private static readonly TimeSpan LiveAnalysisInterval = TimeSpan.FromSeconds(5);
+    private const int LiveChannelCapacity = 5_000;
     private readonly TradePlanBuilder _tradePlanBuilder = new();
     private readonly MarketSituationEvaluator _marketSituationEvaluator = new();
     private readonly PreTradeReadinessEvaluator _readinessEvaluator = new();
@@ -444,6 +469,7 @@ public sealed class ScannerPipeline(
                     snapshot.ReferencePrice);
                 warmupOutcome = warmup.Outcome;
                 state.CompletePriorSessionWarmup(warmupOutcome);
+                diagnostics?.PriorSessionWarmupCompleted(warmupOutcome);
             }
             var marketSituationEvaluation = _marketSituationEvaluator.EvaluateWithEvidence(
                 snapshot,
@@ -467,23 +493,37 @@ public sealed class ScannerPipeline(
                 priorContext,
                 configuration,
                 asOfUtc);
-            await store.PersistRunAsync(
-                configuration,
-                stateEvents,
-                snapshot,
-                opportunity,
-                tradePlan,
-                cancellationToken);
-            if (readinessStore is not null && readinessEvaluation?.PersistTracked is not null)
+            try
             {
-                await readinessStore.PersistAsync(
-                    readinessEvaluation.PersistTracked,
-                    readinessEvaluation.PersistAssessment,
+                await store.PersistRunAsync(
+                    configuration,
+                    stateEvents,
+                    snapshot,
+                    opportunity,
+                    tradePlan,
                     cancellationToken);
+                if (readinessStore is not null && readinessEvaluation?.PersistTracked is not null)
+                {
+                    await readinessStore.PersistAsync(
+                        readinessEvaluation.PersistTracked,
+                        readinessEvaluation.PersistAssessment,
+                        cancellationToken);
+                }
+                if (marketSituationStore is not null)
+                {
+                    await marketSituationStore.PersistAsync(marketSituationEvaluation, cancellationToken);
+                }
             }
-            if (marketSituationStore is not null)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                await marketSituationStore.PersistAsync(marketSituationEvaluation, cancellationToken);
+                throw;
+            }
+            catch (Exception exception)
+            {
+                diagnostics?.PersistenceFailed(stateEvents.Count);
+                throw new ScannerPersistenceException(
+                    "Scanner persistence failed for a completed analytical batch.",
+                    exception);
             }
 
             var marketReactions = marketReactionTracker is null
@@ -561,12 +601,14 @@ public sealed class ScannerPipeline(
             _recoveryOptions.Validate();
         }
         _livePipelineOptions.Validate();
-        var channel = Channel.CreateBounded<MarketEvent>(new BoundedChannelOptions(5_000)
+        var channel = Channel.CreateBounded<MarketEvent>(new BoundedChannelOptions(
+            LiveChannelCapacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
             SingleWriter = true
         });
+        diagnostics?.ConfigureChannelCapacity(LiveChannelCapacity);
         var statusSync = new object();
         var connectionState = (int)MarketDataHealthStatus.Connecting;
         var unresolvedDataGap = 0;
@@ -854,11 +896,17 @@ public sealed class ScannerPipeline(
                     if (!symbolState.Add(marketEvent))
                     {
                         Interlocked.Increment(ref duplicateEvents);
-                        diagnostics?.Dequeued(channel.Reader.Count, duplicate: true);
+                        diagnostics?.Dequeued(
+                            marketEvent,
+                            channel.Reader.Count,
+                            duplicate: true);
                         continue;
                     }
 
-                    diagnostics?.Dequeued(channel.Reader.Count, duplicate: false);
+                    diagnostics?.Dequeued(
+                        marketEvent,
+                        channel.Reader.Count,
+                        duplicate: false);
                     pendingEvents[key].Add(marketEvent);
                     readinessTracker?.ObserveSession(
                         marketEvent.Symbol, marketEvent.SessionId, marketEvent.EventTimeUtc);
@@ -912,6 +960,7 @@ public sealed class ScannerPipeline(
                     warmupOutcome = warmup.Outcome;
                     priorContext = PriorSessionContextBuilder.CreateView(warmup.Context, null);
                     state.CompletePriorSessionWarmup(warmupOutcome);
+                    diagnostics?.PriorSessionWarmupCompleted(warmupOutcome);
                 }
 
                 Interlocked.Add(ref analyzedEvents, batch.Length);
@@ -991,9 +1040,41 @@ public sealed class ScannerPipeline(
                     }
                     if (marketSituationStore is not null)
                     {
-                        await marketSituationStore.PersistAsync(
-                            marketSituationEvaluation,
-                            persistenceCancellation.Token);
+                        var marketSituationPersistenceStart = timeProvider.GetTimestamp();
+                        try
+                        {
+                            var metrics = await marketSituationStore.PersistWithMetricsAsync(
+                                marketSituationEvaluation,
+                                persistenceCancellation.Token);
+                            if (metrics is not null)
+                            {
+                                diagnostics?.MarketSituationPersistenceCompleted(
+                                    metrics,
+                                    timeProvider.GetElapsedTime(
+                                            marketSituationPersistenceStart)
+                                        .TotalMilliseconds);
+                            }
+                        }
+                        catch (OperationCanceledException) when (
+                            persistenceCancellation.IsCancellationRequested)
+                        {
+                            throw;
+                        }
+                        catch (Exception exception)
+                        {
+                            diagnostics?.MarketSituationPersistenceFailed(
+                                marketSituationEvaluation.CandidateSet.CandidateSetId,
+                                marketSituationEvaluation.CandidateSet.TotalCandidateCount,
+                                Encoding.UTF8.GetByteCount(
+                                    JsonSerializer.Serialize(
+                                        marketSituationEvaluation.Assessment,
+                                        JsonSerializerOptions.Web)),
+                                timeProvider.GetElapsedTime(
+                                        marketSituationPersistenceStart)
+                                    .TotalMilliseconds,
+                                exception.GetType().Name);
+                            throw;
+                        }
                     }
                     if (marketReactionTracker is not null)
                     {
@@ -1012,11 +1093,13 @@ public sealed class ScannerPipeline(
                 {
                     throw;
                 }
-                catch
+                catch (Exception exception)
                 {
                     Interlocked.Increment(ref persistenceFailures);
                     diagnostics?.PersistenceFailed(batch.Length);
-                    throw;
+                    throw new ScannerPersistenceException(
+                        "Scanner persistence failed for a live analytical batch.",
+                        exception);
                 }
 
                 if (persistenceCancellation.IsCancellationRequested)
@@ -1134,6 +1217,7 @@ public sealed class ScannerPipeline(
                         hasReceivedMarketData = true;
                         setConnectionStatus(MarketDataHealthStatus.Live);
                         var writeStarted = timeProvider.GetTimestamp();
+                        diagnostics?.EnqueueStarted(marketEvent);
                         var write = writer.WriteAsync(marketEvent, cancellationToken);
                         var waited = !write.IsCompletedSuccessfully;
                         try
@@ -1142,14 +1226,22 @@ public sealed class ScannerPipeline(
                         }
                         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                         {
-                            diagnostics?.WriteCompleted(writeStarted, waited, cancelled: true);
+                            diagnostics?.WriteCompleted(
+                                writeStarted,
+                                waited,
+                                cancelled: true,
+                                marketEvent);
                             recordCancelledWrite();
                             throw;
                         }
                         var depth = channelDepth();
                         recordAccepted(depth);
-                        diagnostics?.Accepted(depth);
-                        diagnostics?.WriteCompleted(writeStarted, waited, cancelled: false);
+                        diagnostics?.Accepted(marketEvent, depth);
+                        diagnostics?.WriteCompleted(
+                            writeStarted,
+                            waited,
+                            cancelled: false,
+                            marketEvent);
                     }
 
                     if (source is not IReconnectableMarketDataSource)

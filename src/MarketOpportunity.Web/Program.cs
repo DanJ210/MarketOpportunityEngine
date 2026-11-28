@@ -58,7 +58,10 @@ var evidenceJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
     Converters = { new JsonStringEnumConverter() }
 };
 builder.Services.Configure<HostOptions>(options =>
-    options.ShutdownTimeout = livePipelineOptions.GracefulShutdownTimeout + TimeSpan.FromSeconds(10));
+{
+    options.ShutdownTimeout = livePipelineOptions.GracefulShutdownTimeout + TimeSpan.FromSeconds(10);
+    options.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.StopHost;
+});
 builder.Services.AddSingleton<Action<string, string>>(serviceProvider =>
 {
     var logger = serviceProvider.GetRequiredService<ILogger<ScannerPipeline>>();
@@ -68,6 +71,9 @@ builder.Services.AddSingleton<Action<string, string>>(serviceProvider =>
         exceptionType);
 });
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(serviceProvider =>
+    new ApplicationTerminalOutcomeTracker(
+        serviceProvider.GetRequiredService<TimeProvider>()));
 builder.Services.AddHttpClient<AlpacaMarketSessionCalendar>(client =>
     client.BaseAddress = new Uri("https://api.alpaca.markets/"));
 builder.Services.AddHttpClient<AlpacaHistoricalMarketDataSource>(client =>
@@ -99,8 +105,12 @@ if (diagnosticEnabled)
     builder.Services.AddSingleton(serviceProvider =>
     {
         var logger = serviceProvider.GetRequiredService<ILogger<LiveValidationDiagnostics>>();
-        var diagnostics = new LiveValidationDiagnostics(serviceProvider.GetRequiredService<TimeProvider>(),
-            diagnostic => logger.LogInformation("Live validation transition/anomaly {Diagnostic}", diagnostic));
+        var diagnostics = new LiveValidationDiagnostics(
+            serviceProvider.GetRequiredService<TimeProvider>(),
+            diagnostic => logger.LogInformation(
+                "Live validation transition/anomaly {Diagnostic}",
+                diagnostic),
+            serviceProvider.GetRequiredService<ApplicationTerminalOutcomeTracker>());
         diagnostics.ConfigureRun(duration, applicationLogPath);
         return diagnostics;
     });

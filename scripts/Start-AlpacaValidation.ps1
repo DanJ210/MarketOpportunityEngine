@@ -99,6 +99,149 @@ function Get-ValidationConnectionString {
     return $connection.get_ConnectionString()
 }
 
+function Get-ValidationEvidence {
+    param(
+        [string] $DiagnosticsPath,
+        [string] $ClockPath,
+        [string] $ApplicationLogPath,
+        [int] $RequestedDurationSeconds,
+        [Nullable[int]] $ProcessExitCode
+    )
+
+    $diagnosticsLoaded = $false
+    $diagnosticsIndicatedSuccess = $false
+    $durationRequirementMet = $false
+    $applicationTerminalOutcome = 'Unavailable'
+    $shutdownTrigger = 'Unavailable'
+    $observedDurationSeconds = $null
+    $artifactValidationSucceeded = $false
+    $failureCategory = 'None'
+    $failureReason = $null
+    $diagnostics = $null
+    try {
+        if (-not (Test-Path -LiteralPath $DiagnosticsPath -PathType Leaf)) {
+            throw 'Diagnostics artifact is missing.'
+        }
+        $text = Get-Content -LiteralPath $DiagnosticsPath -Raw
+        if ([string]::IsNullOrWhiteSpace($text)) {
+            throw 'Diagnostics artifact is empty.'
+        }
+        $diagnostics = $text | ConvertFrom-Json
+        $diagnosticsLoaded = $true
+        $terminal = $diagnostics.terminalOutcome
+        if ($null -eq $terminal) {
+            throw 'Diagnostics terminal outcome is missing.'
+        }
+        if ([string]::IsNullOrWhiteSpace([string] $terminal.category)) {
+            throw 'Diagnostics terminal outcome category is missing.'
+        }
+        if ([string]::IsNullOrWhiteSpace([string] $terminal.reasonCode)) {
+            throw 'Diagnostics terminal outcome reason is missing.'
+        }
+        if ($null -eq $terminal.expected) {
+            throw 'Diagnostics terminal outcome expected marker is missing.'
+        }
+        if ($terminal.expected -isnot [bool]) {
+            throw 'Diagnostics terminal outcome expected marker is not boolean.'
+        }
+        if ($null -eq $terminal.validationSuccessful) {
+            throw 'Diagnostics validation-success marker is missing.'
+        }
+        if ($terminal.validationSuccessful -isnot [bool] -or
+            $diagnostics.validationSuccessful -isnot [bool] -or
+            $diagnostics.durationRequirementMet -isnot [bool]) {
+            throw 'Diagnostics success and duration markers must be boolean.'
+        }
+        if ($null -eq $terminal.processExitCode -or
+            $terminal.processExitCode -isnot [long] -and
+            $terminal.processExitCode -isnot [int]) {
+            throw 'Diagnostics terminal outcome process exit code is missing.'
+        }
+        if ([int] $terminal.processExitCode -ne 0) {
+            throw 'Diagnostics terminal outcome contains a nonzero process exit code.'
+        }
+        if ($terminal.hostShutdownRequested -isnot [bool]) {
+            throw 'Diagnostics terminal outcome host-shutdown marker is missing or invalid.'
+        }
+        if ($null -eq $diagnostics.persistenceFailures) {
+            throw 'Diagnostics persistence-failure count is missing.'
+        }
+        if ([int] $diagnostics.persistenceFailures -gt 0) {
+            throw 'Diagnostics report terminal persistence failures.'
+        }
+        if ([int] $diagnostics.configuredDurationSeconds -ne $RequestedDurationSeconds) {
+            throw "Diagnostics requested duration does not match the launcher request."
+        }
+        $applicationTerminalOutcome = [string] $terminal.category
+        $shutdownTrigger = [string] $diagnostics.shutdownTrigger
+        $observedDurationSeconds = [double] $diagnostics.runtimeSeconds
+        $durationRequirementMet =
+            $RequestedDurationSeconds -eq 0 -or
+            [bool] $diagnostics.durationRequirementMet
+        $diagnosticsIndicatedSuccess =
+            [bool] $terminal.expected -and
+            [bool] $terminal.validationSuccessful -and
+            [bool] $terminal.hostShutdownRequested -and
+            [bool] $diagnostics.validationSuccessful -and
+            $durationRequirementMet -and
+            $shutdownTrigger -eq 'DurationElapsed' -and
+            $applicationTerminalOutcome -eq 'ValidationDurationReached'
+        $artifactValidationSucceeded =
+            (Test-Path -LiteralPath $ClockPath -PathType Leaf) -and
+            (Test-Path -LiteralPath $ApplicationLogPath -PathType Leaf) -and
+            (Get-Item -LiteralPath $ClockPath).Length -gt 0 -and
+            (Get-Item -LiteralPath $ApplicationLogPath).Length -gt 0 -and
+            -not [string]::IsNullOrWhiteSpace($shutdownTrigger)
+        if (-not $artifactValidationSucceeded) {
+            throw 'Required clock or sanitized application-log artifact is missing.'
+        }
+    }
+    catch {
+        $failureCategory = 'DiagnosticsEvidenceFailure'
+        $failureReason = ([string] $_.Exception.Message).Substring(
+            0,
+            [Math]::Min(([string] $_.Exception.Message).Length, 256))
+    }
+
+    if ($ProcessExitCode -eq $null) {
+        $failureCategory = 'ProcessExitCodeUnavailable'
+        $failureReason = 'The child process exit code was not captured.'
+    }
+    elseif ($ProcessExitCode -ne 0) {
+        $failureCategory = 'ProcessExitFailure'
+        $failureReason = "The validation application exited with code $ProcessExitCode."
+    }
+    elseif ([string]::IsNullOrWhiteSpace($failureReason) -and -not $diagnosticsIndicatedSuccess) {
+        $failureCategory = switch ($applicationTerminalOutcome) {
+            { $_ -in @('ApplicationFailure', 'BackgroundServiceFailure',
+                'PersistenceTerminalFailure', 'ProviderTerminalFailure',
+                'StartupFailure', 'ConfigurationFailure', 'UnknownFailure') } {
+                'ApplicationTerminalFailure'; break
+            }
+            default { 'ValidationEvidenceFailure' }
+        }
+        $failureReason =
+            "Contradictory or incomplete validation success evidence: terminal=$applicationTerminalOutcome, " +
+            "shutdown=$shutdownTrigger, durationMet=$durationRequirementMet."
+    }
+
+    return [pscustomobject] @{
+        LauncherSucceeded = $failureCategory -eq 'None' -and
+            $ProcessExitCode -eq 0 -and $diagnosticsLoaded -and
+            $diagnosticsIndicatedSuccess -and $artifactValidationSucceeded
+        ProcessExitCode = $ProcessExitCode
+        DiagnosticsLoaded = $diagnosticsLoaded
+        DiagnosticsIndicatedSuccess = $diagnosticsIndicatedSuccess
+        ArtifactValidationSucceeded = $artifactValidationSucceeded
+        DurationRequirementMet = $durationRequirementMet
+        ApplicationTerminalOutcome = $applicationTerminalOutcome
+        ShutdownTrigger = $shutdownTrigger
+        ObservedDurationSeconds = $observedDurationSeconds
+        FailureCategory = $failureCategory
+        FailureReason = $failureReason
+    }
+}
+
 $environmentNames = @(
     'ConnectionStrings__MarketOpportunity',
     'DOTNET_ENVIRONMENT',
@@ -304,6 +447,7 @@ try {
     $launcherResultPath = Join-Path $DiagnosticsDirectory "$SessionId.launcher-result.json"
     $processStartedUtc = [DateTimeOffset]::UtcNow
     $processExitCode = $null
+    $launcherEvidence = $null
     $global:LASTEXITCODE = $null
     try {
         dotnet run --project $project --no-build --no-launch-profile @buildArguments -- `
@@ -320,27 +464,47 @@ try {
             $processExitCode = $LASTEXITCODE
         }
         $processExitedUtc = [DateTimeOffset]::UtcNow
+        $diagnosticsPath = Join-Path $DiagnosticsDirectory "$SessionId.diagnostics.json"
+        $clockPath = Join-Path $DiagnosticsDirectory "$SessionId.clock.json"
+        $applicationLogPath = Join-Path $DiagnosticsDirectory "$SessionId.app.log"
+        $launcherEvidence = Get-ValidationEvidence `
+            -DiagnosticsPath $diagnosticsPath `
+            -ClockPath $clockPath `
+            -ApplicationLogPath $applicationLogPath `
+            -RequestedDurationSeconds $DurationSeconds `
+            -ProcessExitCode $processExitCode
         $launcherResult = [ordered] @{
             SessionId = $SessionId
             Feed = $Feed
             ConfiguredDurationSeconds = $DurationSeconds
+            ValidationSymbol = $ValidationSymbol
             ProcessStartedUtc = $processStartedUtc.ToString('O')
             ProcessExitedUtc = $processExitedUtc.ToString('O')
             ProcessExitCode = $processExitCode
             ProcessExitCodeCaptured = $null -ne $processExitCode
-            DiagnosticsPath = Join-Path $DiagnosticsDirectory "$SessionId.diagnostics.json"
-            ClockPath = Join-Path $DiagnosticsDirectory "$SessionId.clock.json"
-            ApplicationLogPath = Join-Path $DiagnosticsDirectory "$SessionId.app.log"
+            LauncherSucceeded = $launcherEvidence.LauncherSucceeded
+            FailureCategory = $launcherEvidence.FailureCategory
+            FailureReason = $launcherEvidence.FailureReason
+            DiagnosticsLoaded = $launcherEvidence.DiagnosticsLoaded
+            DiagnosticsIndicatedSuccess = $launcherEvidence.DiagnosticsIndicatedSuccess
+            ArtifactValidationSucceeded = $launcherEvidence.ArtifactValidationSucceeded
+            DurationRequirementMet = $launcherEvidence.DurationRequirementMet
+            ObservedDurationSeconds = $launcherEvidence.ObservedDurationSeconds
+            ApplicationTerminalOutcome = $launcherEvidence.ApplicationTerminalOutcome
+            ShutdownTrigger = $launcherEvidence.ShutdownTrigger
+            DiagnosticsPath = $diagnosticsPath
+            ClockPath = $clockPath
+            ApplicationLogPath = $applicationLogPath
         }
         $launcherResult | ConvertTo-Json -Depth 3 |
             Set-Content -LiteralPath $launcherResultPath -Encoding utf8
-        Write-Host "Launcher result saved: $launcherResultPath ProcessExitCode=$processExitCode"
+        Write-Host "Launcher result saved: $launcherResultPath ProcessExitCode=$processExitCode Success=$($launcherEvidence.LauncherSucceeded)"
     }
     if ($null -eq $processExitCode) {
         throw 'The validation application exit code was not captured. Inspect its sanitized session log.'
     }
-    if ($processExitCode -ne 0) {
-        throw "The validation application exited with code $processExitCode. Inspect its sanitized session log."
+    if (-not $launcherEvidence.LauncherSucceeded) {
+        throw "Launcher classified validation FAILED: $($launcherEvidence.FailureCategory). $($launcherEvidence.FailureReason)"
     }
 }
 finally {

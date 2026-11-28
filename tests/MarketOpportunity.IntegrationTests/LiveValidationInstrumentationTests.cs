@@ -21,6 +21,66 @@ namespace MarketOpportunity.IntegrationTests;
 public sealed class LiveValidationInstrumentationTests
 {
     [Fact]
+    public async Task Scanner_background_failure_records_terminal_persistence_outcome_and_nonzero_exit()
+    {
+        var builder = Host.CreateApplicationBuilder();
+        var exitCodes = new List<int>();
+        var clock = TimeProvider.System;
+        var terminal = new ApplicationTerminalOutcomeTracker(clock, exitCodes.Add);
+        using var diagnostics = new LiveValidationDiagnostics(
+            clock,
+            terminalOutcome: terminal);
+        var scanner = new ScannerState(timeProvider: clock);
+        var store = new TerminalFailureStore();
+        builder.Services.AddSingleton(terminal);
+        builder.Services.AddSingleton(diagnostics);
+        builder.Services.AddSingleton(scanner);
+        builder.Services.AddScoped(_ => new ScannerPipeline(
+            new TerminalFailureSource(),
+            store,
+            scanner,
+            new ScannerConfiguration(),
+            new FeatureCalculator(),
+            new MomentumContinuationDetector(),
+            clock,
+            diagnostics: diagnostics));
+        builder.Services.Configure<HostOptions>(options =>
+        {
+            options.BackgroundServiceExceptionBehavior =
+                BackgroundServiceExceptionBehavior.StopHost;
+            options.ShutdownTimeout = TimeSpan.FromSeconds(5);
+        });
+        builder.Services.AddHostedService<ScannerRunnerService>();
+        using var host = builder.Build();
+        var stopping = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = host.Services.GetRequiredService<IHostApplicationLifetime>()
+            .ApplicationStopping.Register(() => stopping.TrySetResult());
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+        await host.StartAsync(timeout.Token);
+        await store.Started.Task.WaitAsync(timeout.Token);
+        while (terminal.Read() is null && !timeout.IsCancellationRequested)
+        {
+            await Task.Delay(10, timeout.Token);
+        }
+        await stopping.Task.WaitAsync(timeout.Token);
+
+        var outcome = terminal.Read();
+        Assert.NotNull(outcome);
+        Assert.Equal(
+            ApplicationTerminalOutcomeCategory.PersistenceTerminalFailure,
+            outcome.Category);
+        Assert.Equal(1, outcome.ProcessExitCode);
+        Assert.False(outcome.Expected);
+        Assert.True(outcome.HostShutdownRequested);
+        Assert.Equal([1], exitCodes);
+        Assert.Equal(
+            "ApplicationFailure",
+            diagnostics.Snapshot().ShutdownTrigger);
+    }
+
+    [Fact]
     public async Task Offline_host_exports_final_diagnostics_and_persists_unchanged_canonical_events()
     {
         var connection = IntegrationTestConfiguration.GetSqlTestConnectionString();
@@ -68,6 +128,12 @@ public sealed class LiveValidationInstrumentationTests
                 Assert.Contains("OfflineDiagnostic", page);
                 Assert.Equal(4, diagnostics.Snapshot().EventsAnalyzed);
                 Assert.Equal(1, diagnostics.Snapshot().ZeroAskQuotes);
+                Assert.True(
+                    diagnostics.Snapshot()
+                        .MarketSituationPersistence.SuccessfulWriteCount >= 1);
+                Assert.True(
+                    diagnostics.Snapshot()
+                        .MarketSituationPersistence.MaximumCompactAssessmentBytes > 0);
             }
 
             Assert.True(File.Exists(output));
@@ -76,6 +142,12 @@ public sealed class LiveValidationInstrumentationTests
             Assert.Equal(4, final.RootElement.GetProperty("persistenceAcknowledgedEvents").GetInt64());
             Assert.Equal(0, final.RootElement.GetProperty("channelDepth").GetInt32());
             Assert.Equal(1, final.RootElement.GetProperty("zeroAskQuotes").GetInt64());
+            Assert.True(
+                final.RootElement.GetProperty("marketSituationPersistence")
+                    .GetProperty("successfulWriteCount").GetInt64() >= 1);
+            Assert.True(
+                final.RootElement.GetProperty("marketSituationPersistence")
+                    .GetProperty("maximumCompactAssessmentBytes").GetInt32() > 0);
             var group = final.RootElement.GetProperty("providerMetadata").EnumerateArray()
                 .Single(item => item.GetProperty("eventType").GetString() == "Quote");
             Assert.Equal("R", group.GetProperty("metadata").GetProperty("conditions")[0].GetString());
@@ -139,6 +211,15 @@ public sealed class LiveValidationInstrumentationTests
             Assert.Equal(5, final.RootElement.GetProperty("configuredDurationSeconds").GetInt32());
             Assert.Equal(JsonValueKind.String, final.RootElement.GetProperty("shutdownRequestedUtc").ValueKind);
             Assert.Equal(session, final.RootElement.GetProperty("sessionId").GetString());
+            Assert.Equal(
+                "ValidationDurationReached",
+                final.RootElement.GetProperty("terminalOutcome")
+                    .GetProperty("category").GetString());
+            Assert.True(final.RootElement.GetProperty("validationSuccessful").GetBoolean());
+            Assert.Equal(
+                0,
+                final.RootElement.GetProperty("terminalOutcome")
+                    .GetProperty("processExitCode").GetInt32());
             var exportedLog = final.RootElement.GetProperty("applicationLogPath").GetString();
             Assert.Equal(logPath, exportedLog);
             Assert.StartsWith(session + ".", Path.GetFileName(exportedLog));
@@ -176,6 +257,12 @@ public sealed class LiveValidationInstrumentationTests
             using var final = JsonDocument.Parse(await File.ReadAllTextAsync(
                 Path.Combine(directory, session + ".diagnostics.json")));
             Assert.Equal("OperatorCancellation", final.RootElement.GetProperty("shutdownTrigger").GetString());
+            Assert.Equal(
+                "CancelledByRequestedShutdown",
+                final.RootElement.GetProperty("terminalOutcome")
+                    .GetProperty("category").GetString());
+            Assert.False(
+                final.RootElement.GetProperty("validationSuccessful").GetBoolean());
             Assert.Equal(session, final.RootElement.GetProperty("sessionId").GetString());
             Assert.Contains("trigger=OperatorCancellation", await File.ReadAllTextAsync(logPath));
         }
@@ -242,9 +329,15 @@ public sealed class LiveValidationInstrumentationTests
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton<ILoggerProvider>(provider => new SessionFileLoggerProvider(
             logPath, LogRedactor.FromConfiguration(builder.Configuration), TimeProvider.System));
-        builder.Services.AddSingleton(_ =>
+        builder.Services.AddSingleton(serviceProvider =>
+            new ApplicationTerminalOutcomeTracker(
+                serviceProvider.GetRequiredService<TimeProvider>()));
+        builder.Services.AddSingleton(serviceProvider =>
         {
-            var diagnostics = new LiveValidationDiagnostics(TimeProvider.System);
+            var diagnostics = new LiveValidationDiagnostics(
+                TimeProvider.System,
+                terminalOutcome:
+                    serviceProvider.GetRequiredService<ApplicationTerminalOutcomeTracker>());
             diagnostics.Configure(session, "test", ["AAA"]);
             diagnostics.ConfigureRun(durationSeconds, logPath);
             return diagnostics;
@@ -310,6 +403,43 @@ public sealed class LiveValidationInstrumentationTests
             return Task.FromResult(PriorSessionContextBuilder.CreateView(
                 context,
                 currentReferencePrice));
+        }
+    }
+
+    private sealed class TerminalFailureSource : ILiveMarketDataSource
+    {
+        public async IAsyncEnumerable<MarketEvent> ReadEventsAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var now = DateTimeOffset.UtcNow;
+            yield return new TradeEvent(
+                "FAIL",
+                "terminal-failure",
+                now,
+                now,
+                "UnitTest",
+                "failure-event",
+                100m,
+                10);
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class TerminalFailureStore : IScannerStore
+    {
+        public TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task PersistRunAsync(
+            ScannerConfiguration configuration,
+            IReadOnlyCollection<MarketEvent> marketEvents,
+            FeatureSnapshot featureSnapshot,
+            Opportunity opportunity,
+            TradePlan tradePlan,
+            CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            throw new IOException("Controlled terminal persistence failure.");
         }
     }
 

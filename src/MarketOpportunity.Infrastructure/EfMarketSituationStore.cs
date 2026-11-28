@@ -93,6 +93,21 @@ public sealed class EfMarketSituationStore
         CancellationToken cancellationToken) =>
         PersistV2Async(evaluation, cancellationToken);
 
+    public async Task<MarketSituationPersistenceMetrics?> PersistWithMetricsAsync(
+        MarketSituationEvaluation evaluation,
+        CancellationToken cancellationToken)
+    {
+        var result = await PersistV2Async(evaluation, cancellationToken);
+        return new MarketSituationPersistenceMetrics(
+            result.CandidateSetCreated,
+            result.CandidateSourcesCreated,
+            result.AssessmentCreated,
+            result.CandidateCount,
+            result.MemberBatchCount,
+            result.CompactAssessmentBytes,
+            result.CandidateSetCreated ? result.CandidateCount : 0);
+    }
+
     public async Task<MarketSituationPersistenceWriteResult> PersistV2Async(
         MarketSituationEvaluation evaluation,
         CancellationToken cancellationToken)
