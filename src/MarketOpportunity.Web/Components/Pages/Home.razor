@@ -216,6 +216,11 @@
                                     distance to zone: @FormatStructurePrice(support.DistanceToActiveZone)
                                     (@FormatPercent(support.DistanceToActiveZonePercent))
                                 </p>
+                                <p class="muted">
+                                    Source session @support.Level.SourceSessionId · @support.Level.SourceContextMode ·
+                                    @support.Level.SourceCompleteness
+                                    @(support.Level.HistoricalSource is null ? "" : $" · {support.Level.HistoricalSource}")
+                                </p>
                             }
                             @if (situation.ResistanceInteraction is { } resistance)
                             {
@@ -226,6 +231,11 @@
                                     distance to zone: @FormatStructurePrice(resistance.DistanceToActiveZone)
                                     (@FormatPercent(resistance.DistanceToActiveZonePercent))
                                 </p>
+                                <p class="muted">
+                                    Source session @resistance.Level.SourceSessionId · @resistance.Level.SourceContextMode ·
+                                    @resistance.Level.SourceCompleteness
+                                    @(resistance.Level.HistoricalSource is null ? "" : $" · {resistance.Level.HistoricalSource}")
+                                </p>
                             }
 
                             <p class="muted">
@@ -233,20 +243,15 @@
                                 or a prediction that a level will hold, fail, or reverse.
                                 @situation.DefinitionVersion · @situation.ConfigurationVersion
                             </p>
-                            @if (situation.EligibleLevels.Count > 0)
+                            <p class="muted">
+                                Candidate evidence: @situation.TotalCandidateCount eligible levels
+                                (@situation.SupportCandidateCount support · @situation.ResistanceCandidateCount resistance)
+                                · Audit set: @CompactAuditId(situation.CandidateSetId)
+                                @(situation.IsLegacyEvidence ? " · legacy bounded projection" : "")
+                            </p>
+                            @if (situation.SelectionEvidence.Count > 0)
                             {
-                                <details>
-                                    <summary>Eligible structural reference levels (@situation.EligibleLevels.Count)</summary>
-                                    <ul class="evidence-list">
-                                        @foreach (var level in situation.EligibleLevels)
-                                        {
-                                            <li>
-                                                <strong>@LevelSourceLabel(level.Source) · @FormatStructurePrice(level.Price)</strong>
-                                                <span>Source session @level.SourceSessionId · @level.SourceCompleteness · @level.HistoricalSource</span>
-                                            </li>
-                                        }
-                                    </ul>
-                                </details>
+                                <p class="muted">@SelectionExplanation(situation)</p>
                             }
                         }
                         else
@@ -784,6 +789,17 @@
         contextMode == MarketSituationContextMode.PriorSessionEnhanced
             ? "Prior Session + Today"
             : "Today Only";
+
+    private static string CompactAuditId(string? candidateSetId) =>
+        string.IsNullOrWhiteSpace(candidateSetId)
+            ? "legacy unavailable"
+            : $"{candidateSetId[..Math.Min(12, candidateSetId.Length)]}…";
+
+    private static string SelectionExplanation(MarketSituationReadModel situation) =>
+        "Selection: " + string.Join(
+            " · ",
+            situation.SelectionEvidence.Select(item =>
+                $"{item.Role}: {item.SelectionRule} ({item.DistanceFromReferencePrice:0.0000} from current price)"));
 
     private static string MarketSituationLabel(MarketSituationType situation) => situation switch
     {

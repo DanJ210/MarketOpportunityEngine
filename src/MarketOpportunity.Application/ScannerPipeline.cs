@@ -74,7 +74,7 @@ public sealed record ScannerAnalysisResult(
     TradePlan TradePlan,
     PriorSessionContextView? PriorSessionContext = null,
     PreTradeReadinessProjection? Readiness = null,
-    MarketSituationAssessment? MarketSituation = null,
+    MarketSituationReadModel? MarketSituation = null,
     IReadOnlyList<MarketReactionReadModel>? MarketReactions = null,
     PriorSessionWarmupOutcome? PriorSessionWarmup = null);
 
@@ -83,7 +83,7 @@ public sealed record OpportunityPublicationReadModel(
     PublicationDecision Publication,
     TradePlan TradePlan,
     PreTradeReadinessReadModel? Readiness = null,
-    MarketSituationAssessment? MarketSituation = null,
+    MarketSituationReadModel? MarketSituation = null,
     IReadOnlyList<MarketReactionReadModel>? MarketReactions = null,
     PriorSessionWarmupOutcome? PriorSessionWarmup = null);
 
@@ -451,7 +451,8 @@ public sealed class ScannerPipeline(
                 priorContext,
                 configuration,
                 asOfUtc);
-            var marketSituation = marketSituationEvaluation.ProjectLegacy();
+            var marketSituation = MarketSituationReadModelFactory.From(
+                marketSituationEvaluation.Assessment);
             // Recorded analysis evaluates publication and readiness at the analysis event time so
             // that selection and the persisted assessment replay deterministically.
             var publication = _publicationGate.Evaluate(
@@ -488,7 +489,7 @@ public sealed class ScannerPipeline(
             var marketReactions = marketReactionTracker is null
                 ? null
                 : await marketReactionTracker.ObserveAsync(
-                    marketSituation,
+                    marketSituationEvaluation.Assessment,
                     stateEvents,
                     configuration,
                     assessment => CaptureReactionResearchContext(
@@ -924,7 +925,7 @@ public sealed class ScannerPipeline(
                 PublicationDecision publication;
                 PreTradeReadinessEvaluation? readinessEvaluation;
                 MarketSituationEvaluation marketSituationEvaluation;
-                MarketSituationAssessment marketSituation;
+                MarketSituationReadModel marketSituation;
                 try
                 {
                     snapshot = featureCalculator.Calculate(
@@ -946,7 +947,8 @@ public sealed class ScannerPipeline(
                         priorContext,
                         configuration,
                         now);
-                    marketSituation = marketSituationEvaluation.ProjectLegacy();
+                    marketSituation = MarketSituationReadModelFactory.From(
+                        marketSituationEvaluation.Assessment);
                     var currentStatus = CreateLiveStatus(null, now, latestReceivedTime, null);
                     publication = _publicationGate.Evaluate(
                         opportunity,
@@ -996,7 +998,7 @@ public sealed class ScannerPipeline(
                     if (marketReactionTracker is not null)
                     {
                         marketReactions = await marketReactionTracker.ObserveAsync(
-                            marketSituation,
+                            marketSituationEvaluation.Assessment,
                             batch,
                             configuration,
                             assessment => CaptureReactionResearchContext(
@@ -1222,7 +1224,7 @@ public sealed class ScannerPipeline(
             symbolState.GetEventsAsOf(assessment.AsOfUtc),
             priorContext,
             configuration,
-            assessment.AsOfUtc).ProjectLegacy();
+            assessment.AsOfUtc).Assessment;
         return new MarketReactionResearchContext(
             assessment.AsOfUtc,
             features.Id,

@@ -14,16 +14,20 @@ namespace MarketOpportunity.Infrastructure;
 /// Persists legacy v1 assessments and the normalized immutable v2 MarketSituation evidence contract.
 /// </summary>
 public sealed class EfMarketSituationStore
-    : IMarketSituationStore
+    : IMarketSituationStore, IMarketSituationEvidenceStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly MarketOpportunityDbContext _dbContext;
     private readonly MarketSituationPersistenceOptions _options;
+    private readonly MarketSituationEvidenceReadOptions _evidenceOptions;
     private readonly TimeProvider _timeProvider;
     private readonly IMarketSituationPersistenceFaultInjector? _faultInjector;
 
     public EfMarketSituationStore(MarketOpportunityDbContext dbContext)
-        : this(dbContext, new MarketSituationPersistenceOptions(), TimeProvider.System)
+        : this(
+            dbContext,
+            new MarketSituationPersistenceOptions(),
+            TimeProvider.System)
     {
     }
 
@@ -31,7 +35,8 @@ public sealed class EfMarketSituationStore
         MarketOpportunityDbContext dbContext,
         MarketSituationPersistenceOptions options,
         TimeProvider timeProvider,
-        IMarketSituationPersistenceFaultInjector? faultInjector = null)
+        IMarketSituationPersistenceFaultInjector? faultInjector = null,
+        MarketSituationEvidenceReadOptions? evidenceOptions = null)
     {
         ArgumentNullException.ThrowIfNull(dbContext);
         ArgumentNullException.ThrowIfNull(options);
@@ -41,6 +46,8 @@ public sealed class EfMarketSituationStore
         _options = options;
         _timeProvider = timeProvider;
         _faultInjector = faultInjector;
+        _evidenceOptions = evidenceOptions ?? new MarketSituationEvidenceReadOptions();
+        _evidenceOptions.Validate();
     }
 
     public async Task PersistAsync(
@@ -296,6 +303,208 @@ public sealed class EfMarketSituationStore
             compact,
             candidateSet);
     }
+
+    public async Task<MarketSituationCandidatePageReadModel?> ReadCandidatePageAsync(
+        Guid assessmentId,
+        int afterOrdinal,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        if (afterOrdinal < -1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(afterOrdinal),
+                "A MarketSituation candidate cursor must be -1 or a non-negative ordinal.");
+        }
+
+        if (pageSize < 1 || pageSize > _evidenceOptions.MaximumPageSize)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(pageSize),
+                $"MarketSituation candidate page size must be between 1 and " +
+                $"{_evidenceOptions.MaximumPageSize}.");
+        }
+
+        var assessment = await _dbContext.MarketSituationAssessments
+            .AsNoTracking()
+            .Where(item => item.Id == assessmentId)
+            .Select(item => new
+            {
+                item.Id,
+                item.PersistenceVersion,
+                item.CandidateSetId
+            })
+            .SingleOrDefaultAsync(cancellationToken);
+        if (assessment is null)
+        {
+            return null;
+        }
+
+        if (!string.Equals(
+                assessment.PersistenceVersion,
+                CompactMarketSituationAssessment.CurrentPersistenceContractVersion,
+                StringComparison.Ordinal)
+            || assessment.CandidateSetId is null)
+        {
+            throw new MarketSituationEvidenceReadException(
+                MarketSituationEvidenceReadFailure.LegacyCandidateEvidenceUnavailable,
+                $"MarketSituation assessment '{assessmentId}' uses legacy evidence without " +
+                "normalized candidate members.");
+        }
+
+        var candidateSetId = assessment.CandidateSetId;
+        var header = await ReadCompletedCandidateSetAsync(
+            candidateSetId,
+            cancellationToken);
+        var rows = await _dbContext.MarketSituationCandidateMembers
+            .AsNoTracking()
+            .Where(item =>
+                item.CandidateSetId == candidateSetId
+                && item.Ordinal > afterOrdinal)
+            .OrderBy(item => item.Ordinal)
+            .Take(pageSize + 1)
+            .ToArrayAsync(cancellationToken);
+        var hasMore = rows.Length > pageSize;
+        var pageRows = hasMore ? rows[..pageSize] : rows;
+        var sourceIds = pageRows
+            .Select(item => item.CandidateSourceId)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var sources = await ReadCandidateSourcesAsync(sourceIds, cancellationToken);
+        var members = pageRows
+            .Select(ToCandidateMemberReadModel)
+            .ToArray();
+        return new MarketSituationCandidatePageReadModel(
+            assessmentId,
+            candidateSetId,
+            header.CanonicalizationVersion,
+            header.TotalCandidateCount,
+            members.Length,
+            members.Length == 0 ? null : members[0].Ordinal,
+            members.Length == 0 ? null : members[^1].Ordinal,
+            afterOrdinal,
+            hasMore ? members[^1].Ordinal : null,
+            hasMore,
+            members,
+            sources,
+            "market-situation-candidate-read-v1");
+    }
+
+    public async Task<MarketSituationSelectedCandidateReadModel?> ReadSelectedCandidateAsync(
+        string candidateSetId,
+        Guid levelId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(candidateSetId)
+            || candidateSetId.Length != 64
+            || candidateSetId.Any(item => !Uri.IsHexDigit(item)))
+        {
+            throw new ArgumentException(
+                "CandidateSetId must be a 64-character hexadecimal value.",
+                nameof(candidateSetId));
+        }
+
+        candidateSetId = candidateSetId.ToUpperInvariant();
+        await ReadCompletedCandidateSetAsync(candidateSetId, cancellationToken);
+        var member = await _dbContext.MarketSituationCandidateMembers
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                item => item.CandidateSetId == candidateSetId && item.LevelId == levelId,
+                cancellationToken);
+        if (member is null)
+        {
+            return null;
+        }
+
+        var sources = await ReadCandidateSourcesAsync(
+            [member.CandidateSourceId],
+            cancellationToken);
+        return new MarketSituationSelectedCandidateReadModel(
+            candidateSetId,
+            ToCandidateMemberReadModel(member),
+            sources[member.CandidateSourceId]);
+    }
+
+    private async Task<MarketSituationCandidateSetEntity> ReadCompletedCandidateSetAsync(
+        string candidateSetId,
+        CancellationToken cancellationToken)
+    {
+        var header = await _dbContext.MarketSituationCandidateSets
+            .AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == candidateSetId, cancellationToken);
+        if (header is not null && header.IsComplete)
+        {
+            return header;
+        }
+
+        throw new MarketSituationEvidenceReadException(
+            MarketSituationEvidenceReadFailure.CandidateSetIncomplete,
+            header is null
+                ? $"Candidate set '{candidateSetId}' is missing."
+                : $"Candidate set '{candidateSetId}' is not complete.");
+    }
+
+    private async Task<IReadOnlyDictionary<string, MarketSituationCandidateSourceReadModel>>
+        ReadCandidateSourcesAsync(
+            IReadOnlyCollection<string> sourceIds,
+            CancellationToken cancellationToken)
+    {
+        if (sourceIds.Count == 0)
+        {
+            return new Dictionary<string, MarketSituationCandidateSourceReadModel>(
+                StringComparer.Ordinal);
+        }
+
+        var sources = await _dbContext.MarketSituationCandidateSources
+            .AsNoTracking()
+            .Where(item => sourceIds.Contains(item.Id))
+            .ToArrayAsync(cancellationToken);
+        if (sources.Length != sourceIds.Count)
+        {
+            throw new InvalidOperationException(
+                "A MarketSituation candidate page references missing normalized source evidence.");
+        }
+
+        return sources.ToDictionary(
+            item => item.Id,
+            ToCandidateSourceReadModel,
+            StringComparer.Ordinal);
+    }
+
+    private static MarketSituationCandidateMemberReadModel ToCandidateMemberReadModel(
+        MarketSituationCandidateMemberEntity entity) =>
+        new(
+            entity.Ordinal,
+            entity.LevelId,
+            Enum.Parse<ImportantPriceLevelRole>(entity.Role, true),
+            entity.Price,
+            entity.PriceCanonical,
+            entity.SourceStructuralIdentity,
+            entity.SourceEventIdentity,
+            entity.ConfirmationEventIdentity,
+            entity.SourceEventTimeUtc?.ToUniversalTime(),
+            entity.ConfirmedAtEventTimeUtc?.ToUniversalTime(),
+            entity.CandidateSourceId);
+
+    private static MarketSituationCandidateSourceReadModel ToCandidateSourceReadModel(
+        MarketSituationCandidateSourceEntity entity) =>
+        new(
+            entity.Id,
+            entity.SourceContextId,
+            entity.SourceSessionId,
+            entity.Symbol,
+            entity.CurrentSessionId,
+            entity.SourceKind,
+            entity.ContextMode,
+            entity.SourceCompleteness,
+            entity.HistoricalSource,
+            entity.SourceCoverageStartUtc?.ToUniversalTime(),
+            entity.SourceCoverageEndUtc?.ToUniversalTime(),
+            entity.StructureAlgorithmVersion,
+            entity.FeatureSetVersion,
+            entity.ContextDefinitionVersion,
+            entity.HistoricalProvider,
+            entity.HistoricalFeed);
 
     private async Task<CandidateSetWriteResult> EnsureCandidateSetAsync(
         SqlTransaction transaction,

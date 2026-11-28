@@ -82,10 +82,65 @@ public sealed class MarketReactionTracker(
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(captureResearchContext);
 
-        var scope = (situation.Symbol, situation.SessionId);
+        return await ObserveAsync(
+            situation.Symbol,
+            situation.SessionId,
+            situation.AsOfUtc,
+            situation.SupportInteraction,
+            situation.ResistanceInteraction,
+            observations,
+            configuration,
+            captureResearchContext,
+            cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<MarketReactionReadModel>> ObserveAsync(
+        CompactMarketSituationAssessment situation,
+        IReadOnlyList<MarketEvent> observations,
+        ScannerConfiguration configuration,
+        Func<MarketReactionAssessment, MarketReactionResearchContext> captureResearchContext,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(situation);
+        ArgumentNullException.ThrowIfNull(observations);
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(captureResearchContext);
+
+        var support = situation.SupportInteraction?.WithLevel(
+            situation.NearestSupportLevel
+            ?? throw new InvalidOperationException(
+                $"Compact MarketSituation assessment '{situation.Id}' has no selected support level."));
+        var resistance = situation.ResistanceInteraction?.WithLevel(
+            situation.NearestResistanceLevel
+            ?? throw new InvalidOperationException(
+                $"Compact MarketSituation assessment '{situation.Id}' has no selected resistance level."));
+        return await ObserveAsync(
+            situation.Symbol,
+            situation.SessionId,
+            situation.AsOfUtc,
+            support,
+            resistance,
+            observations,
+            configuration,
+            captureResearchContext,
+            cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<MarketReactionReadModel>> ObserveAsync(
+        string symbol,
+        string sessionId,
+        DateTimeOffset asOfUtc,
+        MarketSituationInteraction? supportInteraction,
+        MarketSituationInteraction? resistanceInteraction,
+        IReadOnlyList<MarketEvent> observations,
+        ScannerConfiguration configuration,
+        Func<MarketReactionAssessment, MarketReactionResearchContext> captureResearchContext,
+        CancellationToken cancellationToken)
+    {
+        var scope = (symbol, sessionId);
         var episodes = GetEpisodes(scope);
         var interactions = GetActiveInteractions(scope);
-        var currentInteractions = new[] { situation.SupportInteraction, situation.ResistanceInteraction }
+        var currentInteractions = new[] { supportInteraction, resistanceInteraction }
             .Where(IsEpisodeStartSituation)
             .Select(interaction => interaction!)
             .ToArray();
@@ -128,7 +183,7 @@ public sealed class MarketReactionTracker(
                      .Where(item => item.Status == MarketReactionEpisodeStatus.Active)
                      .ToArray())
         {
-            var evaluation = evaluator.Evaluate(episode, observations, situation.AsOfUtc);
+            var evaluation = evaluator.Evaluate(episode, observations, asOfUtc);
             await PersistAndCaptureAsync(scope, evaluation, captureResearchContext, cancellationToken);
             var index = episodes.FindIndex(item => item.Id == evaluation.Episode.Id);
             episodes[index] = evaluation.Episode;

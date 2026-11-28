@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using MarketOpportunity.Analytics;
 using MarketOpportunity.Application;
@@ -47,6 +48,15 @@ builder.Services.AddSingleton(priorSessionWarmupOptions);
 var marketSituationPersistenceOptions =
     MarketSituationPersistenceOptions.FromConfiguration(builder.Configuration);
 builder.Services.AddSingleton(marketSituationPersistenceOptions);
+var marketSituationEvidenceOptions = builder.Configuration
+    .GetSection("Operations:MarketSituationEvidence")
+    .Get<MarketSituationEvidenceReadOptions>() ?? new MarketSituationEvidenceReadOptions();
+marketSituationEvidenceOptions.Validate();
+builder.Services.AddSingleton(marketSituationEvidenceOptions);
+var evidenceJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+{
+    Converters = { new JsonStringEnumConverter() }
+};
 builder.Services.Configure<HostOptions>(options =>
     options.ShutdownTimeout = livePipelineOptions.GracefulShutdownTimeout + TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<Action<string, string>>(serviceProvider =>
@@ -144,7 +154,11 @@ builder.Services.AddScoped<IMarketDataSource>(serviceProvider =>
         serviceProvider.GetService<LiveValidationDiagnostics>()));
 builder.Services.AddScoped<IScannerStore, EfScannerStore>();
 builder.Services.AddScoped<IPreTradeReadinessStore, EfPreTradeReadinessStore>();
-builder.Services.AddScoped<IMarketSituationStore, EfMarketSituationStore>();
+builder.Services.AddScoped<EfMarketSituationStore>();
+builder.Services.AddScoped<IMarketSituationStore>(serviceProvider =>
+    serviceProvider.GetRequiredService<EfMarketSituationStore>());
+builder.Services.AddScoped<IMarketSituationEvidenceStore>(serviceProvider =>
+    serviceProvider.GetRequiredService<EfMarketSituationStore>());
 
 var connectionString = builder.Configuration.GetConnectionString("MarketOpportunity")
     ?? throw new InvalidOperationException(
@@ -227,6 +241,97 @@ app.MapGet("/api/v1/reactions", (string? symbol, string? sessionId, ScannerState
         .ThenBy(reaction => reaction.Assessment.Symbol, StringComparer.Ordinal)
         .ThenBy(reaction => reaction.Assessment.SessionId, StringComparer.Ordinal)
         .ToArray()));
+app.MapGet(
+    "/api/v1/market-situations/{assessmentId:guid}/candidates",
+    async (
+        Guid assessmentId,
+        int? afterOrdinal,
+        int? pageSize,
+        IMarketSituationEvidenceStore store,
+        MarketSituationEvidenceReadOptions options,
+        CancellationToken cancellationToken) =>
+    {
+        var cursor = afterOrdinal ?? -1;
+        if (cursor < -1)
+        {
+            return Results.Problem(
+                title: "Invalid candidate cursor",
+                detail: "afterOrdinal must be -1 or a non-negative canonical member ordinal.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var size = pageSize ?? options.DefaultPageSize;
+        if (size < 1 || size > options.MaximumPageSize)
+        {
+            return Results.Problem(
+                title: "Invalid candidate page size",
+                detail:
+                    $"pageSize must be between 1 and {options.MaximumPageSize}.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        MarketSituationCandidatePageReadModel? page;
+        try
+        {
+            page = await store.ReadCandidatePageAsync(
+                assessmentId,
+                cursor,
+                size,
+                cancellationToken);
+        }
+        catch (MarketSituationEvidenceReadException exception)
+            when (exception.Failure ==
+                MarketSituationEvidenceReadFailure.LegacyCandidateEvidenceUnavailable)
+        {
+            return Results.Problem(
+                title: "Legacy candidate evidence unavailable",
+                detail: exception.Message,
+                statusCode: StatusCodes.Status409Conflict,
+                extensions: new Dictionary<string, object?>
+                {
+                    ["code"] = "LegacyCandidateEvidenceUnavailable"
+                });
+        }
+        catch (MarketSituationEvidenceReadException exception)
+            when (exception.Failure ==
+                MarketSituationEvidenceReadFailure.CandidateSetIncomplete)
+        {
+            return Results.Problem(
+                title: "Candidate evidence incomplete",
+                detail: exception.Message,
+                statusCode: StatusCodes.Status409Conflict,
+                extensions: new Dictionary<string, object?>
+                {
+                    ["code"] = "CandidateSetIncomplete"
+                });
+        }
+
+        if (page is null)
+        {
+            return Results.NotFound();
+        }
+
+        var serializedBytes = JsonSerializer.SerializeToUtf8Bytes(
+            page,
+            evidenceJsonOptions).Length;
+        return serializedBytes > options.MaximumSerializedPageBytes
+            ? Results.Problem(
+                title: "Candidate evidence page too large",
+                detail:
+                    $"The serialized page is {serializedBytes} bytes; the operational limit is " +
+                    $"{options.MaximumSerializedPageBytes} bytes.",
+                statusCode: StatusCodes.Status413PayloadTooLarge,
+                extensions: new Dictionary<string, object?>
+                {
+                    ["code"] = "CandidateEvidencePageTooLarge"
+                })
+            : Results.Ok(page);
+    })
+    .WithName("GetMarketSituationCandidateEvidence")
+    .WithSummary("Read bounded paged candidate evidence for a MarketSituation assessment.")
+    .WithDescription(
+        "Read-only diagnostic evidence in deterministic canonical ordinal order. " +
+        "Repeated paging can return the full immutable candidate set.");
 app.MapGet("/api/v1/symbols/{symbol}/snapshot", (string symbol, string? sessionId, ScannerState scanner) =>
 {
     var snapshots = scanner.Read().Results

@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using MarketOpportunity.Analytics;
+using MarketOpportunity.Application;
 using MarketOpportunity.Domain;
 using MarketOpportunity.Infrastructure;
 using Microsoft.Data.SqlClient;
@@ -109,6 +111,143 @@ public sealed class MarketSituationV2PersistenceTests
                 Assert.Equal(pinned.Level.SourceSessionId, episode.LevelSourceSessionId);
                 Assert.Equal(pinned.Level.HistoricalProvider, episode.HistoricalProvider);
                 Assert.Equal(pinned.Level.HistoricalFeed, episode.HistoricalFeed);
+            }
+        }
+        finally
+        {
+            if (schemaReady)
+            {
+                await CleanupAsync(connectionString, evaluation);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Candidate_evidence_pages_in_canonical_order_and_resolves_selected_members()
+    {
+        var (connectionString, databaseName) = GetTestConnection();
+        var token = Guid.NewGuid().ToString("N")[..12];
+        var evaluation = Evaluation($"PG{token}", $"session-{token}", 17);
+        var schemaReady = false;
+        try
+        {
+            await PrepareSchemaAsync(connectionString, databaseName);
+            schemaReady = true;
+            await using (var context = CreateContext(connectionString))
+            {
+                var store = new EfMarketSituationStore(context);
+                await store.PersistV2Async(evaluation, CancellationToken.None);
+                var ordinals = new List<int>();
+                var afterOrdinal = -1;
+                do
+                {
+                    var page = await store.ReadCandidatePageAsync(
+                        evaluation.Assessment.Id,
+                        afterOrdinal,
+                        4,
+                        CancellationToken.None);
+                    Assert.NotNull(page);
+                    Assert.Equal(evaluation.CandidateSet.CandidateSetId, page.CandidateSetId);
+                    Assert.Equal(17, page.TotalCandidateCount);
+                    Assert.All(
+                        page.Members,
+                        member => Assert.Contains(member.CandidateSourceId, page.Sources.Keys));
+                    ordinals.AddRange(page.Members.Select(item => item.Ordinal));
+                    afterOrdinal = page.NextAfterOrdinal ?? afterOrdinal;
+                    if (!page.HasMore)
+                    {
+                        break;
+                    }
+                } while (true);
+
+                Assert.Equal(Enumerable.Range(0, 17), ordinals);
+                Assert.Null(await store.ReadCandidatePageAsync(
+                    Guid.NewGuid(),
+                    -1,
+                    4,
+                    CancellationToken.None));
+                await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+                    store.ReadCandidatePageAsync(
+                        evaluation.Assessment.Id,
+                        -1,
+                        65,
+                        CancellationToken.None));
+                await Assert.ThrowsAsync<ArgumentException>(() =>
+                    store.ReadSelectedCandidateAsync(
+                        "not-a-candidate-set",
+                        Guid.NewGuid(),
+                        CancellationToken.None));
+
+                var selected = await store.ReadSelectedCandidateAsync(
+                    evaluation.CandidateSet.CandidateSetId,
+                    evaluation.Assessment.NearestSupportLevel!.Id,
+                    CancellationToken.None);
+                Assert.NotNull(selected);
+                Assert.Equal(
+                    evaluation.Assessment.NearestSupportLevel.Id,
+                    selected.Member.LevelId);
+                Assert.Equal(selected.Source.Id, selected.Member.CandidateSourceId);
+                Assert.Equal(
+                    evaluation.Assessment.NearestSupportLevel.Price,
+                    selected.Member.Price);
+                Assert.Null(await store.ReadSelectedCandidateAsync(
+                    evaluation.CandidateSet.CandidateSetId,
+                    Guid.NewGuid(),
+                    CancellationToken.None));
+            }
+        }
+        finally
+        {
+            if (schemaReady)
+            {
+                await CleanupAsync(connectionString, evaluation);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Legacy_candidate_evidence_reports_explicitly_without_normalized_backfill()
+    {
+        var (connectionString, databaseName) = GetTestConnection();
+        var token = Guid.NewGuid().ToString("N")[..12];
+        var evaluation = Evaluation($"LV{token}", $"session-{token}", 3);
+        var legacy = evaluation.ProjectLegacy();
+        var schemaReady = false;
+        try
+        {
+            await PrepareSchemaAsync(connectionString, databaseName);
+            schemaReady = true;
+            await using (var context = CreateContext(connectionString))
+            {
+                await new EfMarketSituationStore(context).PersistAsync(
+                    legacy,
+                    CancellationToken.None);
+            }
+
+            await using (var readContext = CreateContext(connectionString))
+            {
+                var store = new EfMarketSituationStore(readContext);
+                var exception = await Assert.ThrowsAsync<MarketSituationEvidenceReadException>(
+                    () => store.ReadCandidatePageAsync(
+                        legacy.Id,
+                        -1,
+                        4,
+                        CancellationToken.None));
+                Assert.Equal(
+                    MarketSituationEvidenceReadFailure.LegacyCandidateEvidenceUnavailable,
+                    exception.Failure);
+                Assert.Equal(
+                    0,
+                    await readContext.MarketSituationCandidateSets
+                        .CountAsync(
+                            item => item.Id == evaluation.CandidateSet.CandidateSetId,
+                            CancellationToken.None));
+                Assert.Equal(
+                    0,
+                    await readContext.MarketSituationCandidateMembers
+                        .CountAsync(
+                            item => item.CandidateSetId == evaluation.CandidateSet.CandidateSetId,
+                            CancellationToken.None));
             }
         }
         finally
@@ -295,12 +434,26 @@ public sealed class MarketSituationV2PersistenceTests
             MarketSituationPersistenceWriteResult result;
             await using (var context = CreateContext(connectionString))
             {
-                result = await new EfMarketSituationStore(
+                var store = new EfMarketSituationStore(
                     context,
                     new MarketSituationPersistenceOptions { CandidateMemberBatchSize = 1_000 },
-                    TimeProvider.System).PersistV2Async(evaluation, CancellationToken.None);
+                    TimeProvider.System);
+                result = await store.PersistV2Async(evaluation, CancellationToken.None);
                 Assert.Equal(                100_005, await context.MarketSituationCandidateMembers.CountAsync(
                     item => item.CandidateSetId == evaluation.CandidateSet.CandidateSetId));
+                var page = await store.ReadCandidatePageAsync(
+                    evaluation.Assessment.Id,
+                    -1,
+                    64,
+                    CancellationToken.None);
+                Assert.NotNull(page);
+                Assert.Equal(64, page.ReturnedCount);
+                Assert.True(page.HasMore);
+                var pageBytes = Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(page));
+                Assert.True(pageBytes <= 64 * 1024);
+                Console.WriteLine(
+                    $"Large MarketSituation forensic page: {page.ReturnedCount} members, " +
+                    $"{pageBytes} bytes.");
             }
 
             stopwatch.Stop();

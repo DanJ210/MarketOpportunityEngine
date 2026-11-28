@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Net;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using MarketOpportunity.Analytics;
 using MarketOpportunity.Application;
@@ -15,6 +17,197 @@ namespace MarketOpportunity.IntegrationTests;
 
 public sealed class StructureWebApplicationTests
 {
+    [Fact]
+    public async Task Forensic_candidate_api_pages_bounded_immutable_evidence()
+    {
+        await using var factory = new StructureApplicationFactory(useFixtureSource: true);
+        using var client = factory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var firstResponse = await client.GetAsync(
+            $"/api/v1/market-situations/{InMemoryMarketSituationEvidenceStore.KnownAssessmentId}/candidates" +
+            "?pageSize=3",
+            timeout.Token);
+        using (firstResponse)
+        using (var firstJson = JsonDocument.Parse(
+                   await firstResponse.Content.ReadAsStringAsync(timeout.Token)))
+        {
+            Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+            Assert.Equal(3, firstJson.RootElement.GetProperty("returnedCount").GetInt32());
+            Assert.Equal(0, firstJson.RootElement.GetProperty("firstOrdinal").GetInt32());
+            Assert.Equal(2, firstJson.RootElement.GetProperty("lastOrdinal").GetInt32());
+            Assert.True(firstJson.RootElement.GetProperty("hasMore").GetBoolean());
+            Assert.Equal(2, firstJson.RootElement.GetProperty("nextAfterOrdinal").GetInt32());
+        }
+
+        var secondResponse = await client.GetAsync(
+            $"/api/v1/market-situations/{InMemoryMarketSituationEvidenceStore.KnownAssessmentId}/candidates" +
+            "?afterOrdinal=2&pageSize=3",
+            timeout.Token);
+        using (secondResponse)
+        using (var secondJson = JsonDocument.Parse(
+                   await secondResponse.Content.ReadAsStringAsync(timeout.Token)))
+        {
+            Assert.Equal(HttpStatusCode.OK, secondResponse.StatusCode);
+            Assert.Equal(
+                [3, 4, 5],
+                secondJson.RootElement.GetProperty("members").EnumerateArray()
+                    .Select(item => item.GetProperty("ordinal").GetInt32())
+                    .ToArray());
+        }
+
+        using var unknown = await client.GetAsync(
+            $"/api/v1/market-situations/{Guid.NewGuid()}/candidates",
+            timeout.Token);
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+
+        using var legacy = await client.GetAsync(
+            $"/api/v1/market-situations/{InMemoryMarketSituationEvidenceStore.LegacyAssessmentId}/candidates",
+            timeout.Token);
+        Assert.Equal(HttpStatusCode.Conflict, legacy.StatusCode);
+        Assert.Contains(
+            "LegacyCandidateEvidenceUnavailable",
+            await legacy.Content.ReadAsStringAsync(timeout.Token),
+            StringComparison.Ordinal);
+
+        using var invalidCursor = await client.GetAsync(
+            $"/api/v1/market-situations/{InMemoryMarketSituationEvidenceStore.KnownAssessmentId}/candidates" +
+            "?afterOrdinal=-2",
+            timeout.Token);
+        Assert.Equal(HttpStatusCode.BadRequest, invalidCursor.StatusCode);
+
+        using var invalidPageSize = await client.GetAsync(
+            $"/api/v1/market-situations/{InMemoryMarketSituationEvidenceStore.KnownAssessmentId}/candidates" +
+            "?pageSize=65",
+            timeout.Token);
+        Assert.Equal(HttpStatusCode.BadRequest, invalidPageSize.StatusCode);
+
+        using var oversized = await client.GetAsync(
+            $"/api/v1/market-situations/{InMemoryMarketSituationEvidenceStore.OversizedAssessmentId}/candidates" +
+            "?pageSize=1",
+            timeout.Token);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, oversized.StatusCode);
+        Assert.Contains(
+            "CandidateEvidencePageTooLarge",
+            await oversized.Content.ReadAsStringAsync(timeout.Token),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Hosted_normal_opportunity_and_dashboard_are_bounded_for_large_candidate_set()
+    {
+        await using var factory = new StructureApplicationFactory();
+        using var client = factory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        JsonDocument? smallJson = null;
+        while (smallJson is null && !timeout.IsCancellationRequested)
+        {
+            using var response = await client.GetAsync("/api/v1/opportunities", timeout.Token);
+            if (response.StatusCode == HttpStatusCode.OK)
+            {
+                var json = await response.Content.ReadAsStringAsync(timeout.Token);
+                var document = JsonDocument.Parse(json);
+                if (document.RootElement.GetArrayLength() > 0)
+                {
+                    smallJson = document;
+                    break;
+                }
+
+                document.Dispose();
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token);
+        }
+
+        Assert.NotNull(smallJson);
+        using (smallJson)
+        {
+            var smallText = smallJson.RootElement.GetRawText();
+            var smallBytes = Encoding.UTF8.GetByteCount(smallText);
+            var scanner = factory.Services.GetRequiredService<ScannerState>();
+            var state = scanner.Read();
+            var result = Assert.Single(state.Results);
+            var existing = Assert.IsType<MarketSituationReadModel>(result.MarketSituation);
+            Assert.NotNull(existing.NearestSupportLevel);
+            var selected = existing.NearestSupportLevel;
+            var candidateLevels = Enumerable.Range(1, 100_005)
+                .Select(index => selected with
+                {
+                    Id = new Guid(index, 0, 0, new byte[8]),
+                    SourceStructuralIdentity = new Guid(index, 1, 0, new byte[8]),
+                    Price = index == 1 ? selected.Price : 200m + index * 0.01m
+                })
+                .ToArray();
+            var candidateSet = MarketSituationCandidateSet.Create(
+                existing.FeatureSnapshotId,
+                existing.PriorSessionContextId,
+                existing.Symbol,
+                existing.SessionId,
+                existing.AsOfUtc,
+                existing.ContextMode,
+                candidateLevels,
+                existing.TestZonePercent,
+                existing.ApproachDistancePercent,
+                existing.DefinitionVersion,
+                existing.FeatureSetVersion,
+                existing.ConfigurationVersion,
+                existing.MarketData,
+                existing.DataQuality,
+                existing.MarketStructureStatus,
+                existing.HasCompleteCurrentSessionData);
+            var largeReadModel = existing with
+            {
+                CandidateSetId = candidateSet.CandidateSetId,
+                SupportCandidateCount = candidateSet.SupportCandidateCount,
+                ResistanceCandidateCount = candidateSet.ResistanceCandidateCount,
+                TotalCandidateCount = candidateSet.TotalCandidateCount
+            };
+            scanner.SetResults(
+                state.Status,
+                [result with { MarketSituation = largeReadModel }],
+                result.Features.AsOfUtc);
+
+            using var largeResponse = await client.GetAsync("/api/v1/opportunities", timeout.Token);
+            var largeText = await largeResponse.Content.ReadAsStringAsync(timeout.Token);
+            using var largeJson = JsonDocument.Parse(largeText);
+            var opportunityItem = Assert.Single(largeJson.RootElement.EnumerateArray());
+            var marketSituation = opportunityItem.GetProperty("marketSituation");
+            var largeBytes = Encoding.UTF8.GetByteCount(largeText);
+            Assert.Equal(HttpStatusCode.OK, largeResponse.StatusCode);
+            Assert.Equal(100_005, marketSituation.GetProperty("totalCandidateCount").GetInt32());
+            Assert.False(marketSituation.TryGetProperty("eligibleLevels", out _));
+            Assert.True(largeBytes <= smallBytes + 256);
+            Assert.True(largeBytes < MarketSituationReadModelFactory.MaximumNormalSerializedBytes);
+            var normalProperties = scanner.Read().Results.Single().MarketSituation!
+                .GetType().GetProperties();
+            Assert.DoesNotContain(
+                normalProperties,
+                item => item.Name is "CandidateSet" or "EligibleLevels");
+            Assert.DoesNotContain(
+                normalProperties,
+                item => item.PropertyType == typeof(MarketSituationCandidateSet));
+
+            using var detailResponse = await client.GetAsync(
+                $"/api/v1/opportunities/{opportunityItem.GetProperty("opportunity").GetProperty("id").GetGuid()}",
+                timeout.Token);
+            using var detailJson = JsonDocument.Parse(
+                await detailResponse.Content.ReadAsStringAsync(timeout.Token));
+            Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
+            Assert.False(
+                detailJson.RootElement.GetProperty("marketSituation")
+                    .TryGetProperty("eligibleLevels", out _));
+
+            var html = await client.GetStringAsync("/", timeout.Token);
+            Assert.Contains("Candidate evidence: 100005 eligible levels", html);
+            Assert.Contains("Selection: Support", html);
+            Assert.Contains("Source session", html);
+            Assert.DoesNotContain("Eligible structural reference levels", html);
+            Assert.DoesNotContain(candidateLevels[^1].Id.ToString(), html, StringComparison.Ordinal);
+            Console.WriteLine(
+                $"Normal MarketSituation API: small={smallBytes} bytes, 100005-candidate=" +
+                $"{largeBytes} bytes, budget={MarketSituationReadModelFactory.MaximumNormalSerializedBytes}.");
+        }
+    }
+
     [Fact]
     public async Task Hosted_fixture_api_and_dashboard_keep_structure_descriptive_and_offline()
     {
@@ -60,10 +253,9 @@ public sealed class StructureWebApplicationTests
                 .First(item => item.GetProperty("sessionId").GetString() == "fixture-2026-10-22");
             Assert.Equal("market-situation-v1", marketSituation.GetProperty("definitionVersion").GetString());
             Assert.Equal("CurrentSessionOnly", marketSituation.GetProperty("contextMode").GetString());
-            Assert.DoesNotContain(
-                marketSituation.GetProperty("eligibleLevels").EnumerateArray(),
-                item => item.GetProperty("source").GetString() is "PriorSwingHigh"
-                    or "PriorSwingLow" or "PriorSessionHigh" or "PriorSessionLow");
+            Assert.False(marketSituation.TryGetProperty("eligibleLevels", out _));
+            Assert.True(marketSituation.GetProperty("candidateSetId").GetString()?.Length == 64);
+            Assert.True(marketSituation.GetProperty("totalCandidateCount").GetInt32() >= 0);
         }
 
         using (var reactionsResponse = await client.GetAsync(
@@ -800,9 +992,12 @@ public sealed class StructureWebApplicationTests
             Assert.Equal("market-situation-v1", marketSituation.GetProperty("definitionVersion").GetString());
             Assert.Equal("STRUCT", marketSituation.GetProperty("symbol").GetString());
             Assert.Equal("CurrentSessionOnly", marketSituation.GetProperty("contextMode").GetString());
-            Assert.Contains(
-                marketSituation.GetProperty("eligibleLevels").EnumerateArray(),
-                item => item.GetProperty("source").GetString() == "CurrentSwingLow");
+            Assert.False(marketSituation.TryGetProperty("eligibleLevels", out _));
+            Assert.Equal(64, marketSituation.GetProperty("candidateSetId").GetString()!.Length);
+            Assert.True(marketSituation.GetProperty("supportCandidateCount").GetInt32() > 0);
+            Assert.Equal(
+                JsonValueKind.Object,
+                marketSituation.GetProperty("nearestSupportLevel").ValueKind);
             Assert.Equal(
                 "TestingResistance",
                 marketSituation.GetProperty("resistanceInteraction").GetProperty("situationType").GetString());
@@ -812,6 +1007,8 @@ public sealed class StructureWebApplicationTests
         var html = await client.GetStringAsync("/", timeout.Token);
         Assert.Contains("MARKET SITUATION", html);
         Assert.Contains("Testing Resistance", html);
+        Assert.Contains("Candidate evidence:", html);
+        Assert.DoesNotContain("Eligible structural reference levels", html);
         Assert.Contains("Latest swing high: $107.00", html);
         Assert.Contains("TRADE PLAN", html);
         Assert.Contains("Candidate geometry only", html);
@@ -1010,6 +1207,7 @@ public sealed class StructureWebApplicationTests
         public InMemoryReadinessStore ReadinessStore { get; } = new();
 
         public InMemoryMarketSituationStore MarketSituationStore { get; } = new();
+        public InMemoryMarketSituationEvidenceStore EvidenceStore { get; } = new();
 
         protected override IHost CreateHost(IHostBuilder builder)
         {
@@ -1074,6 +1272,8 @@ public sealed class StructureWebApplicationTests
                 services.AddSingleton<IPreTradeReadinessStore>(ReadinessStore);
                 services.RemoveAll<IMarketSituationStore>();
                 services.AddSingleton<IMarketSituationStore>(MarketSituationStore);
+                services.RemoveAll<IMarketSituationEvidenceStore>();
+                services.AddSingleton<IMarketSituationEvidenceStore>(EvidenceStore);
                 services.RemoveAll<IMarketReactionStore>();
                 services.AddSingleton<IMarketReactionStore>(_reactionStore);
             });
@@ -1185,7 +1385,107 @@ public sealed class StructureWebApplicationTests
             Persisted.Add(assessment);
             return Task.CompletedTask;
         }
+    }
 
+    private sealed class InMemoryMarketSituationEvidenceStore : IMarketSituationEvidenceStore
+    {
+        public static readonly Guid KnownAssessmentId =
+            new("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        public static readonly Guid LegacyAssessmentId =
+            new("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        public static readonly Guid OversizedAssessmentId =
+            new("cccccccc-cccc-cccc-cccc-cccccccccccc");
+
+        private const string CandidateSetId =
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+        public Task<MarketSituationCandidatePageReadModel?> ReadCandidatePageAsync(
+            Guid assessmentId,
+            int afterOrdinal,
+            int pageSize,
+            CancellationToken cancellationToken)
+        {
+            if (assessmentId == LegacyAssessmentId)
+            {
+                throw new MarketSituationEvidenceReadException(
+                    MarketSituationEvidenceReadFailure.LegacyCandidateEvidenceUnavailable,
+                    "Legacy evidence does not have normalized members.");
+            }
+
+            if (assessmentId != KnownAssessmentId && assessmentId != OversizedAssessmentId)
+            {
+                return Task.FromResult<MarketSituationCandidatePageReadModel?>(null);
+            }
+
+            var oversized = assessmentId == OversizedAssessmentId;
+            var source = new MarketSituationCandidateSourceReadModel(
+                "source-a",
+                Guid.NewGuid(),
+                "prior-session",
+                "STRUCT",
+                "hosted-structure",
+                "PriorSwingHigh",
+                "PriorSessionEnhanced",
+                oversized ? new string('x', 70_000) : "Complete",
+                "in-memory",
+                null,
+                null,
+                "session-swing-fractal-v1",
+                "features-v16",
+                "prior-session-context-v1",
+                null,
+                null);
+            var members = Enumerable.Range(0, 8)
+                .Select(ordinal => new MarketSituationCandidateMemberReadModel(
+                    ordinal,
+                    new Guid(ordinal + 1, 0, 0, new byte[8]),
+                    ImportantPriceLevelRole.Support,
+                    100m + ordinal,
+                    (100m + ordinal).ToString("G29", CultureInfo.InvariantCulture),
+                    new Guid(ordinal + 1, 1, 0, new byte[8]),
+                    $"origin-{ordinal}",
+                    $"confirmation-{ordinal}",
+                    new DateTimeOffset(2026, 10, 23, 14, 30, ordinal, TimeSpan.Zero),
+                    new DateTimeOffset(
+                        2026,
+                        10,
+                        23,
+                        14,
+                        30,
+                        ordinal + 1,
+                        TimeSpan.Zero),
+                    source.Id))
+                .Where(item => item.Ordinal > afterOrdinal)
+                .Take(pageSize + 1)
+                .ToArray();
+            var hasMore = members.Length > pageSize;
+            var pageMembers = hasMore ? members[..pageSize] : members;
+            return Task.FromResult<MarketSituationCandidatePageReadModel?>(
+                new MarketSituationCandidatePageReadModel(
+                    assessmentId,
+                    CandidateSetId,
+                    "market-situation-candidate-set-v1",
+                    8,
+                    pageMembers.Length,
+                    pageMembers.Length == 0 ? null : pageMembers[0].Ordinal,
+                    pageMembers.Length == 0 ? null : pageMembers[^1].Ordinal,
+                    afterOrdinal,
+                    hasMore ? pageMembers[^1].Ordinal : null,
+                    hasMore,
+                    pageMembers,
+                    new Dictionary<string, MarketSituationCandidateSourceReadModel>(
+                        StringComparer.Ordinal)
+                    {
+                        [source.Id] = source
+                    },
+                    "market-situation-candidate-read-v1"));
+        }
+
+        public Task<MarketSituationSelectedCandidateReadModel?> ReadSelectedCandidateAsync(
+            string candidateSetId,
+            Guid levelId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<MarketSituationSelectedCandidateReadModel?>(null);
     }
 
     private sealed class InMemoryReactionStore : IMarketReactionStore

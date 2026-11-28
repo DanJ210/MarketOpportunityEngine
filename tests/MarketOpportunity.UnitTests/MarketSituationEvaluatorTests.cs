@@ -1,5 +1,7 @@
+using System.Text;
 using System.Text.Json;
 using MarketOpportunity.Analytics;
+using MarketOpportunity.Application;
 using MarketOpportunity.Domain;
 
 namespace MarketOpportunity.UnitTests;
@@ -657,6 +659,84 @@ public sealed class MarketSituationEvaluatorTests
         Assert.DoesNotContain("EligibleLevels", compactJson, StringComparison.Ordinal);
         Assert.DoesNotContain(losers[^1].SourceSwingId.ToString(), compactJson, StringComparison.Ordinal);
         Assert.Equal(evaluation.CandidateSet.EligibleLevels, evaluation.ProjectLegacy().EligibleLevels);
+    }
+
+    [Fact]
+    public void Normal_read_model_remains_bounded_and_nearly_constant_for_large_candidate_universe()
+    {
+        const int candidateCount = 100_005;
+        var small = DetailedSupportEvaluation(1);
+        var largeLosers = Enumerable.Range(2, candidateCount - 1)
+            .Select(index => Candidate(
+                StructuralLevelType.Support,
+                200m + index * 0.01m,
+                index))
+            .Prepend(Candidate(StructuralLevelType.Support, 99.95m, 1))
+            .ToArray();
+        var events = CreateTrades([100m]);
+        var snapshot = Snapshot(events, _configuration);
+        var large = _evaluator.EvaluateWithEvidence(
+            snapshot,
+            events,
+            ToView(AvailableContext(largeLosers, [], null, null), snapshot.ReferencePrice),
+            _configuration,
+            snapshot.AsOfUtc);
+
+        var smallReadModel = MarketSituationReadModelFactory.From(small.Assessment);
+        var largeReadModel = MarketSituationReadModelFactory.From(large.Assessment);
+        var smallJson = JsonSerializer.Serialize(smallReadModel);
+        var largeJson = JsonSerializer.Serialize(largeReadModel);
+        var smallBytes = Encoding.UTF8.GetByteCount(smallJson);
+        var largeBytes = Encoding.UTF8.GetByteCount(largeJson);
+
+        Assert.Equal(small.CandidateSet.CandidateSetId, smallReadModel.CandidateSetId);
+        Assert.Equal(candidateCount, largeReadModel.TotalCandidateCount);
+        Assert.Equal(large.CandidateSet.CandidateSetId, largeReadModel.CandidateSetId);
+        Assert.Equal(99.95m, largeReadModel.NearestSupportLevel!.Price);
+        Assert.DoesNotContain("EligibleLevels", largeJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("members", largeJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(largeLosers[^1].SourceSwingId.ToString(), largeJson, StringComparison.Ordinal);
+        Assert.True(largeBytes <= MarketSituationReadModelFactory.MaximumNormalSerializedBytes);
+        Assert.True(Math.Abs(largeBytes - smallBytes) < 128);
+        Console.WriteLine(
+            $"Compact MarketSituation read models: small={smallBytes} bytes, " +
+            $"100005-candidate={largeBytes} bytes, budget=" +
+            $"{MarketSituationReadModelFactory.MaximumNormalSerializedBytes}.");
+    }
+
+    [Fact]
+    public void Legacy_projection_is_bounded_without_emitting_losing_candidates()
+    {
+        var evaluation = DetailedSupportEvaluation(25);
+        var legacy = evaluation.ProjectLegacy();
+        var readModel = MarketSituationReadModelFactory.FromLegacy(legacy);
+        var json = JsonSerializer.Serialize(readModel);
+
+        Assert.True(readModel.IsLegacyEvidence);
+        Assert.Null(readModel.CandidateSetId);
+        Assert.Equal(legacy.EligibleLevels.Count, readModel.TotalCandidateCount);
+        Assert.Equal(legacy.SupportInteraction, readModel.SupportInteraction);
+        Assert.DoesNotContain("EligibleLevels", json, StringComparison.Ordinal);
+        Assert.True(Encoding.UTF8.GetByteCount(json) <=
+            MarketSituationReadModelFactory.MaximumNormalSerializedBytes);
+    }
+
+    private MarketSituationEvaluation DetailedSupportEvaluation(int candidateCount)
+    {
+        var supports = Enumerable.Range(1, candidateCount)
+            .Select(index => Candidate(
+                StructuralLevelType.Support,
+                index == 1 ? 99.95m : 200m + index * 0.01m,
+                index))
+            .ToArray();
+        var events = CreateTrades([100m]);
+        var snapshot = Snapshot(events, _configuration);
+        return _evaluator.EvaluateWithEvidence(
+            snapshot,
+            events,
+            ToView(AvailableContext(supports, [], null, null), snapshot.ReferencePrice),
+            _configuration,
+            snapshot.AsOfUtc);
     }
 
     private MarketSituationAssessment Evaluate(
