@@ -430,17 +430,24 @@ public sealed class MarketSituationV2PersistenceTests
         {
             await PrepareSchemaAsync(connectionString, databaseName);
             schemaReady = true;
-            var stopwatch = Stopwatch.StartNew();
             MarketSituationPersistenceWriteResult result;
+            MarketSituationPersistenceWriteResult replay;
+            TimeSpan firstElapsed;
+            TimeSpan reuseElapsed;
             await using (var context = CreateContext(connectionString))
             {
                 var store = new EfMarketSituationStore(
                     context,
                     new MarketSituationPersistenceOptions { CandidateMemberBatchSize = 1_000 },
                     TimeProvider.System);
+                var firstStopwatch = Stopwatch.StartNew();
                 result = await store.PersistV2Async(evaluation, CancellationToken.None);
+                firstElapsed = firstStopwatch.Elapsed;
                 Assert.Equal(                100_005, await context.MarketSituationCandidateMembers.CountAsync(
                     item => item.CandidateSetId == evaluation.CandidateSet.CandidateSetId));
+                var replayStopwatch = Stopwatch.StartNew();
+                replay = await store.PersistV2Async(evaluation, CancellationToken.None);
+                reuseElapsed = replayStopwatch.Elapsed;
                 var page = await store.ReadCandidatePageAsync(
                     evaluation.Assessment.Id,
                     -1,
@@ -456,16 +463,20 @@ public sealed class MarketSituationV2PersistenceTests
                     $"{pageBytes} bytes.");
             }
 
-            stopwatch.Stop();
             Assert.True(result.CandidateSetCreated);
             Assert.Equal(101, result.MemberBatchCount);
             Assert.Equal(100_005, result.CandidateCount);
             Assert.True(result.CompactAssessmentBytes < 16 * 1024);
             Assert.Equal(result.CompactAssessmentBytes, result.LargestCompactParameterBytes);
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromMinutes(2));
+            Assert.False(replay.CandidateSetCreated);
+            Assert.False(replay.AssessmentCreated);
+            Assert.Equal(0, replay.MemberBatchCount);
+            Assert.True(firstElapsed < TimeSpan.FromMinutes(2));
+            Assert.True(reuseElapsed < TimeSpan.FromMinutes(2));
             Console.WriteLine(
                 $"Large MarketSituation SQL persistence: {result.CandidateCount} candidates, " +
-                $"{result.MemberBatchCount} batches, {stopwatch.Elapsed.TotalSeconds:F3}s, " +
+                $"{result.MemberBatchCount} batches, first={firstElapsed.TotalSeconds:F3}s, " +
+                $"reuse={reuseElapsed.TotalSeconds:F3}s, " +
                 $"{result.CompactAssessmentBytes} compact bytes.");
         }
         finally

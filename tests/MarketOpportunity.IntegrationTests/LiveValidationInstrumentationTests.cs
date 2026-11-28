@@ -1,3 +1,4 @@
+using System.Net;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -20,6 +21,101 @@ namespace MarketOpportunity.IntegrationTests;
 
 public sealed class LiveValidationInstrumentationTests
 {
+    [Fact]
+    public async Task Sustained_sql_backed_host_drains_repeated_persistence_batches()
+    {
+        var connection = IntegrationTestConfiguration.GetSqlTestConnectionString();
+        var session = "a1-sustained-" + Guid.NewGuid().ToString("N");
+        var directory = Path.Combine(Path.GetTempPath(), session);
+        var start = DateTimeOffset.UtcNow.AddSeconds(-20);
+        var events = Enumerable.Range(0, 16)
+            .Select(index => (MarketEvent)new TradeEvent(
+                "SUST",
+                session,
+                start.AddSeconds(index),
+                start.AddSeconds(index).AddMilliseconds(10),
+                "OfflineSustained",
+                $"sustained-{index}",
+                100m + index * 0.01m,
+                10))
+            .ToArray();
+        try
+        {
+            await using (var factory = new DiagnosticFactory(
+                connection,
+                session,
+                directory,
+                events,
+                delayedBatches: true))
+            {
+                using var client = factory.CreateClient();
+                var diagnostics = factory.Services.GetRequiredService<LiveValidationDiagnostics>();
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(40));
+                while (diagnostics.Snapshot().PersistenceAcknowledgedEvents < events.Length)
+                {
+                    await Task.Delay(25, timeout.Token);
+                }
+
+                using var opportunities = await client.GetAsync(
+                    "/api/v1/opportunities",
+                    timeout.Token);
+                Assert.Equal(HttpStatusCode.OK, opportunities.StatusCode);
+                var snapshot = diagnostics.Snapshot();
+                Assert.Equal(events.Length, snapshot.AcceptedEvents);
+                Assert.Equal(events.Length, snapshot.DequeuedEvents);
+                Assert.Equal(events.Length, snapshot.EventsAnalyzed);
+                Assert.Equal(events.Length, snapshot.PersistenceAcknowledgedEvents);
+                Assert.InRange(snapshot.PersistenceBatches, 4, 5);
+                Assert.Equal(0, snapshot.PersistenceFailures);
+                Assert.Equal(0, snapshot.RemainingEvents);
+                Assert.Equal(0, snapshot.ChannelDepth);
+                Assert.Equal(5000, snapshot.ChannelCapacity);
+                Assert.False(snapshot.ChannelCapacityReached);
+                Assert.Equal(0, snapshot.ChannelBackpressureWaits);
+                Assert.True(snapshot.MarketSituationPersistence.SuccessfulWriteCount >= 4);
+                Assert.True(
+                    snapshot.MarketSituationPersistence.MaximumCompactAssessmentBytes > 0);
+                Assert.True(
+                    snapshot.MarketSituationPersistence.MaximumCompactAssessmentBytes <= 16 * 1024);
+                Console.WriteLine(
+                    $"Sustained SQL host: events={snapshot.AcceptedEvents}, " +
+                    $"batches={snapshot.PersistenceBatches}, failures={snapshot.PersistenceFailures}, " +
+                    $"maxPersistenceMs={snapshot.MarketSituationPersistence.MaximumElapsedMs:F3}, " +
+                    $"candidateSetsCreated={snapshot.MarketSituationPersistence.CandidateSetsCreated}, " +
+                    $"candidateSetsReused={snapshot.MarketSituationPersistence.CandidateSetsReused}, " +
+                    $"maxCandidates={snapshot.MarketSituationPersistence.MaximumCandidateCount}, " +
+                    $"compactMaxBytes={snapshot.MarketSituationPersistence.MaximumCompactAssessmentBytes}, " +
+                    $"capacity={snapshot.ChannelCapacity}, maxDepth={snapshot.MaximumSampledChannelDepth}, " +
+                    $"capacityReached={snapshot.ChannelCapacityReached}, " +
+                    $"writerWaits={snapshot.ChannelBackpressureWaits}, " +
+                    $"maxWaitMs={snapshot.LongestChannelWaitMs:F3}, " +
+                    $"oldestMs={snapshot.MaximumOldestQueuedEventAgeMs:F3}, " +
+                    $"finalDepth={snapshot.ChannelDepth}.");
+            }
+
+            await using var db = new MarketOpportunityDbContext(
+                new DbContextOptionsBuilder<MarketOpportunityDbContext>()
+                    .UseSqlServer(connection)
+                    .Options);
+            Assert.Equal(
+                events.Length,
+                await db.MarketEvents.LongCountAsync(
+                    item => item.SessionId == session));
+            Assert.True(
+                await db.MarketSituationAssessments.AnyAsync(
+                    item => item.SessionId == session
+                        && item.PersistenceVersion ==
+                        CompactMarketSituationAssessment.CurrentPersistenceContractVersion));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public async Task Scanner_background_failure_records_terminal_persistence_outcome_and_nonzero_exit()
     {
@@ -350,7 +446,11 @@ public sealed class LiveValidationInstrumentationTests
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(source)!, "..", "..", "src", "MarketOpportunity.Web"));
 
     private sealed class DiagnosticFactory(
-        string connection, string session, string directory, MarketEvent[] events)
+        string connection,
+        string session,
+        string directory,
+        MarketEvent[] events,
+        bool delayedBatches = false)
         : WebApplicationFactory<Program>
     {
         private Dictionary<string, string?> Settings => new()
@@ -378,7 +478,10 @@ public sealed class LiveValidationInstrumentationTests
             {
                 services.RemoveAll<IMarketDataSource>();
                 services.AddScoped<IMarketDataSource>(provider =>
-                    new OfflineSource(events, provider.GetRequiredService<LiveValidationDiagnostics>()));
+                    new OfflineSource(
+                        events,
+                        provider.GetRequiredService<LiveValidationDiagnostics>(),
+                        delayedBatches));
                 services.RemoveAll<IPriorSessionContextProvider>();
                 services.AddSingleton<IPriorSessionContextProvider>(
                     new OfflinePriorSessionContextProvider());
@@ -443,7 +546,10 @@ public sealed class LiveValidationInstrumentationTests
         }
     }
 
-    private sealed class OfflineSource(MarketEvent[] events, LiveValidationDiagnostics diagnostics)
+    private sealed class OfflineSource(
+        MarketEvent[] events,
+        LiveValidationDiagnostics diagnostics,
+        bool delayedBatches = false)
         : ILiveMarketDataSource
     {
         public MarketDataCapabilities Capabilities { get; } =
@@ -453,11 +559,18 @@ public sealed class LiveValidationInstrumentationTests
             [EnumeratorCancellation] CancellationToken cancellationToken)
         {
             diagnostics.Configure(events[0].SessionId, "offline", ["A1TEST"]);
-            foreach (var marketEvent in events)
+            for (var index = 0; index < events.Length; index++)
             {
+                var marketEvent = events[index];
                 diagnostics.Produced(marketEvent, Guid.Empty, marketEvent.ReceivedTimeUtc,
                     new("V", "V", ["R"], "C"));
                 yield return marketEvent;
+                if (delayedBatches
+                    && (index + 1) % 4 == 0
+                    && index + 1 < events.Length)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(5_250), cancellationToken);
+                }
             }
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         }
