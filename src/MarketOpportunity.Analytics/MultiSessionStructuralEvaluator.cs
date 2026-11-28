@@ -13,15 +13,17 @@ public sealed class MultiSessionStructuralEvaluator
 
     public MultiSessionStructuralAssessment Evaluate(
         StructuralAssessmentInput input,
-        ScannerConfiguration scannerConfiguration)
+        ScannerConfiguration scannerConfiguration,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(scannerConfiguration);
+        cancellationToken.ThrowIfCancellationRequested();
         scannerConfiguration.Validate();
         ValidateInputIdentity(input);
 
         var configuration = scannerConfiguration.MultiSessionStructure;
-        var sessions = CanonicalSessions(input.HistoricalSessions);
+        var sessions = CanonicalSessions(input.HistoricalSessions, cancellationToken);
         var completeness = EvaluateCompleteness(input, sessions, configuration);
         if (completeness.Status != StructuralAssessmentCompleteness.Available)
         {
@@ -32,6 +34,7 @@ public sealed class MultiSessionStructuralEvaluator
                 completeness);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         var asOfSessions = sessions
             .Where(item => item.EvidenceKnownAtUtc <= input.AssessmentAsOfUtc)
             .ToArray();
@@ -39,12 +42,14 @@ public sealed class MultiSessionStructuralEvaluator
             asOfSessions,
             input.AssessmentAsOfUtc,
             scannerConfiguration.Version,
-            configuration);
+            configuration,
+            cancellationToken);
         var recurringPivotObservations = CreateRecurringPivotObservations(
             asOfSessions,
             input.AssessmentAsOfUtc,
             scannerConfiguration.Version,
-            configuration);
+            configuration,
+            cancellationToken);
         observations.AddRange(recurringPivotObservations);
         observations = observations
             .GroupBy(item => item.Id)
@@ -54,17 +59,20 @@ public sealed class MultiSessionStructuralEvaluator
             .ThenBy(item => item.SourceSessionId, StringComparer.Ordinal)
             .ThenBy(item => item.Id)
             .ToList();
+        cancellationToken.ThrowIfCancellationRequested();
 
         var supportZones = CreateZones(
             observations,
             StructuralRole.Support,
             scannerConfiguration.Version,
-            configuration);
+            configuration,
+            cancellationToken);
         var resistanceZones = CreateZones(
             observations,
             StructuralRole.Resistance,
             scannerConfiguration.Version,
-            configuration);
+            configuration,
+            cancellationToken);
         var projectedSupport = ProjectZones(
             supportZones,
             configuration.MaximumProjectedSupportZones,
@@ -145,28 +153,42 @@ public sealed class MultiSessionStructuralEvaluator
     }
 
     private static StructuralSessionSummary[] CanonicalSessions(
-        IReadOnlyList<StructuralSessionSummary> sessions) =>
-        sessions
-            .GroupBy(item => item.SessionId, StringComparer.Ordinal)
-            .Select(group =>
+        IReadOnlyList<StructuralSessionSummary> sessions,
+        CancellationToken cancellationToken)
+    {
+        var grouped = sessions.GroupBy(item => item.SessionId, StringComparer.Ordinal);
+        var canonical = new List<StructuralSessionSummary>();
+        foreach (var group in grouped)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var members = group.ToArray();
+            var selected = members[0];
+            if (members.Length > 1)
             {
-                var ordered = group
-                    .OrderBy(item => SessionFingerprint(item), StringComparer.Ordinal)
+                var ordered = members
+                    .OrderBy(item => SessionFingerprint(item, cancellationToken), StringComparer.Ordinal)
                     .ToArray();
-                if (ordered.Skip(1).Any(item => SessionFingerprint(item) != SessionFingerprint(ordered[0])))
+                selected = ordered[0];
+                if (ordered.Skip(1).Any(item =>
+                        SessionFingerprint(item, cancellationToken)
+                        != SessionFingerprint(selected, cancellationToken)))
                 {
-                    return ordered[0] with
+                    selected = selected with
                     {
                         Completeness = StructuralSessionCompleteness.Invalid
                     };
                 }
+            }
 
-                return ordered[0];
-            })
+            canonical.Add(selected);
+        }
+
+        return canonical
             .OrderBy(item => item.StartUtc)
             .ThenBy(item => item.EndUtc)
             .ThenBy(item => item.SessionId, StringComparer.Ordinal)
             .ToArray();
+    }
 
     private static MultiSessionStructuralCompleteness EvaluateCompleteness(
         StructuralAssessmentInput input,
@@ -233,6 +255,7 @@ public sealed class MultiSessionStructuralEvaluator
                 || item.LowEventTimeUtc > item.EndUtc
                 || string.IsNullOrWhiteSpace(item.HighSourceEventIdentity)
                 || string.IsNullOrWhiteSpace(item.LowSourceEventIdentity)
+                || !HasValidPivotRepresentation(item)
                 || !item.Symbol.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase)
                 || input.CurrentSessionId.Equals(item.SessionId, StringComparison.Ordinal)))
         {
@@ -283,6 +306,22 @@ public sealed class MultiSessionStructuralEvaluator
             "The complete contiguous three-session horizon is usable at AssessmentAsOfUtc.");
     }
 
+    private static bool HasValidPivotRepresentation(StructuralSessionSummary session)
+    {
+        var compact = session.CompactPivots;
+        if (compact is null)
+        {
+            return true;
+        }
+
+        return session.ConfirmablePivots.Count == 0
+            && compact.Pivots.All(item =>
+                item.FeatureSetVersionIndex >= 0
+                && item.FeatureSetVersionIndex < compact.FeatureSetVersions.Count
+                && item.StructureAlgorithmVersionIndex >= 0
+                && item.StructureAlgorithmVersionIndex < compact.StructureAlgorithmVersions.Count);
+    }
+
     private static bool HasUniformProvenance(IReadOnlyList<StructuralSessionSummary> sessions) =>
         sessions.Count > 0
         && sessions.All(item =>
@@ -322,15 +361,17 @@ public sealed class MultiSessionStructuralEvaluator
         return true;
     }
 
-    private static List<StructuralObservation> CreateSessionExtrema(
+    private static List<StructuralObservationValue> CreateSessionExtrema(
         IReadOnlyList<StructuralSessionSummary> sessions,
         DateTimeOffset assessmentAsOfUtc,
         string configurationVersion,
-        MultiSessionStructureConfiguration configuration)
+        MultiSessionStructureConfiguration configuration,
+        CancellationToken cancellationToken)
     {
-        var observations = new List<StructuralObservation>();
+        var observations = new List<StructuralObservationValue>();
         foreach (var session in sessions)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             observations.Add(CreateExtremeObservation(
                 session,
                 StructuralRole.Resistance,
@@ -356,7 +397,7 @@ public sealed class MultiSessionStructuralEvaluator
             .ToList();
     }
 
-    private static StructuralObservation CreateExtremeObservation(
+    private static StructuralObservationValue CreateExtremeObservation(
         StructuralSessionSummary session,
         StructuralRole role,
         StructuralObservationKind kind,
@@ -384,7 +425,7 @@ public sealed class MultiSessionStructuralEvaluator
             session.HistoricalFeed,
             session.HistoricalSourceKind
         });
-        return new StructuralObservation(
+        return new StructuralObservationValue(
             id,
             session.Symbol,
             session.SessionId,
@@ -405,16 +446,18 @@ public sealed class MultiSessionStructuralEvaluator
             null);
     }
 
-    private static List<StructuralObservation> CreateRecurringPivotObservations(
+    private static List<StructuralObservationValue> CreateRecurringPivotObservations(
         IReadOnlyList<StructuralSessionSummary> sessions,
         DateTimeOffset assessmentAsOfUtc,
         string configurationVersion,
-        MultiSessionStructureConfiguration configuration)
+        MultiSessionStructureConfiguration configuration,
+        CancellationToken cancellationToken)
     {
-        var confirmed = new List<StructuralObservation>();
+        var confirmed = new List<StructuralObservationValue>();
         foreach (var session in sessions)
         {
-            foreach (var pivot in session.ConfirmablePivots
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var pivot in MaterializePivotViews(session, cancellationToken)
                          .Where(item =>
                              item.ConfirmedAtEventTimeUtc is { } confirmation
                              && item.ConfirmationEventIdentity is not null
@@ -442,8 +485,10 @@ public sealed class MultiSessionStructuralEvaluator
         {
             foreach (var cluster in CompleteLinkClusters(
                          confirmed.Where(item => item.Role == role),
-                         configuration.ZoneMergeDistancePercent))
+                         configuration.ZoneMergeDistancePercent,
+                         cancellationToken))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (cluster.Select(item => item.SourceSessionId).Distinct().Count()
                     >= configuration.MinimumDistinctSessionsForRecurringZone)
                 {
@@ -458,9 +503,9 @@ public sealed class MultiSessionStructuralEvaluator
         return confirmed.Where(item => eligibleIds.Contains(item.Id)).ToList();
     }
 
-    private static StructuralObservation CreatePivotObservation(
+    private static StructuralObservationValue CreatePivotObservation(
         StructuralSessionSummary session,
-        StructuralPivotCandidate pivot,
+        StructuralPivotView pivot,
         string configurationVersion,
         MultiSessionStructureConfiguration configuration)
     {
@@ -488,7 +533,7 @@ public sealed class MultiSessionStructuralEvaluator
             session.HistoricalFeed,
             session.HistoricalSourceKind
         });
-        return new StructuralObservation(
+        return new StructuralObservationValue(
             id,
             session.Symbol,
             session.SessionId,
@@ -510,25 +555,29 @@ public sealed class MultiSessionStructuralEvaluator
     }
 
     private static IReadOnlyList<StructuralZone> CreateZones(
-        IReadOnlyList<StructuralObservation> observations,
+        IReadOnlyList<StructuralObservationValue> observations,
         StructuralRole role,
         string configurationVersion,
-        MultiSessionStructureConfiguration configuration) =>
+        MultiSessionStructureConfiguration configuration,
+        CancellationToken cancellationToken) =>
         CompleteLinkClusters(
                 observations.Where(item => item.Role == role),
-                configuration.ZoneMergeDistancePercent)
+                configuration.ZoneMergeDistancePercent,
+                cancellationToken)
             .Select(cluster => CreateZone(
                 cluster,
                 role,
                 configurationVersion,
-                configuration))
+                configuration,
+                cancellationToken))
             .OrderBy(item => item.LowerBound)
             .ThenBy(item => item.Id)
             .ToArray();
 
-    private static IReadOnlyList<IReadOnlyList<StructuralObservation>> CompleteLinkClusters(
-        IEnumerable<StructuralObservation> observations,
-        decimal maximumSpanPercent)
+    private static IReadOnlyList<IReadOnlyList<StructuralObservationValue>> CompleteLinkClusters(
+        IEnumerable<StructuralObservationValue> observations,
+        decimal maximumSpanPercent,
+        CancellationToken cancellationToken)
     {
         var ordered = observations
             .DistinctBy(item => item.Id)
@@ -537,10 +586,11 @@ public sealed class MultiSessionStructuralEvaluator
             .ThenBy(item => item.SourceSessionId, StringComparer.Ordinal)
             .ThenBy(item => item.Id)
             .ToArray();
-        var clusters = new List<IReadOnlyList<StructuralObservation>>();
-        var current = new List<StructuralObservation>();
+        var clusters = new List<IReadOnlyList<StructuralObservationValue>>();
+        var current = new List<StructuralObservationValue>();
         foreach (var observation in ordered)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (current.Count == 0
                 || IsWithinPercentageDistance(
                     current[0].Price,
@@ -564,11 +614,13 @@ public sealed class MultiSessionStructuralEvaluator
     }
 
     private static StructuralZone CreateZone(
-        IReadOnlyList<StructuralObservation> observations,
+        IReadOnlyList<StructuralObservationValue> observations,
         StructuralRole role,
         string configurationVersion,
-        MultiSessionStructureConfiguration configuration)
+        MultiSessionStructureConfiguration configuration,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var ordered = observations
             .OrderBy(item => item.EvidenceKnownAtUtc)
             .ThenBy(item => item.Price)
@@ -584,6 +636,7 @@ public sealed class MultiSessionStructuralEvaluator
                 .OrderBy(item => item.EvidenceKnownAtUtc)
                 .ThenBy(item => item.Id)
                 .Take(configuration.MaximumRepresentativesPerSessionPerZone))
+            .Select(item => item.ToObservation())
             .ToArray();
         var material = new
         {
@@ -726,7 +779,9 @@ public sealed class MultiSessionStructuralEvaluator
             DefinitionVersion,
             ConfigurationVersion = scannerConfiguration.Version,
             Configuration = MaterialConfiguration(scannerConfiguration.MultiSessionStructure),
-            HistoricalSessions = sessions.Select(SessionFingerprint).ToArray(),
+            HistoricalSessions = sessions
+                .Select(item => SessionFingerprint(item))
+                .ToArray(),
             Completeness = completeness,
             Trend = trend
         });
@@ -767,10 +822,38 @@ public sealed class MultiSessionStructuralEvaluator
             configuration.StructuralEqualityTolerancePercent
         };
 
-    private static string SessionFingerprint(StructuralSessionSummary session)
+    private static string SessionFingerprint(
+        StructuralSessionSummary session,
+        CancellationToken cancellationToken = default)
     {
-        var canonicalPivots = session.ConfirmablePivots
-            .Select(item => JsonSerializer.Serialize(item, JsonOptions))
+        if (!HasValidPivotRepresentation(session))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                session.Symbol,
+                session.SessionId,
+                session.PreviousSessionId,
+                session.StartUtc,
+                session.EndUtc,
+                session.Completeness,
+                session.DeclaresCompleteCoverage,
+                session.HasKnownGaps,
+                session.High,
+                session.Low,
+                session.HighSourceEventIdentity,
+                session.LowSourceEventIdentity,
+                session.HighEventTimeUtc,
+                session.LowEventTimeUtc,
+                session.EvidenceKnownAtUtc,
+                session.HistoricalProvider,
+                session.HistoricalFeed,
+                session.HistoricalSourceKind,
+                InvalidPivotRepresentation = true
+            }, JsonOptions);
+        }
+
+        var canonicalPivots = MaterializePivotViews(session, cancellationToken)
+            .Select(item => JsonSerializer.Serialize(item.ToCandidate(), JsonOptions))
             .Distinct(StringComparer.Ordinal)
             .OrderBy(item => item, StringComparer.Ordinal)
             .ToArray();
@@ -803,5 +886,137 @@ public sealed class MultiSessionStructuralEvaluator
         var json = JsonSerializer.Serialize(value, JsonOptions);
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(json));
         return new Guid(hash.AsSpan(0, 16));
+    }
+
+    private static IReadOnlyList<StructuralPivotView> MaterializePivotViews(
+        StructuralSessionSummary session,
+        CancellationToken cancellationToken)
+    {
+        if (session.CompactPivots is null)
+        {
+            var full = new StructuralPivotView[session.ConfirmablePivots.Count];
+            for (var index = 0; index < full.Length; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                full[index] = StructuralPivotView.From(session.ConfirmablePivots[index]);
+            }
+
+            return full;
+        }
+
+        var compact = session.CompactPivots;
+        var views = new StructuralPivotView[compact.Pivots.Count];
+        for (var index = 0; index < views.Length; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var pivot = compact.Pivots[index];
+            if (pivot.FeatureSetVersionIndex < 0
+                || pivot.FeatureSetVersionIndex >= compact.FeatureSetVersions.Count
+                || pivot.StructureAlgorithmVersionIndex < 0
+                || pivot.StructureAlgorithmVersionIndex >= compact.StructureAlgorithmVersions.Count)
+            {
+                throw new InvalidDataException(
+                    "The compact structural pivot version index is outside its shared table.");
+            }
+
+            views[index] = new StructuralPivotView(
+                pivot.SourceSwingId,
+                session.Symbol,
+                session.SessionId,
+                pivot.Role,
+                pivot.Price,
+                pivot.CandidateEventTimeUtc,
+                pivot.ConfirmedAtEventTimeUtc,
+                pivot.OriginEventIdentity,
+                pivot.ConfirmationEventIdentity,
+                compact.FeatureSetVersions[pivot.FeatureSetVersionIndex],
+                compact.StructureAlgorithmVersions[pivot.StructureAlgorithmVersionIndex]);
+        }
+
+        return views;
+    }
+
+    private readonly record struct StructuralPivotView(
+        Guid SourceSwingId,
+        string Symbol,
+        string SessionId,
+        StructuralRole Role,
+        decimal Price,
+        DateTimeOffset CandidateEventTimeUtc,
+        DateTimeOffset? ConfirmedAtEventTimeUtc,
+        string OriginEventIdentity,
+        string? ConfirmationEventIdentity,
+        string FeatureSetVersion,
+        string AlgorithmVersion)
+    {
+        public static StructuralPivotView From(StructuralPivotCandidate candidate) =>
+            new(
+                candidate.SourceSwingId,
+                candidate.Symbol,
+                candidate.SessionId,
+                candidate.Role,
+                candidate.Price,
+                candidate.CandidateEventTimeUtc,
+                candidate.ConfirmedAtEventTimeUtc,
+                candidate.OriginEventIdentity,
+                candidate.ConfirmationEventIdentity,
+                candidate.FeatureSetVersion,
+                candidate.AlgorithmVersion);
+
+        public StructuralPivotCandidate ToCandidate() =>
+            new(
+                SourceSwingId,
+                Symbol,
+                SessionId,
+                Role,
+                Price,
+                CandidateEventTimeUtc,
+                ConfirmedAtEventTimeUtc,
+                OriginEventIdentity,
+                ConfirmationEventIdentity,
+                FeatureSetVersion,
+                AlgorithmVersion);
+    }
+
+    private readonly record struct StructuralObservationValue(
+        Guid Id,
+        string Symbol,
+        string SourceSessionId,
+        StructuralRole Role,
+        StructuralObservationKind Kind,
+        StructuralEligibilityReason EligibilityReason,
+        decimal Price,
+        Guid? SourceSwingId,
+        string? OriginEventIdentity,
+        string? ConfirmationEventIdentity,
+        DateTimeOffset? CandidateEventTimeUtc,
+        DateTimeOffset? ConfirmedAtEventTimeUtc,
+        DateTimeOffset EvidenceKnownAtUtc,
+        string HistoricalProvider,
+        string HistoricalFeed,
+        string HistoricalSourceKind,
+        string? FeatureSetVersion,
+        string? StructureAlgorithmVersion)
+    {
+        public StructuralObservation ToObservation() =>
+            new(
+                Id,
+                Symbol,
+                SourceSessionId,
+                Role,
+                Kind,
+                EligibilityReason,
+                Price,
+                SourceSwingId,
+                OriginEventIdentity,
+                ConfirmationEventIdentity,
+                CandidateEventTimeUtc,
+                ConfirmedAtEventTimeUtc,
+                EvidenceKnownAtUtc,
+                HistoricalProvider,
+                HistoricalFeed,
+                HistoricalSourceKind,
+                FeatureSetVersion,
+                StructureAlgorithmVersion);
     }
 }

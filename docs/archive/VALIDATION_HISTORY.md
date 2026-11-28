@@ -8,6 +8,20 @@
 
 Do not use this archive as routine coding-agent context. Use it when historical validation, a previous failure, an old live-provider run, SQL provenance, browser evidence, or a historical contradiction must be investigated.
 
+## A.2.6 Batch 2 compact-all-pivots equivalence closeout (2026-11-28)
+
+**Status: A.2.6 Batch 2 COMPLETE offline; overall A.2.6 IN PROGRESS / PRODUCTION PAUSED. Batch 3 NOT STARTED and requires corrective closeout plus separate owner authorization.**
+
+The equivalence investigation disproved a small exact bounded-count per-session reduction under the approved `multi-session-structure-v1` rules. A pivot that is isolated in its source session can become recurring when a second session contributes a price nearby. Every qualifying pivot can also affect complete-link membership, exact lower/upper bounds, representative choice and ordering, source/observation totals, omitted counts, evidence-known time, `ZoneId`, and `AssessmentId`. Session-local top-N, prominence filtering, one-representative pre-clusters, and arbitrary bucket representatives are therefore unsafe under the unchanged contract.
+
+The accepted category-B implementation retains all analytical pivot scalars in a `CompactStructuralPivotCandidate` value-type array. Symbol and session identity are shared by `StructuralSessionSummary`; feature/algorithm strings are interned in per-session tables; decimal prices, timestamps, swing/event identities, and confirmation evidence remain exact. The count remains bounded by the existing operational `MaximumPivotsPerSession` cap, not a small fixed analytical count. Full `StructuralPivotCandidate` remains the test oracle. Ambiguous dual representations and invalid shared-table indices fail closed. Evaluation cancellation is propagated through canonicalization, compact materialization, clustering, zone construction, and the reconstructor.
+
+Focused A.2.6 tests passed **87/87**, including exact-three reconstruction, prior-context compatibility, exact full-pivot versus compact material equality, unavailable-assessment identity, deterministic reorder/duplicate behavior, exact decimal/threshold cases, seeded property cases, local-discard and local-representative counterexamples, malformed representation, cancellation at request/session/global phases, resource limits, a **100,000-pivot** single session, and a **6,000-pivot** full-versus-compact three-session dense-recurrence case. Full offline units passed **557/557**. The 100,000-pivot evaluator case completed in approximately **2 seconds** and the 6,000-pivot dense full/compact case in under **1 second** in the focused run; these timings are evidence, not pass thresholds.
+
+Diagnostics now report per-session normalized records, produced pivots, compact estimated bytes, aggregate and peak retained compact pivot representations, raw sessions released, peak raw sessions retained, and a logical global clustering working-set count. The ordinary three-session fixture retained **9 pivots**, reported a **15-item** peak working set (`9 pivots + 6 session-extrema observations`), and released **3/3** raw sessions with peak raw sessions retained **1**. Final zones remain bounded by the existing support/resistance projection settings and representative-per-session limits.
+
+No live provider or SQL test was run. No schema, migration, store, raw historical/pivot persistence, ScannerPipeline/ScannerState, MarketSituation, MarketReaction, Opportunity, TradePlan, readiness, API, Blazor, scanner configuration, or analytical definition version changed. The durable exact-representation decision is recorded in [ADR-012](../adr/ADR-012-structural-significance-and-multi-session-trend.md). Batch 2 is complete; A.2.6 production integration remains paused.
+
 ## MarketSituation provenance + persistence Correction Batch 2 (2026-11-27)
 
 **Status: Correction Batch 2 COMPLETE; overall corrective checkpoint IN PROGRESS. Correction Batch 3 NEXT / AUTHORIZED. A.2.6 Batch 2 remains PAUSED.**

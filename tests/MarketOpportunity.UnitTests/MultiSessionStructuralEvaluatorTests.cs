@@ -707,6 +707,270 @@ public sealed class MultiSessionStructuralEvaluatorTests
     }
 
     [Fact]
+    public void Compact_all_pivot_path_is_materially_equivalent_to_full_pivot_oracle()
+    {
+        var sessions = CompleteSessions(
+            (500m, 400m, [
+                Pivot("s1", StructuralRole.Support, 100m, 1),
+                Pivot("s1", StructuralRole.Support, 100.05m, 2),
+                Pivot("s1", StructuralRole.Resistance, 200m, 3)
+            ]),
+            (501m, 401m, [
+                Pivot("s2", StructuralRole.Support, 100.1m, 4),
+                Pivot("s2", StructuralRole.Resistance, 200.05m, 5),
+                Pivot("s2", StructuralRole.Resistance, 200.05m, 5)
+            ]),
+            (502m, 402m, [
+                Pivot("s3", StructuralRole.Support, 100.04m, 6),
+                Pivot("s3", StructuralRole.Resistance, 200.2m, 7)
+            ]));
+
+        var full = Evaluate(sessions);
+        var compactSessions = Compactify(sessions);
+        var compact = Evaluate(compactSessions);
+
+        Assert.Equivalent(full, compact);
+        Assert.Equal(full.Id, compact.Id);
+        Assert.Equal(
+            full.SupportZones.Select(item => item.Id),
+            compact.SupportZones.Select(item => item.Id));
+        Assert.Equal(
+            full.ResistanceZones.Select(item => item.Id),
+            compact.ResistanceZones.Select(item => item.Id));
+        Assert.All(compactSessions, item =>
+        {
+            Assert.Empty(item.ConfirmablePivots);
+            Assert.NotNull(item.CompactPivots);
+            Assert.True(item.CompactPivots.EstimatedBytes > 0);
+            Assert.All(
+                item.CompactPivots.Pivots,
+                pivot => Assert.True(pivot.FeatureSetVersionIndex >= 0));
+        });
+    }
+
+    [Fact]
+    public void Compact_path_preserves_unavailable_assessment_identity()
+    {
+        var sessions = CompleteSessions(
+            (110m, 90m, [Pivot("s1", StructuralRole.Support, 95m, 1)]),
+            (111m, 91m, [Pivot("s2", StructuralRole.Support, 95.05m, 2)]),
+            (112m, 92m));
+        sessions[1] = sessions[1] with
+        {
+            Completeness = StructuralSessionCompleteness.Partial,
+            DeclaresCompleteCoverage = false
+        };
+
+        var full = Evaluate(sessions);
+        var compact = Evaluate(Compactify(sessions));
+
+        Assert.Equivalent(full, compact);
+        Assert.Equal(full.Id, compact.Id);
+    }
+
+    [Fact]
+    public void Compact_path_preserves_seeded_full_material_assessments()
+    {
+        for (var seed = 0; seed < 32; seed++)
+        {
+            var random = new Random(seed);
+            var sessions = CompleteSessions(
+                (500m + seed, 50m + seed, RandomPivots("s1", random, 10, seed * 100)),
+                (501m + seed, 51m + seed, RandomPivots("s2", random, 10, seed * 100 + 20)),
+                (502m + seed, 52m + seed, RandomPivots("s3", random, 10, seed * 100 + 40)));
+
+            var full = Evaluate(sessions);
+            var compactSessions = Compactify(sessions).Reverse().ToArray();
+            var compact = Evaluate(
+                compactSessions,
+                input: new StructuralAssessmentInput(
+                    "TEST",
+                    "current",
+                    "s3",
+                    sessions[^1].EndUtc.AddMinutes(1),
+                    compactSessions));
+
+            Assert.True(
+                full.Id == compact.Id,
+                $"Seed {seed} changed assessment identity.");
+            Assert.Equivalent(full, compact);
+        }
+    }
+
+    [Fact]
+    public void Session_local_discard_is_unsafe_when_other_session_creates_recurrence()
+    {
+        var sessions = CompleteSessions(
+            (110m, 90m, [Pivot("s1", StructuralRole.Support, 95m, 1)]),
+            (111m, 91m, [Pivot("s2", StructuralRole.Support, 95.05m, 2)]),
+            (112m, 92m));
+        var locallyReduced = sessions.ToArray();
+        locallyReduced[0] = locallyReduced[0] with
+        {
+            ConfirmablePivots = [],
+            CompactPivots = CompactStructuralPivotSet.Create("TEST", "s1", [])
+        };
+
+        var full = Evaluate(sessions);
+        var reduced = Evaluate(locallyReduced);
+
+        Assert.NotEmpty(RecurringZones(full.SupportZones));
+        Assert.Empty(RecurringZones(reduced.SupportZones));
+        Assert.NotEqual(full.Id, reduced.Id);
+    }
+
+    [Fact]
+    public void Session_local_representative_is_unsafe_for_exact_global_bounds()
+    {
+        var sessions = CompleteSessions(
+            (110m, 90m, [
+                Pivot("s1", StructuralRole.Support, 100m, 1),
+                Pivot("s1", StructuralRole.Support, 100.05m, 2)
+            ]),
+            (111m, 91m, [Pivot("s2", StructuralRole.Support, 100.1m, 3)]),
+            (112m, 92m));
+        var representativeReduced = sessions.ToArray();
+        representativeReduced[0] = representativeReduced[0] with
+        {
+            ConfirmablePivots = [],
+            CompactPivots = CompactStructuralPivotSet.Create(
+                "TEST",
+                "s1",
+                [sessions[0].ConfirmablePivots[1]])
+        };
+
+        var fullZone = Assert.Single(RecurringZones(Evaluate(sessions).SupportZones));
+        var reducedZone = Assert.Single(
+            RecurringZones(Evaluate(representativeReduced).SupportZones));
+
+        Assert.Equal(100m, fullZone.LowerBound);
+        Assert.Equal(100.05m, reducedZone.LowerBound);
+        Assert.NotEqual(fullZone.Id, reducedZone.Id);
+    }
+
+    [Fact]
+    public void Compact_path_handles_one_hundred_thousand_pivots_in_one_session()
+    {
+        var session = Session("s1", null, 0, 2_000m, 0.5m);
+        var pivots = new CompactStructuralPivotCandidate[100_000];
+        for (var index = 0; index < pivots.Length; index++)
+        {
+            pivots[index] = new CompactStructuralPivotCandidate(
+                GuidFromInt(index),
+                StructuralRole.Support,
+                10m + index * 0.01m,
+                session.StartUtc.AddTicks(index),
+                session.StartUtc.AddTicks(index + 1),
+                $"origin-{index}",
+                $"confirmation-{index}",
+                0,
+                0);
+        }
+
+        var sessions = new[]
+        {
+            session with
+            {
+                ConfirmablePivots = [],
+                CompactPivots = new CompactStructuralPivotSet(
+                    pivots,
+                    ["features-v16"],
+                    ["session-swing-fractal-v1"])
+            },
+            Session("s2", "s1", 1, 2_001m, 0.6m),
+            Session("s3", "s2", 2, 2_002m, 0.7m)
+        };
+
+        var result = Evaluate(sessions);
+
+        Assert.Equal(StructuralAssessmentCompleteness.Available, result.Completeness.Status);
+        Assert.Equal(100_000, sessions[0].CompactPivots!.Pivots.Count);
+        Assert.Empty(RecurringZones(result.SupportZones));
+        Assert.True(result.SupportZones.Count <= 3);
+        Assert.True(result.ResistanceZones.Count <= 3);
+    }
+
+    [Fact]
+    public void Compact_path_preserves_large_three_session_dense_recurrence()
+    {
+        var sessions = CompleteSessions(
+            (500m, 400m, DensePivots("s1", 2_000, 1)),
+            (501m, 401m, DensePivots("s2", 2_000, 20_001)),
+            (502m, 402m, DensePivots("s3", 2_000, 40_001)));
+
+        var full = Evaluate(sessions);
+        var compact = Evaluate(Compactify(sessions));
+
+        Assert.Equivalent(full, compact);
+    }
+
+    [Fact]
+    public void Cancellation_stops_global_structural_evaluation()
+    {
+        var sessions = CompleteSessions(
+            (110m, 90m, DensePivots("s1", 1_000, 1)),
+            (111m, 91m, DensePivots("s2", 1_000, 2_000)),
+            (112m, 92m));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            _evaluator.Evaluate(Input(sessions), Configuration(), cancellation.Token));
+    }
+
+    [Fact]
+    public void Ambiguous_full_and_compact_representations_are_invalid()
+    {
+        var sessions = CompleteSessions(
+            (110m, 90m, [Pivot("s1", StructuralRole.Support, 95m, 1)]),
+            (111m, 91m),
+            (112m, 92m));
+        sessions[0] = sessions[0] with
+        {
+            CompactPivots = CompactStructuralPivotSet.Create(
+                "TEST",
+                "s1",
+                sessions[0].ConfirmablePivots)
+        };
+
+        var result = Evaluate(sessions);
+
+        Assert.Equal(StructuralAssessmentCompleteness.Invalid, result.Completeness.Status);
+        Assert.Empty(result.SupportZones);
+        Assert.Empty(result.ResistanceZones);
+    }
+
+    [Fact]
+    public void Invalid_compact_version_index_fails_closed()
+    {
+        var sessions = CompleteSessions(
+            (110m, 90m, [Pivot("s1", StructuralRole.Support, 95m, 1)]),
+            (111m, 91m),
+            (112m, 92m));
+        var compact = CompactStructuralPivotSet.Create(
+            "TEST",
+            "s1",
+            sessions[0].ConfirmablePivots);
+        sessions[0] = sessions[0] with
+        {
+            ConfirmablePivots = [],
+            CompactPivots = compact with
+            {
+                Pivots =
+                [
+                    compact.Pivots[0] with { FeatureSetVersionIndex = 99 }
+                ]
+            }
+        };
+
+        var result = Evaluate(sessions);
+
+        Assert.Equal(StructuralAssessmentCompleteness.Invalid, result.Completeness.Status);
+        Assert.Empty(result.SupportZones);
+        Assert.Empty(result.ResistanceZones);
+    }
+
+    [Fact]
     public void Shared_configuration_advances_version_and_validates_structural_settings()
     {
         Assert.Equal("scanner-config-v20", new ScannerConfiguration().Version);
@@ -823,6 +1087,61 @@ public sealed class MultiSessionStructuralEvaluatorTests
             Session("s2", "s1", 1, second.High, second.Low, second.Pivots),
             Session("s3", "s2", 2, third.High, third.Low, third.Pivots)
         ];
+
+    private static StructuralSessionSummary[] Compactify(
+        IReadOnlyList<StructuralSessionSummary> sessions) =>
+        sessions
+            .Select(item => item with
+            {
+                ConfirmablePivots = [],
+                CompactPivots = CompactStructuralPivotSet.Create(
+                    item.Symbol,
+                    item.SessionId,
+                    item.ConfirmablePivots)
+            })
+            .ToArray();
+
+    private static IReadOnlyList<StructuralPivotCandidate> DensePivots(
+        string sessionId,
+        int count,
+        int startingSeed) =>
+        Enumerable.Range(0, count)
+            .Select(index => Pivot(
+                sessionId,
+                StructuralRole.Support,
+                100m + index * 0.2m,
+                startingSeed + index))
+            .ToArray();
+
+    private static IReadOnlyList<StructuralPivotCandidate> RandomPivots(
+        string sessionId,
+        Random random,
+        int count,
+        int startingSeed) =>
+        Enumerable.Range(0, count)
+            .Select(index =>
+                Pivot(
+                    sessionId,
+                    random.Next(0, 2) == 0
+                        ? StructuralRole.Support
+                        : StructuralRole.Resistance,
+                    100m + random.Next(0, 21) * 0.05m,
+                    startingSeed + index))
+            .ToArray();
+
+    private static IReadOnlyList<StructuralZone> RecurringZones(
+        IEnumerable<StructuralZone> zones) =>
+        zones.Where(zone => zone.RepresentativeObservations.Any(observation =>
+                observation.EligibilityReason
+                    == StructuralEligibilityReason.RecurringConfirmedSwingAcrossDistinctSessions))
+            .ToArray();
+
+    private static Guid GuidFromInt(int value)
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        BitConverter.GetBytes(value).CopyTo(bytes);
+        return new Guid(bytes);
+    }
 
     private static StructuralSessionSummary Session(
         string id,

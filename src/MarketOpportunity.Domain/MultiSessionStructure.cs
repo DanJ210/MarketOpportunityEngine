@@ -67,6 +67,98 @@ public sealed record StructuralPivotCandidate(
     string FeatureSetVersion,
     string AlgorithmVersion);
 
+public readonly record struct CompactStructuralPivotCandidate(
+    Guid SourceSwingId,
+    StructuralRole Role,
+    decimal Price,
+    DateTimeOffset CandidateEventTimeUtc,
+    DateTimeOffset? ConfirmedAtEventTimeUtc,
+    string OriginEventIdentity,
+    string? ConfirmationEventIdentity,
+    int FeatureSetVersionIndex,
+    int StructureAlgorithmVersionIndex);
+
+public sealed record CompactStructuralPivotSet(
+    IReadOnlyList<CompactStructuralPivotCandidate> Pivots,
+    IReadOnlyList<string> FeatureSetVersions,
+    IReadOnlyList<string> StructureAlgorithmVersions)
+{
+    public long EstimatedBytes
+    {
+        get
+        {
+            const long fixedBytesPerPivot = 96;
+            long bytes = fixedBytesPerPivot * Pivots.Count;
+            foreach (var pivot in Pivots)
+            {
+                bytes += 2L * pivot.OriginEventIdentity.Length;
+                bytes += 2L * (pivot.ConfirmationEventIdentity?.Length ?? 0);
+            }
+
+            bytes += FeatureSetVersions.Sum(item => 2L * item.Length);
+            bytes += StructureAlgorithmVersions.Sum(item => 2L * item.Length);
+            return bytes;
+        }
+    }
+
+    public static CompactStructuralPivotSet Create(
+        string symbol,
+        string sessionId,
+        IReadOnlyList<StructuralPivotCandidate> candidates)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentNullException.ThrowIfNull(candidates);
+
+        var featureVersions = new List<string>();
+        var algorithmVersions = new List<string>();
+        var pivots = new CompactStructuralPivotCandidate[candidates.Count];
+        for (var index = 0; index < candidates.Count; index++)
+        {
+            var candidate = candidates[index];
+            if (!candidate.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase)
+                || !candidate.SessionId.Equals(sessionId, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "Compact pivots must belong to their containing symbol and session.",
+                    nameof(candidates));
+            }
+
+            var featureVersionIndex = featureVersions.FindIndex(item =>
+                item.Equals(candidate.FeatureSetVersion, StringComparison.Ordinal));
+            if (featureVersionIndex < 0)
+            {
+                featureVersionIndex = featureVersions.Count;
+                featureVersions.Add(candidate.FeatureSetVersion);
+            }
+
+            var algorithmVersionIndex = algorithmVersions.FindIndex(item =>
+                item.Equals(candidate.AlgorithmVersion, StringComparison.Ordinal));
+            if (algorithmVersionIndex < 0)
+            {
+                algorithmVersionIndex = algorithmVersions.Count;
+                algorithmVersions.Add(candidate.AlgorithmVersion);
+            }
+
+            pivots[index] = new CompactStructuralPivotCandidate(
+                candidate.SourceSwingId,
+                candidate.Role,
+                candidate.Price,
+                candidate.CandidateEventTimeUtc,
+                candidate.ConfirmedAtEventTimeUtc,
+                candidate.OriginEventIdentity,
+                candidate.ConfirmationEventIdentity,
+                featureVersionIndex,
+                algorithmVersionIndex);
+        }
+
+        return new CompactStructuralPivotSet(
+            pivots,
+            featureVersions.ToArray(),
+            algorithmVersions.ToArray());
+    }
+}
+
 public sealed record StructuralSessionSummary(
     string Symbol,
     string SessionId,
@@ -86,7 +178,8 @@ public sealed record StructuralSessionSummary(
     string HistoricalProvider,
     string HistoricalFeed,
     string HistoricalSourceKind,
-    IReadOnlyList<StructuralPivotCandidate> ConfirmablePivots);
+    IReadOnlyList<StructuralPivotCandidate> ConfirmablePivots,
+    CompactStructuralPivotSet? CompactPivots = null);
 
 public sealed record StructuralAssessmentInput(
     string Symbol,

@@ -43,8 +43,20 @@ public sealed class MultiSessionHistoricalReconstructorTests
         Assert.Equal(39L, result.Accounting.NormalizedRecordsRetrieved);
         Assert.Equal(6L, result.Accounting.DuplicateRecordsIgnored);
         Assert.Equal(1, result.Accounting.PeakRawSessionsRetained);
+        Assert.Equal(9L, result.Accounting.PivotsProduced);
+        Assert.Equal(9L, result.Accounting.CompactPivotRepresentationsRetained);
+        Assert.Equal(9L, result.Accounting.PeakPivotRepresentationsRetained);
+        Assert.True(result.Accounting.CompactPivotEstimatedBytes > 0);
+        Assert.Equal(
+            15L,
+            result.Accounting.PeakGlobalClusteringWorkingSet);
+        Assert.Equal(3, result.Accounting.RawSessionsReleased);
+        Assert.Equal(new long[] { 13, 13, 13 }, result.Accounting.NormalizedRecordsPerSession);
+        Assert.Equal(new[] { 3, 3, 3 }, result.Accounting.PivotsProducedPerSession);
+        Assert.Equal(3, result.Accounting.CompactPivotBytesPerSession.Count);
+        Assert.All(result.Accounting.CompactPivotBytesPerSession, bytes => Assert.True(bytes > 0));
         Assert.DoesNotContain(
-            result.Sessions.SelectMany(item => item.ConfirmablePivots),
+            ExpandPivots(result.Sessions),
             item => item.ConfirmedAtEventTimeUtc > result.Assessment.AssessmentAsOfUtc);
     }
 
@@ -252,17 +264,29 @@ public sealed class MultiSessionHistoricalReconstructorTests
                 .ThenBy(item => item.SourceSwingId)
                 .ToArray();
 
-            Assert.Equal(expected, session.ConfirmablePivots);
+            Assert.Empty(session.ConfirmablePivots);
+            Assert.NotNull(session.CompactPivots);
+            Assert.Single(session.CompactPivots.FeatureSetVersions);
+            Assert.Single(session.CompactPivots.StructureAlgorithmVersions);
+            Assert.Equal(expected, ExpandPivots(session));
         }
 
+        var fullPivotSummaries = result.Sessions
+            .Select(session => session with
+            {
+                ConfirmablePivots = ExpandPivots(session),
+                CompactPivots = null
+            })
+            .ToArray();
         var expectedAssessment = new MultiSessionStructuralEvaluator().Evaluate(
             new StructuralAssessmentInput(
                 "AAPL",
                 CurrentSession.SessionId,
                 D1.SessionId,
                 CurrentSession.OpenAtUtc.AddMinutes(1),
-                result.Sessions),
+                fullPivotSummaries),
             new ScannerConfiguration());
+        Assert.Equivalent(expectedAssessment, result.Assessment);
         Assert.Equal(expectedAssessment.Id, result.Assessment?.Id);
     }
 
@@ -298,8 +322,8 @@ public sealed class MultiSessionHistoricalReconstructorTests
             replay.Sessions.Select(item =>
                 (item.SessionId, item.High, item.Low, item.HighSourceEventIdentity, item.LowSourceEventIdentity)));
         Assert.Equal(
-            first.Sessions.SelectMany(item => item.ConfirmablePivots),
-            replay.Sessions.SelectMany(item => item.ConfirmablePivots));
+            ExpandPivots(first.Sessions),
+            ExpandPivots(replay.Sessions));
     }
 
     [Fact]
@@ -443,6 +467,39 @@ public sealed class MultiSessionHistoricalReconstructorTests
         Assert.Empty(result.Assessment.SupportZones);
         Assert.Empty(result.Assessment.ResistanceZones);
         Assert.Equal(MultiSessionStructuralTrendState.Insufficient, result.Assessment.Trend.State);
+    }
+
+    [Fact]
+    public async Task Cancellation_after_second_session_releases_both_raw_sessions()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var requests = 0;
+        var source = new StubHistoricalSource((_, session, _) =>
+        {
+            var data = CompleteData(session, SessionIndex(session.SessionId));
+            requests++;
+            if (requests == 2)
+            {
+                cancellation.Cancel();
+            }
+
+            return Task.FromResult<HistoricalMarketSessionData?>(data);
+        });
+        var fixture = CreateFixture(source);
+
+        var result = await fixture.Reconstructor.ReconstructAsync(
+            "AAPL",
+            CurrentSession.SessionId,
+            CurrentSession.OpenAtUtc.AddMinutes(1),
+            cancellation.Token);
+
+        Assert.Equal(MultiSessionHistoricalReconstructionStatus.Cancelled, result.Status);
+        Assert.Equal(new[] { D1.SessionId, D2.SessionId }, source.RequestedSessionIds);
+        Assert.Equal(2, result.Accounting.HistoricalRequests);
+        Assert.Equal(2, result.Accounting.RawSessionsReleased);
+        Assert.Equal(1, result.Accounting.PeakRawSessionsRetained);
+        Assert.Empty(result.Assessment?.SupportZones ?? []);
+        Assert.Empty(result.Assessment?.ResistanceZones ?? []);
     }
 
     [Fact]
@@ -691,6 +748,34 @@ public sealed class MultiSessionHistoricalReconstructorTests
             swing.ConfirmationEventIdentity,
             swing.FeatureSetVersion,
             swing.AlgorithmVersion);
+
+    private static StructuralPivotCandidate[] ExpandPivots(
+        IEnumerable<StructuralSessionSummary> sessions) =>
+        sessions.SelectMany(ExpandPivots).ToArray();
+
+    private static StructuralPivotCandidate[] ExpandPivots(
+        StructuralSessionSummary session)
+    {
+        if (session.CompactPivots is null)
+        {
+            return session.ConfirmablePivots.ToArray();
+        }
+
+        return session.CompactPivots.Pivots
+            .Select(item => new StructuralPivotCandidate(
+                item.SourceSwingId,
+                session.Symbol,
+                session.SessionId,
+                item.Role,
+                item.Price,
+                item.CandidateEventTimeUtc,
+                item.ConfirmedAtEventTimeUtc,
+                item.OriginEventIdentity,
+                item.ConfirmationEventIdentity,
+                session.CompactPivots.FeatureSetVersions[item.FeatureSetVersionIndex],
+                session.CompactPivots.StructureAlgorithmVersions[item.StructureAlgorithmVersionIndex]))
+            .ToArray();
+    }
 
     private static MarketSessionDefinition Session(string id, DateOnly date) =>
         new(

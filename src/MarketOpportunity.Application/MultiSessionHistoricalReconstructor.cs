@@ -51,7 +51,16 @@ public sealed record MultiSessionHistoricalReconstructionAccounting(
     long PagesRetrieved,
     long NormalizedRecordsRetrieved,
     long DuplicateRecordsIgnored,
-    int PeakRawSessionsRetained);
+    int PeakRawSessionsRetained,
+    long PivotsProduced,
+    long CompactPivotRepresentationsRetained,
+    long PeakPivotRepresentationsRetained,
+    long CompactPivotEstimatedBytes,
+    long PeakGlobalClusteringWorkingSet,
+    int RawSessionsReleased,
+    IReadOnlyList<long> NormalizedRecordsPerSession,
+    IReadOnlyList<int> PivotsProducedPerSession,
+    IReadOnlyList<long> CompactPivotBytesPerSession);
 
 public sealed record MultiSessionHistoricalReconstructionResult(
     MultiSessionHistoricalReconstructionStatus Status,
@@ -191,7 +200,8 @@ public sealed class MultiSessionHistoricalReconstructor
                 assessmentAsOfUtc,
                 summaries,
                 accounting,
-                calendarId);
+                calendarId,
+                cancellationToken: linked.Token);
         }
         catch (OperationCanceledException)
         {
@@ -457,13 +467,8 @@ public sealed class MultiSessionHistoricalReconstructor
                     "The reconstructed pivot summary exceeded its explicit per-session bound.");
             }
 
-            var pivots = context.SupportCandidates
-                .Select(item => ToPivot(item, StructuralRole.Support))
-                .Concat(context.ResistanceCandidates.Select(item =>
-                    ToPivot(item, StructuralRole.Resistance)))
-                .OrderBy(item => item.CandidateEventTimeUtc)
-                .ThenBy(item => item.SourceSwingId)
-                .ToArray();
+            var compactPivots = ToCompactPivots(context);
+            accounting.AddCompactPivots(compactPivots);
             var summary = new StructuralSessionSummary(
                 symbol,
                 session.SessionId,
@@ -483,7 +488,8 @@ public sealed class MultiSessionHistoricalReconstructor
                 historicalData.Capabilities.Provider,
                 historicalData.Capabilities.Feed,
                 historicalData.Source,
-                pivots);
+                [],
+                compactPivots);
             return new SessionReductionResult(summary, null);
         }
         finally
@@ -529,7 +535,8 @@ public sealed class MultiSessionHistoricalReconstructor
         AccountingBuilder accounting,
         string? calendarId,
         MultiSessionHistoricalReconstructionStatus? terminalStatus = null,
-        string? terminalReason = null)
+        string? terminalReason = null,
+        CancellationToken cancellationToken = default)
     {
         var normalizedSummaries = summaries
             .Select(item => item.Symbol.Length == 0 ? item with { Symbol = symbol } : item)
@@ -543,7 +550,8 @@ public sealed class MultiSessionHistoricalReconstructor
                     normalizedSummaries[^1].SessionId,
                     assessmentAsOfUtc,
                     normalizedSummaries),
-                _configuration);
+                _configuration,
+                cancellationToken);
         var status = terminalStatus
             ?? (assessment is null
                 ? MultiSessionHistoricalReconstructionStatus.Insufficient
@@ -681,21 +689,56 @@ public sealed class MultiSessionHistoricalReconstructor
                 StringComparison.Ordinal);
     }
 
-    private static StructuralPivotCandidate ToPivot(
-        StructuralLevelCandidate candidate,
-        StructuralRole role) =>
-        new(
-            candidate.SourceSwingId,
-            candidate.Symbol,
-            candidate.SessionId,
-            role,
-            candidate.Price,
-            candidate.EventTimeUtc,
-            candidate.ConfirmedAtEventTimeUtc,
-            candidate.OriginEventIdentity,
-            candidate.ConfirmationEventIdentity,
-            candidate.FeatureSetVersion,
-            FeatureCalculator.SwingAlgorithmVersion);
+    private static CompactStructuralPivotSet ToCompactPivots(PriorSessionContext context)
+    {
+        var ordered = context.SupportCandidates
+            .Select(item => (Candidate: item, Role: StructuralRole.Support))
+            .Concat(context.ResistanceCandidates.Select(item =>
+                (Candidate: item, Role: StructuralRole.Resistance)))
+            .OrderBy(item => item.Candidate.EventTimeUtc)
+            .ThenBy(item => item.Candidate.SourceSwingId)
+            .ToArray();
+        var pivots = new CompactStructuralPivotCandidate[ordered.Length];
+        var featureVersions = new List<string>();
+        var algorithmVersions = new List<string>();
+        for (var index = 0; index < ordered.Length; index++)
+        {
+            var item = ordered[index];
+            var featureVersionIndex = featureVersions.FindIndex(version =>
+                version.Equals(item.Candidate.FeatureSetVersion, StringComparison.Ordinal));
+            if (featureVersionIndex < 0)
+            {
+                featureVersionIndex = featureVersions.Count;
+                featureVersions.Add(item.Candidate.FeatureSetVersion);
+            }
+
+            var algorithmVersionIndex = algorithmVersions.FindIndex(version =>
+                version.Equals(
+                    FeatureCalculator.SwingAlgorithmVersion,
+                    StringComparison.Ordinal));
+            if (algorithmVersionIndex < 0)
+            {
+                algorithmVersionIndex = algorithmVersions.Count;
+                algorithmVersions.Add(FeatureCalculator.SwingAlgorithmVersion);
+            }
+
+            pivots[index] = new CompactStructuralPivotCandidate(
+                item.Candidate.SourceSwingId,
+                item.Role,
+                item.Candidate.Price,
+                item.Candidate.EventTimeUtc,
+                item.Candidate.ConfirmedAtEventTimeUtc,
+                item.Candidate.OriginEventIdentity,
+                item.Candidate.ConfirmationEventIdentity,
+                featureVersionIndex,
+                algorithmVersionIndex);
+        }
+
+        return new CompactStructuralPivotSet(
+            pivots,
+            featureVersions.ToArray(),
+            algorithmVersions.ToArray());
+    }
 
     private static StructuralSessionCompleteness MapSessionCompleteness(
         PriorSessionContextStatus completeness) =>
@@ -773,6 +816,9 @@ public sealed class MultiSessionHistoricalReconstructor
     private sealed class AccountingBuilder
     {
         private int _activeRawSessions;
+        private readonly List<long> _normalizedRecordsPerSession = [];
+        private readonly List<int> _pivotsProducedPerSession = [];
+        private readonly List<long> _compactPivotBytesPerSession = [];
 
         public int CalendarRequests { get; set; }
         public int HistoricalRequests { get; set; }
@@ -780,6 +826,12 @@ public sealed class MultiSessionHistoricalReconstructor
         public long NormalizedRecordsRetrieved { get; private set; }
         public long DuplicateRecordsIgnored { get; private set; }
         public int PeakRawSessionsRetained { get; private set; }
+        public long PivotsProduced { get; private set; }
+        public long CompactPivotRepresentationsRetained { get; private set; }
+        public long PeakPivotRepresentationsRetained { get; private set; }
+        public long CompactPivotEstimatedBytes { get; private set; }
+        public long PeakGlobalClusteringWorkingSet { get; private set; }
+        public int RawSessionsReleased { get; private set; }
 
         public void RawSessionStarted()
         {
@@ -787,7 +839,11 @@ public sealed class MultiSessionHistoricalReconstructor
             PeakRawSessionsRetained = Math.Max(PeakRawSessionsRetained, _activeRawSessions);
         }
 
-        public void RawSessionFinished() => _activeRawSessions--;
+        public void RawSessionFinished()
+        {
+            _activeRawSessions--;
+            RawSessionsReleased++;
+        }
 
         public void AddHistoricalData(HistoricalMarketSessionData historicalData)
         {
@@ -796,6 +852,22 @@ public sealed class MultiSessionHistoricalReconstructor
             DuplicateRecordsIgnored += Math.Max(
                 0,
                 historicalData.Provenance?.DuplicateRecordsIgnored ?? 0);
+            _normalizedRecordsPerSession.Add(historicalData.Events?.Count ?? 0);
+        }
+
+        public void AddCompactPivots(CompactStructuralPivotSet pivots)
+        {
+            PivotsProduced += pivots.Pivots.Count;
+            _pivotsProducedPerSession.Add(pivots.Pivots.Count);
+            CompactPivotRepresentationsRetained += pivots.Pivots.Count;
+            PeakPivotRepresentationsRetained = Math.Max(
+                PeakPivotRepresentationsRetained,
+                CompactPivotRepresentationsRetained);
+            CompactPivotEstimatedBytes += pivots.EstimatedBytes;
+            _compactPivotBytesPerSession.Add(pivots.EstimatedBytes);
+            PeakGlobalClusteringWorkingSet = Math.Max(
+                PeakGlobalClusteringWorkingSet,
+                CompactPivotRepresentationsRetained + 6);
         }
 
         public MultiSessionHistoricalReconstructionAccounting Build() =>
@@ -805,6 +877,15 @@ public sealed class MultiSessionHistoricalReconstructor
                 PagesRetrieved,
                 NormalizedRecordsRetrieved,
                 DuplicateRecordsIgnored,
-                PeakRawSessionsRetained);
+                PeakRawSessionsRetained,
+                PivotsProduced,
+                CompactPivotRepresentationsRetained,
+                PeakPivotRepresentationsRetained,
+                CompactPivotEstimatedBytes,
+                PeakGlobalClusteringWorkingSet,
+                RawSessionsReleased,
+                _normalizedRecordsPerSession.ToArray(),
+                _pivotsProducedPerSession.ToArray(),
+                _compactPivotBytesPerSession.ToArray());
     }
 }
